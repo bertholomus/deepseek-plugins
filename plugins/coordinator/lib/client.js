@@ -73,6 +73,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const HIDDEN = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0';
         /** DSH's focus ring color, as its own controls draw it. */
         const RING = 'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))';
+        /**
+         * The plugin's own containers, its two portals to document.body included (the Threads menu and the
+         * model picker's menu) and the dialog it fills: everything it draws is inside one of these, so one
+         * sweep stops its motion wherever it shows.
+         */
+        const ROOTS = '.dshp-mp,.dshp-mp-menu,.dshp-t-hdr,.dshp-t-menu,.dshp-t-pane,.dshp-t-cards,.dshp-nt,.dshp-ch,.dshp-t-chat,.dshp-dock,.dshp-ps';
+        /** DESIGN §6: `:is(<roots>) *` misses pseudo-elements, so name them. */
+        const STILL = `:is(${ROOTS}),:is(${ROOTS})::before,:is(${ROOTS})::after,:is(${ROOTS}) *,:is(${ROOTS}) *::before,:is(${ROOTS}) *::after{animation:none!important;transition:none!important}`;
         // DSH's error red and link blue reach only 4.5 and 4.2:1 as small text on white: a touch of the
         // label colour takes them past 5:1 in light and further from the background in dark.
         const ERROR_TEXT = 'color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))';
@@ -159,10 +167,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
             // In a chat with a Threads menu, the title crumb may use more of the header than DSH's 220 px; it still
-            // gives way first when the header is narrow. Found by DSH's markup (the title is a span in the hierarchy
-            // nav's last part, the nav right before the header actions that hold the Threads menu), not by its
-            // generated class names.
-            'nav[aria-label]:has(+div [data-projects-threads])>span:last-child>span{max-width:min(560px,40vw)}',
+            // gives way first when the header is narrow. DSH's nav is found by the plugin's own mark
+            // (markTitleCrumb), set while the Threads header is mounted and removed with it — never by a
+            // generated class name or a :has() over DSH's header.
+            'nav[aria-label][data-projects-title]>span:last-child>span{max-width:min(560px,40vw)}',
             '.dshp-t-trigger{display:inline-flex;align-items:center;gap:5px;min-width:0;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer}',
             '.dshp-t-trigger:hover,.dshp-t-trigger:focus-visible,.dshp-t-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary)}',
             `.dshp-t-trigger:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 2px ${RING}}`,
@@ -296,7 +304,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ch-tool[aria-disabled=true]{cursor:progress}',
             '.dshp-ch-busy{animation:dshp-ch-turn 1s linear infinite}',
             '@keyframes dshp-ch-turn{to{transform:rotate(360deg)}}',
-            '@media (prefers-reduced-motion:reduce){.dshp-ch-busy{animation:none}}',
             '.dshp-ch-body{flex:1 1 auto;min-width:0;min-height:0;overflow:auto;padding:8px 8px 20px}',
             '.dshp-ch-files{display:flex;flex-direction:column;gap:8px}',
             '.dshp-ch-file{display:flex;flex-direction:column;min-width:0}',
@@ -352,7 +359,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Narrow (a coordinator beside its thread), a long thread name takes a second line rather than being cut.
             '@container (width<=480px){.dshp-nt-line{white-space:normal;overflow-wrap:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}}',
             '@container (width<=380px){.dshp-nt-time{display:none}.dshp-nt-state+.dshp-nt-chev{margin-left:0}.dshp-nt-state{margin-left:auto}.dshp-nt-head{gap:8px;padding:12px 12px}.dshp-nt-body{padding:0 12px 12px 34px}}',
-            '@media (prefers-reduced-motion:reduce){.dshp-nt{transition:none}}',
             // Threads: cards under a turn
             '.dshp-t-cards{display:flex;flex-direction:column;overflow:hidden;border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);container-type:inline-size}',
             // A card is a grid: icon, then verb, name and reason stacked, then counts, state and actions.
@@ -511,14 +517,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-reach>span:last-child{min-width:0}',
             // A place DSH's own drag may not drop a session (useSessionDragGuard): no line there.
             '[data-projects-refused] [data-row-key^="session:"]::before,[data-projects-refused] [data-row-key^="session:"]::after{display:none!important}',
+            // Motion stops while Wallpaper's still mode is on or the system asks for less motion: the spinner,
+            // every chevron, the model picker's and settings' toggles, the notice and the progress meter.
+            `body.wp-still ${STILL}`,
+            `@media (prefers-reduced-motion:reduce){${STILL}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
         if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
-            const tag = document.createElement('style');
-            tag.dataset.plugin = BUNDLE;
-            tag.dataset.pluginCss = CSS_ID;
-            tag.textContent = CSS;
-            document.head.appendChild(tag);
+            // DSH joins every plugin's browser half into one script: a throw here would stop the others loading.
+            try {
+                const tag = document.createElement('style');
+                tag.dataset.plugin = BUNDLE;
+                tag.dataset.pluginCss = CSS_ID;
+                tag.textContent = CSS;
+                document.head.appendChild(tag);
+            } catch (error) {
+                console.warn(`[coordinator] could not add its styles: ${error?.message ?? error}`);
+            }
         }
 
         // ── Default models form ────────────────────────────────────────────
@@ -1226,25 +1241,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** DSH's Review tab for one turn's changes (dsh-client-ui-deliverables): `<session>/<seq>/<turn>`. */
         const REVIEW_PREFIX = 'dsh-resource://changes-review/session/';
         const IDS = {
-            menu: `${BUNDLE}/threads-menu`,
-            cards: `${BUNDLE}/thread-cards`,
-            mark: `${BUNDLE}/thread-mark`,
-            hover: `${BUNDLE}/thread-hover`,
-            chat: `${BUNDLE}/thread-chat`,
-            pane: `${BUNDLE}/threads-pane`,
-            link: `${BUNDLE}/thread-link`,
-            changes: `${BUNDLE}/thread-changes`,
-            settings: `${BUNDLE}/project-settings`,
-            settingsItem: `${BUNDLE}/project-settings-item`,
-            rename: `${BUNDLE}/rename`,
-            fullItem: `${BUNDLE}/full-view-item`,
-            paused: `${BUNDLE}/paused-bar`,
-            ending: `${BUNDLE}/ending-bar`,
-            place: `${BUNDLE}/row-place`,
-            sessionList: `${BUNDLE}/session-list`,
-            news: `${BUNDLE}/news-notice`,
-            coordinate: `${BUNDLE}/coordinate`,
-            start: `${BUNDLE}/start-coordinating`,
+            menu: `${BUNDLE}:threads-menu`,
+            cards: `${BUNDLE}:thread-cards`,
+            mark: `${BUNDLE}:thread-mark`,
+            hover: `${BUNDLE}:thread-hover`,
+            chat: `${BUNDLE}:thread-chat`,
+            pane: `${BUNDLE}:threads-pane`,
+            link: `${BUNDLE}:thread-link`,
+            changes: `${BUNDLE}:thread-changes`,
+            settings: `${BUNDLE}:project-settings`,
+            settingsItem: `${BUNDLE}:project-settings-item`,
+            rename: `${BUNDLE}:rename`,
+            fullItem: `${BUNDLE}:full-view-item`,
+            paused: `${BUNDLE}:paused-bar`,
+            ending: `${BUNDLE}:ending-bar`,
+            place: `${BUNDLE}:row-place`,
+            sessionList: `${BUNDLE}:session-list`,
+            news: `${BUNDLE}:news-notice`,
+            coordinate: `${BUNDLE}:coordinate`,
+            start: `${BUNDLE}:start-coordinating`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -3026,6 +3041,34 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * Mark DSH's title nav while the Threads header is mounted, for the CSS
+         * that lets the title crumb use more of the header: the hierarchy nav
+         * right before the header actions that hold the Threads menu. The CSS
+         * names the mark rather than finding the nav by what the actions hold
+         * (a :has() over DSH's header). The mark goes with the Threads header
+         * and is removed when it unmounts, so switching the plugin off or its
+         * menu away leaves DSH's header as it was.
+         * @param rootRef - a ref to the Threads header's own root div.
+         */
+        const TITLE_MARK = 'data-projects-title';
+        function markTitleCrumb(rootRef) {
+            const navRef = React.useRef(null);
+            React.useLayoutEffect(() => {
+                // The plugin's root sits in DSH's slot outlet; the outlet's parent is DSH's actions box.
+                let outlet = rootRef.current?.parentElement;
+                while (outlet && outlet !== document.body && !outlet.hasAttribute?.('data-slot')) outlet = outlet.parentElement;
+                const nav = outlet?.parentElement?.previousElementSibling?.matches?.('nav[aria-label]') ? outlet.parentElement.previousElementSibling : null;
+                if (navRef.current !== nav) navRef.current?.removeAttribute(TITLE_MARK);
+                navRef.current = nav;
+                if (nav && !nav.hasAttribute(TITLE_MARK)) nav.setAttribute(TITLE_MARK, '');
+            });
+            React.useLayoutEffect(() => () => {
+                navRef.current?.removeAttribute(TITLE_MARK);
+                navRef.current = null;
+            }, []);
+        }
+
+        /**
          * The Threads menu at the top of a coordinating chat and of each of
          * its threads: a count with the live state of the chat's threads,
          * opening a menu of them grouped by state. In a thread, a link back
@@ -3042,6 +3085,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const byId = useSessions((state) => state.byId);
             const [open, setOpen] = React.useState(false);
             const rootRef = React.useRef(null);
+            markTitleCrumb(rootRef);
             const triggerRef = React.useRef(null);
             const panelRef = React.useRef(null);
             const hoverTimer = React.useRef(undefined);

@@ -259,39 +259,39 @@ test('browser half: threads add a header menu and Coordinate (in the composer\'s
     };
     client.apply(ctx);
     assert.deepEqual(registered.map((r) => [r.name, r.id ?? r.key ?? null, r.order ?? null]), [
-        ['shell.overlay', 'dsh-plugin-coordinator/project-settings', null],
-        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/project-settings-item', 250],
-        ['shell.overlay', 'dsh-plugin-coordinator/rename', null],
-        ['conversation.session.header.actions', 'dsh-plugin-coordinator/threads-menu', -25],
-        ['conversation.session.header.actions', 'dsh-plugin-coordinator/coordinate', -24],
-        ['conversation.input.left', 'dsh-plugin-coordinator/start-coordinating', 30],
-        ['conversation.chat.turnTail', 'dsh-plugin-coordinator/thread-cards', 30],
+        ['shell.overlay', 'dsh-plugin-coordinator:project-settings', null],
+        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator:project-settings-item', 250],
+        ['shell.overlay', 'dsh-plugin-coordinator:rename', null],
+        ['conversation.session.header.actions', 'dsh-plugin-coordinator:threads-menu', -25],
+        ['conversation.session.header.actions', 'dsh-plugin-coordinator:coordinate', -24],
+        ['conversation.input.left', 'dsh-plugin-coordinator:start-coordinating', 30],
+        ['conversation.chat.turnTail', 'dsh-plugin-coordinator:thread-cards', 30],
         ['conversation.chat.node', 'turn-trigger', null],
-        ['sidebar.session.row.leading', 'dsh-plugin-coordinator/thread-mark', 20],
-        ['sidebar.workspaces.session.row.action', 'dsh-plugin-coordinator/row-place', 900],
-        ['conversation.input.dock', 'dsh-plugin-coordinator/paused-bar', 15],
-        ['conversation.input.dock', 'dsh-plugin-coordinator/ending-bar', 16],
-        ['sidebar.session.row.hover', 'dsh-plugin-coordinator/thread-hover', 20],
-        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/full-view-item', 50],
-        ['shell.overlay', 'dsh-plugin-coordinator/news-notice', null],
-        ['shell.overlay', 'dsh-plugin-coordinator/session-list', null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-chat', null],
-        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator/thread-chat', null],
+        ['sidebar.session.row.leading', 'dsh-plugin-coordinator:thread-mark', 20],
+        ['sidebar.workspaces.session.row.action', 'dsh-plugin-coordinator:row-place', 900],
+        ['conversation.input.dock', 'dsh-plugin-coordinator:paused-bar', 15],
+        ['conversation.input.dock', 'dsh-plugin-coordinator:ending-bar', 16],
+        ['sidebar.session.row.hover', 'dsh-plugin-coordinator:thread-hover', 20],
+        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator:full-view-item', 50],
+        ['shell.overlay', 'dsh-plugin-coordinator:news-notice', null],
+        ['shell.overlay', 'dsh-plugin-coordinator:session-list', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:thread-chat', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator:thread-chat', null],
         ['projects.thread.conversation', null, null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/threads-pane', null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-link', null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-changes', null],
-        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator/thread-changes', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:threads-pane', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:thread-link', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:thread-changes', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator:thread-changes', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
-    const chatTab = registered.find((r) => r.name === 'sidebar.right.pane.tab' && r.key === 'dsh-plugin-coordinator/thread-chat');
+    const chatTab = registered.find((r) => r.name === 'sidebar.right.pane.tab' && r.key === 'dsh-plugin-coordinator:thread-chat');
     assert.deepEqual(plain(chatTab.children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
     assert.deepEqual(protocols, ['projectthread']);
     assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
-        ['dsh-plugin-coordinator/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
-        ['dsh-plugin-coordinator/threads-pane', 'projectthreads', null],
-        ['dsh-plugin-coordinator/thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*']],
-        ['dsh-plugin-coordinator/thread-changes', 'projectchanges', ['dsh-resource://projectchanges/session/**']],
+        ['dsh-plugin-coordinator:thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
+        ['dsh-plugin-coordinator:threads-pane', 'projectthreads', null],
+        ['dsh-plugin-coordinator:thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*']],
+        ['dsh-plugin-coordinator:thread-changes', 'projectchanges', ['dsh-resource://projectchanges/session/**']],
     ]);
     const [chat, pane, link, changes] = types;
     assert.equal(chat.canOpen('dsh-resource://projectthread/session/s%2F1'), true);
@@ -1908,7 +1908,7 @@ test('browser half: a thread opens beside its coordinator, and in full view wher
         sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator/threads-menu').inject();
+    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator:threads-menu').inject();
     // A thread from a card or a row: the chat that started it as the main chat, the thread beside it.
     projects.openThread('t');
     assert.deepEqual(opened, ['c']);
@@ -1967,7 +1967,7 @@ test('browser half: a thread opened beside its coordinator, or from the Threads 
         },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator/threads-menu').inject();
+    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator:threads-menu').inject();
     // The first thread gets a tab; opened again, DSH brings that tab to the front.
     projects.openThread('t1');
     tabs = [{ id: 'a', kind: 'projectthread', contentId: address('t1') }];
@@ -2030,7 +2030,7 @@ test('browser half: with "Open threads beside their coordinator" off, a thread o
         sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator/threads-menu').slot.inject();
+    const { projects } = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator:threads-menu').slot.inject();
     // A thread from a row or a card's name opens as the main chat, as before the setting.
     projects.openThread('t');
     assert.deepEqual([opened, beside], [['t'], []]);
@@ -2046,7 +2046,7 @@ test('browser half: with "Open threads beside their coordinator" off, a thread o
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual([opened, holds, beside], [[], [], []]);
     // A thread's menu in the session list offers to pair it, even while it is the main chat.
-    const item = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator/full-view-item');
+    const item = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator:full-view-item');
     const menuItem = () => item.component({ sessionId: 't', useMenuOpenState: () => [true, () => {}], useSessions: (select) => select(snapshot), ...item.slot.inject() });
     let shown = menuItem();
     assert.deepEqual(shown.children, ['Open beside its coordinator']);
