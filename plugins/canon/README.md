@@ -134,9 +134,21 @@ What it still misses: a note that shares only one word with the prompt,
 in its body ("What does bastion mean?" and the glossary), and notes that
 share two common words with a prompt no note answers.
 
-A hold-out set, written by people who never saw Canon's code or the dev
-set, is measured once and never tuned on; its figures are added here when
-it is measured (`node scripts/canon-relevance.mjs --set holdout`).
+The fair figures are the hold-out's. Its 48 prompts
+(`test/fixtures/canon/relevance/holdout.json`: 24 that a note answers, 24
+that none does) were written by two writers who never saw Canon's code or
+the dev set, on the fixture vault as it is, and measured once, on October
+17 at 5:20 PM, with the rules frozen at 9a8a4c9. It is never tuned on, and
+`npm test` holds Canon to the floors on it.
+
+| Figure | Hold-out, measured once | Floor |
+| --- | --- | --- |
+| The block's first note answers | 22 of 24 (91.7%) | at least 80% |
+| An answering note is in the block | 23 of 24 (95.8%) | at least 90% |
+| Notes per block that do not answer | 0.54 (13 in 24 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 22 of 24 (91.7%) | at least 70% |
+
+To measure it again: `node scripts/canon-relevance.mjs --set holdout`.
 
 ## On the turn
 
@@ -384,7 +396,7 @@ copy of it in a temporary folder. They cover a vault folder DSH may not
 list, the try-out's `~/` folder, numbers in quotes in the profile, the
 form's promote-folder check, and where the focus goes after each switch,
 Read again and Promote. `test/canon-relevance.test.js` holds the dev set to
-the figures it reached, and the hold-out to the floors once it is there.
+the figures it reached, and the hold-out to the floors.
 
 The real-DSH test (about one minute a build) starts DSH from each
 `.e2e/dsh-<version>` install and from the installed app's own DSH, each in
