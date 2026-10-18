@@ -20,7 +20,7 @@ import { isCodingRequest } from '../plugins/canon/lib/text.js';
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 313, inBlock: 323, extra: 121, noBlock: 272, coding: 210 });
+const DEV_REACHED = Object.freeze({ first: 480, inBlock: 493, extra: 182, noBlock: 312, coding: 232 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
@@ -67,6 +67,17 @@ test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and quest
     assert.ok(set.filter((e) => inside(e.folder)).length >= 20, 'from a folder inside a project\'s folder');
     assert.ok(set.filter((e) => /^[stideylhbg]\d+$/.test(e.id) && e.kind === 'answers').length >= 120, 'questions and tasks in other forms');
     assert.ok(set.filter((e) => /^[ox]\d+$/.test(e.id) && e.kind !== 'answers').length >= 30, 'and prompts no note answers in those forms');
+    // Written after the rework, before they were measured (z01, zb01, zc01, …): one everyday word and a project's
+    // name ("How do I run lantern-web?"), one word to define ("What's a standby?"), orders with no work verb
+    // ("Page the platform on-call."), "remind me" and "any idea", numbers, people, tasks that name their project
+    // from no folder; and prompts no note answers in those forms (zx01, zy01, zd01, …), "How do I run Kafka locally?".
+    assert.ok(set.filter((e) => /^z[bc]?\d+$/.test(e.id) && e.kind === 'answers').length >= 100, 'the later forms');
+    assert.ok(set.filter((e) => /^z[xyd]\d+$/.test(e.id) && e.kind !== 'answers').length >= 30, 'and prompts no note answers in them');
+    // And one or two short questions for every active note, in other words than its title, on a word of its body or
+    // headings, many in its project's folder (zp01, …), with questions no note answers asked the same way (zq01, …).
+    const each = set.filter((e) => /^zp\d+$/.test(e.id) && e.kind === 'answers');
+    assert.ok(each.length >= 60 && new Set(each.flatMap((e) => e.answers)).size >= 34, `${each.length} short questions, one or more for each note`);
+    assert.ok(set.filter((e) => /^zq\d+$/.test(e.id) && e.kind !== 'answers').length >= 8, 'and questions no note answers asked the same way');
     // No prompt twice in one folder.
     const keys = set.map((e) => `${e.folder}\n${said(e.prompt)}`);
     assert.equal(new Set(keys).size, keys.length, 'a prompt repeats in its folder');
@@ -96,32 +107,44 @@ test('the measure gives Canon only the prompt and the session\'s folder: the sam
     assert.deepEqual(unlabelled.rows.map((r) => r.got), labelled.rows.map((r) => r.got));
 });
 
-test('first hold-out: well formed, apart from the dev set, and within the four floors of OPEN-QUESTIONS #29 (its figures only)', async (t) => {
+test('first hold-out: well formed and apart from the dev set (no prompt of it repeats one of dev\'s)', (t) => {
     if (!existsSync(HOLDOUT)) {
         t.skip('the first hold-out set is not there yet');
         return;
     }
-    const set = loadSet(HOLDOUT);
     const dev = new Set(loadSet(DEV).map((e) => said(e.prompt)));
-    const repeats = set.filter((e) => dev.has(said(e.prompt))).length;
+    const repeats = loadSet(HOLDOUT).filter((e) => dev.has(said(e.prompt))).length;
     assert.equal(repeats, 0, `${repeats} of its prompts repeat a dev prompt`);
-    const m = await measure(set);
+});
+
+test('first hold-out: within the four floors of OPEN-QUESTIONS #29 (its figures only)', async (t) => {
+    if (!existsSync(HOLDOUT)) {
+        t.skip('the first hold-out set is not there yet');
+        return;
+    }
+    const m = await measure(loadSet(HOLDOUT));
     assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
     t.diagnostic(figures('first hold-out', m));
     assert.ok(m.summary.answerable.n > 0 && m.summary.unanswerable.n > 0, 'it has prompts a note answers and prompts none does');
     assert.deepEqual(belowFloors(m), [], `floors ${JSON.stringify(FLOORS)}`);
 });
 
-test('second hold-out: well formed with kinds, apart from the dev set and the first hold-out, and within all five floors (its figures only)', async (t) => {
+test('second hold-out: well formed with kinds and apart from the dev set and the first hold-out', (t) => {
     if (!existsSync(HOLDOUT2)) {
         t.skip('the second hold-out set is not there yet');
         return;
     }
-    const set = loadSet(HOLDOUT2, { kinds: true });
     const earlier = new Set([...loadSet(DEV), ...(existsSync(HOLDOUT) ? loadSet(HOLDOUT) : [])].map((e) => said(e.prompt)));
-    const repeats = set.filter((e) => earlier.has(said(e.prompt))).length;
+    const repeats = loadSet(HOLDOUT2, { kinds: true }).filter((e) => earlier.has(said(e.prompt))).length;
     assert.equal(repeats, 0, `${repeats} of its prompts repeat a dev or first hold-out prompt`);
-    const m = await measure(set);
+});
+
+test('second hold-out: within all five floors (its figures only)', async (t) => {
+    if (!existsSync(HOLDOUT2)) {
+        t.skip('the second hold-out set is not there yet');
+        return;
+    }
+    const m = await measure(loadSet(HOLDOUT2, { kinds: true }));
     assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
     t.diagnostic(figures('second hold-out', m));
     const s = m.summary;

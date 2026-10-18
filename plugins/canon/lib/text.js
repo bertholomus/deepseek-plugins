@@ -32,9 +32,11 @@ everybody less
 `.split(/\s+/).filter(Boolean));
 
 /**
- * A word's stem: plural and verb endings off, and a last "e" off longer
- * words, so forms of one word meet ("rotate", "rotated", "rotating" →
- * "rotat"; "stores", "stored" → "stor"). Numbers stay as they are.
+ * A word's stem: plural and verb endings off, "-ation" cut to its verb,
+ * and a last "e" off longer words, so forms of one word meet ("rotate",
+ * "rotated", "rotating", "rotation" → "rotat"; "stores", "stored" →
+ * "stor"; "moving", "move" → "move"; "authenticate", "Authentication" →
+ * "authenticat"). Numbers stay as they are.
  */
 export function stem(word) {
     let w = word;
@@ -43,10 +45,24 @@ export function stem(word) {
     else if (/(?:ss|sh|ch|x|z)es$/.test(w) && w.length > 4) w = w.slice(0, -2);
     else if (w.endsWith('s') && !/(?:ss|us|is|ous)$/.test(w)) w = w.slice(0, -1);
     if (w.endsWith('ing') && w.length - 3 >= 4) w = undouble(w.slice(0, -3));
+    else if (w.endsWith('ing') && w.length === 6) w = shortRoot(w.slice(0, -3), w);
     else if (w.endsWith('ed') && w.length - 2 >= 4) w = undouble(w.slice(0, -2));
+    else if (w.endsWith('ed') && w.length === 5) w = shortRoot(w.slice(0, -2), w);
     else if (w.endsWith('ly') && w.length > 5) w = w.slice(0, -2);
+    else if (w.endsWith('ation') && w.length >= 8) w = w.slice(0, -3);
     if (w.endsWith('e') && w.length >= 5) w = w.slice(0, -1);
     return w;
+}
+
+/**
+ * The word a root of three letters comes from: "mov" of "moving" and "hir"
+ * of "hired" lost an "e"; "fix", "say" and "add", "ask" are whole; any other
+ * ("str" of "string") was no root, and the word stays as it was.
+ */
+function shortRoot(root, word) {
+    if (/^[b-df-hj-np-tv-z][aeiou][b-df-hj-np-tvz]$/.test(root)) return `${root}e`;
+    if (/^[b-df-hj-np-tv-z][aeiou][wxy]$/.test(root) || /^[aeiou][b-df-hj-np-tv-z]{2}$/.test(root)) return root;
+    return word;
 }
 
 /** "runn" → "run", "stopp" → "stop"; "fall" and "pass" keep theirs. */
@@ -89,6 +105,28 @@ export const SHORT_FORMS = Object.freeze(Object.fromEntries(Object.entries({
     tls: 'ssl',
 }).flatMap(([word, shorts]) => shorts.split(' ').map((short) => [short, word]))));
 
+/**
+ * Words people use for what notes call by another name, common in
+ * operations, read as the note's word (in notes and prompts alike, as short
+ * forms are): "revert" and "undo" a release are rolling it back, "reboot"
+ * is restart, "RAM" memory, "TTL" expiry, "handoff" handover, a "dump" a
+ * backup, a CI "runner" a build agent, "storage" disk.
+ */
+export const OTHER_WORDS = Object.freeze(Object.fromEntries(Object.entries({
+    roll: 'revert reverting reverted undo',
+    restart: 'reboot rebooting rebooted',
+    memory: 'ram',
+    expire: 'ttl ttls',
+    hand: 'handoff handoffs',
+    backup: 'dump dumps',
+    agent: 'runner runners',
+    disk: 'storage',
+    door: 'entrance',
+}).flatMap(([word, others]) => others.split(' ').map((other) => [other, word]))));
+
+/** Short forms and other words, each read as the note's word. */
+const READ_AS = Object.freeze({ ...SHORT_FORMS, ...OTHER_WORDS });
+
 const SPLIT = /[^\p{L}\p{N}]+/u;
 const CAMEL = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u;
 
@@ -105,7 +143,7 @@ export function terms(text, { max = Infinity } = {}) {
         if (raw === '') continue;
         const parts = raw.length > 3 && CAMEL.test(raw) ? [raw, ...raw.split(CAMEL)] : [raw];
         for (const part of parts) {
-            const lower = SHORT_FORMS[part.toLowerCase()] ?? part.toLowerCase();
+            const lower = READ_AS[part.toLowerCase()] ?? part.toLowerCase();
             if (lower.length < 2 || lower.length > 40 || STOP.has(lower)) continue;
             if (/^\d+$/.test(lower) && lower.length < 2) continue;
             const s = stem(lower);
@@ -126,9 +164,12 @@ export function distinctTerms(text, options) {
  * Words about the vault itself and about answering from it ("answer from
  * the team's shared notes and cite the note", "is it in the canon vault?"),
  * as terms: they say where to look and how to answer, not what about, so a
- * prompt's are left out (a note may still use them).
+ * prompt's are left out (a note may still use them). "Team" is one of them
+ * only just before one of these ("the team's shared notes"): "When is team
+ * lunch?" asks about the team.
  */
-export const ABOUT_THE_VAULT = new Set(['note', 'vault', 'canon', 'shar', 'team', 'answer', 'cite', 'cited', 'citation', 'reply', 'repli']);
+export const ABOUT_THE_VAULT = new Set(['note', 'vault', 'canon', 'shar', 'answer', 'cite', 'cited', 'citation', 'reply', 'repli']);
+const BEFORE_THE_VAULT = new Set(['team']);
 
 /**
  * The words of a text as a person wrote them, by their term: the first
@@ -145,7 +186,7 @@ export function wordsOf(text) {
         const parts = raw.length > 3 && CAMEL.test(raw) ? [raw, ...raw.split(CAMEL)] : [raw];
         for (const part of parts) {
             const lower = part.toLowerCase();
-            const whole = SHORT_FORMS[lower] ?? lower;
+            const whole = READ_AS[lower] ?? lower;
             if (whole.length < 2 || whole.length > 40 || STOP.has(whole)) continue;
             const s = stem(whole);
             if (s.length < 2 || STOP.has(s) || out.has(s)) continue;
@@ -281,7 +322,9 @@ export function workObject(prompt) {
  * @param {{ max?: number, everyday?: boolean }} [options]
  */
 export function promptTerms(text, options = {}) {
-    return distinctTerms(text, options).filter((t) => !ABOUT_THE_VAULT.has(t) && (options.everyday || !EVERYDAY.has(t)));
+    const all = terms(text, options);
+    const vault = (t, i) => ABOUT_THE_VAULT.has(t) || (BEFORE_THE_VAULT.has(t) && ABOUT_THE_VAULT.has(all[i + 1]));
+    return [...new Set(all.filter((t, i) => !vault(t, i) && (options.everyday || !EVERYDAY.has(t))))];
 }
 
 /** How often each term comes in a text. */

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
 import { ABOUT_THE_VAULT, EVERYDAY, distinctTerms, isCodingRequest, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
-import { Index, MIN_SCORE, SHARE_BODY, SHARE_TITLED, folderKeys, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
+import { Index, MIN_SCORE, SHARE_BODY, SHARE_TITLED, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, bestPassage, closedEntry, closedText, closedWhat, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
@@ -157,13 +157,19 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     assert.deepEqual(terms('ok, go ahead'), []);
     assert.deepEqual(distinctTerms('What port does the harbor-gateway listen on? sessionController 8443'),
         ['port', 'harbor', 'gateway', 'listen', 'sessioncontroller', 'session', 'controller', '8443']);
-    for (const [a, b] of [['rotate', 'rotating'], ['rotated', 'rotates'], ['certificates', 'certificate'], ['stored', 'store'], ['listens', 'listening']]) {
+    for (const [a, b] of [['rotate', 'rotating'], ['rotated', 'rotates'], ['certificates', 'certificate'], ['stored', 'store'], ['listens', 'listening'],
+        ['moving', 'move'], ['hired', 'hire'], ['fixed', 'fix'], ['added', 'add'], ['rotation', 'rotate'], ['authenticate', 'authentication'],
+        ['migrations', 'migrating']]) {
         assert.equal(stem(a), stem(b), `${a} and ${b}`);
     }
     assert.notEqual(stem('port'), stem('portal'));
+    assert.deepEqual(['string', 'station', 'action'].map(stem), ['string', 'station', 'action'], 'no root to give back');
     // A prompt's words about the vault and about answering from it are left out; a note keeps them.
     assert.deepEqual(promptTerms('Check the team\'s shared notes in the canon vault, answer and cite the note: which ports?'), ['port']);
-    assert.ok(['note', 'vault', 'canon', 'team'].every((t) => ABOUT_THE_VAULT.has(t)));
+    assert.ok(['note', 'vault', 'canon'].every((t) => ABOUT_THE_VAULT.has(t)));
+    // "Team" only just before them: "the team's notes" says where to look, "team lunch" what about.
+    assert.deepEqual(promptTerms('Search the team\'s notes first, then reply.'), ['search', 'first']);
+    assert.deepEqual(promptTerms('When is team lunch?'), ['team', 'lunch']);
     // So are everyday request words ("check" above) in a coding request: they say what to do, not what about;
     // the share a note carries still counts them, and a question keeps them (search.js).
     assert.deepEqual(promptTerms('Write a small function that checks the gateway ports'), ['gateway', 'port']);
@@ -176,9 +182,12 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     assert.deepEqual(promptTerms('What is the mascot called? A service named quartz'), ['mascot', 'servic', 'quartz']);
     assert.deepEqual(promptTerms('Remember that the gateway always listens, unless someone stops it'), ['remember', 'gateway', 'listen', 'stop']);
     // Short forms are read as the whole word, in notes and prompts alike; the page still shows the person's word.
-    assert.deepEqual(terms('certs DB auth k8s'), ['certificat', 'databas', 'authentication', 'kubernet']);
+    assert.deepEqual(terms('certs DB auth k8s'), ['certificat', 'databas', 'authenticat', 'kubernet']);
     assert.deepEqual(terms('Rotating TLS certificates in the database'), ['rotat', 'tls', 'certificat', 'databas']);
     assert.deepEqual([...wordsOf('the certs').entries()], [['certificat', 'certs']]);
+    // So are a few other words for what notes call by another name: reverting a release is rolling it back.
+    assert.deepEqual(terms('reverting the release, a reboot, RAM, the TTL, the handoff, a nightly dump'), ['roll', 'releas', 'restart', 'memory', 'expir', 'hand', 'night', 'backup']);
+    assert.deepEqual([...wordsOf('after reverting').entries()], [['roll', 'reverting']]);
     // The words as the prompt wrote them, by their terms.
     assert.deepEqual([...wordsOf('Rotating the certificates, rotated again').entries()], [['rotat', 'rotating'], ['certificat', 'certificates']]);
     // A coding request: a sentence that starts with a verb of work on code, after "please", "can you" and the
@@ -198,7 +207,7 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     }
 });
 
-test('frontmatter: the YAML notes use, read without throwing; titles, tags, aliases, projects and status', () => {
+test('frontmatter: the YAML notes use, read without throwing; titles, tags, aliases, projects, the terms a list defines and status', () => {
     const text = [
         '---',
         'title: "Gateway ports: the list"',
@@ -219,8 +228,13 @@ test('frontmatter: the YAML notes use, read without throwing; titles, tags, alia
         'Body with an #inline-tag and `#not-a-tag` in code.',
         '```',
         '# not a heading',
+        '- **Not defined**: in code',
         '```',
         '## Second',
+        '- **Listener**: what takes the traffic.',
+        '1. **Health check** - the port the load balancer reads.',
+        '**Decision:** a label, not a term.',
+        '- **Lantern** (lantern-api) hands over on Mondays.',
     ].join('\n');
     const note = noteOf('Projects/harbor-gateway/Gateway ports.md', text);
     assert.equal(note.title, 'Gateway ports: the list');
@@ -230,6 +244,7 @@ test('frontmatter: the YAML notes use, read without throwing; titles, tags, alia
     assert.deepEqual(note.aliases, ['HGW ports', 'ports of the gateway']);
     assert.deepEqual(note.projects, ['harbor-gateway']);
     assert.deepEqual(note.headings, ['Heading one', 'Second']);
+    assert.deepEqual(note.defined, ['Listener', 'Health check'], 'a list item\'s bold term before a colon or a dash');
     assert.deepEqual(note.data.source, { session: 's-1', turn: 4 });
     assert.equal(note.data.summary, 'Two lines\nof text.');
     // Titles: frontmatter, else the first H1, else the file name.
@@ -557,13 +572,15 @@ test('search: the session\'s folder lifts its project\'s notes; one shared body 
     assert.equal(ask('How do I rotate the TLS certificates?', '').results[0].path, 'Runbooks/Rotating TLS certificates.md');
     assert.equal(ask('certificate renewal steps', '').results[0].path, 'Runbooks/Rotating TLS certificates.md', 'by its alias');
     assert.equal(ask('restore the ledger database from last night', '/work/Projects/tide-ledger').results[0].path, 'Projects/tide-ledger/Ledger backups.md');
-    // Nothing for filler, for prompts about something else, and for one shared body word.
+    // Nothing for filler, for prompts about something else, and for one shared body word in a prompt that asks more.
     assert.deepEqual(ask('Thanks, looks good! Please carry on.', '').results, []);
     assert.deepEqual(ask('translate this paragraph into French', '/work/Projects/other-thing').results, []);
-    const one = ask('what does bastion mean', '');
+    const one = ask('Is the lunch menu online?', '');
     assert.deepEqual(one.results, []);
-    assert.equal(one.others[0]?.path, 'People/Glossary.md', 'listed as a near miss for the page');
+    assert.equal(one.others[0]?.path, 'Misc/Office.md', 'listed as a near miss for the page');
     assert.equal(one.others[0]?.fits, false);
+    // A term a list defines ("- **Bastion**: the one host…") counts as much as an alias: the glossary says what it means.
+    assert.deepEqual(ask('what does bastion mean', '').results.map((r) => r.path), ['People/Glossary.md']);
     for (const r of ask('What port does the harbor gateway listen on?', '').results) assert.ok(r.score >= MIN_SCORE);
 });
 
@@ -635,7 +652,7 @@ test('search: a project\'s name is one word and a note needs another; words abou
     assert.deepEqual([...vault.index.projects.keys()].sort(), ['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
 });
 
-test('search: a folder inside a project\'s folder is that project\'s, and "this repo" there says its name; one title word needs a prompt with no word the vault lacks; an everyday word beside a name is not enough', async () => {
+test('search: a folder inside a project\'s folder is that project\'s, and "this repo" there says its name; one title word needs a prompt with no word the vault lacks; one word is enough when it is all the prompt asks', async () => {
     const vault = await readVault(vaultCopy());
     const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });
     const paths = (prompt, folder) => ask(prompt, folder).results.map((r) => r.path);
@@ -664,10 +681,23 @@ test('search: a folder inside a project\'s folder is that project\'s, and "this 
     assert.deepEqual(leave.results, []);
     assert.equal(leave.others.find((o) => o.path === 'Decisions/2026-06 Quartz eviction policy.md')?.why, 'few');
     // "Running" is in the title of lantern-web's note for running it locally, and the session names lantern-web;
-    // an everyday request word is still not enough.
+    // an everyday request word is not enough in a prompt that asks more ("useEffect", "twice") ...
     const twice = ask('Why is this useEffect running twice?', '/Users/someone/Projects/lantern-web/src');
     assert.deepEqual(twice.results, []);
     assert.equal(twice.others.find((o) => o.path === 'Projects/lantern-web/Running lantern-web locally.md')?.why, 'few');
+    // ... and enough when it is all the prompt asks, beside the project's name or in its folder.
+    assert.equal(paths('How do I run lantern-web?')[0], 'Projects/lantern-web/Running lantern-web locally.md');
+    assert.deepEqual(paths('how do i run it', '/Users/someone/Projects/lantern-web'), ['Projects/lantern-web/Running lantern-web locally.md']);
+    // So is one word beyond everyday words when few notes have it or a note's body has it twice.
+    assert.deepEqual(paths('What runs on 6412?'), ['Projects/quartz-cache/Quartz ports.md']);
+    assert.deepEqual(paths('What\'s a standby?'), ['People/Glossary.md', 'Projects/tide-ledger/Ledger backups.md']);
+    // A question that names a thing no note has fits only a note of a project it names, or one sharing three words.
+    const kafka = ask('How do I run Kafka locally?');
+    assert.deepEqual(kafka.results, []);
+    assert.deepEqual(kafka.others.find((o) => o.path === 'Projects/lantern-web/Running lantern-web locally.md')?.unknown, ['kafka']);
+    assert.deepEqual(namesOf('Can I run a migration on Saturday? I\'ve never done it. Why does CORS fail for Kafka?'), ['cor', 'kafka']);
+    // A coding request that works on what a note of the project it names is titled for fits it, from any folder.
+    assert.deepEqual(paths('Write a migration for the ledger that drops the old entries index.'), ['Projects/tide-ledger/Schema migrations.md']);
 });
 
 test('search: a session in a project\'s folder names that project; a prompt that asks two things gets the best note for each', async () => {

@@ -1,8 +1,9 @@
 /**
  * Canon's search: an in-memory inverted index over the vault's active
  * notes, scored like BM25F. A word in a note's title, aliases, tags, path
- * or headings counts for more than one in its body; a body's length is
- * evened out; a word few notes have counts for more than a common one.
+ * or headings, or a term a list in it defines ("- **Standby**: …"), counts
+ * for more than one in its body; a body's length is evened out; a word few
+ * notes have counts for more than a common one.
  *
  * Which notes fit a prompt: words about the vault and about answering from
  * it ("answer from the team's shared notes") are left out of the prompt; a
@@ -31,7 +32,7 @@ import { EVERYDAY, counts, isCodingRequest, nameKey, promptTerms, terms, wordsOf
 const K1 = 1.2;
 const B = 0.6;
 /** How much a word counts in each of a note's strong fields (the body counts 1). */
-const WEIGHTS = Object.freeze({ title: 4, aliases: 3, tags: 3, path: 2, headings: 1.5 });
+const WEIGHTS = Object.freeze({ title: 4, aliases: 3, tags: 3, defined: 3, path: 2, headings: 1.5 });
 /** A note scores at least this, and at least this share of the best note, to be added. */
 export const MIN_SCORE = 3;
 export const NEAR_BEST = 0.5;
@@ -130,6 +131,27 @@ export function questionsOf(prompt) {
         .filter(Boolean);
 }
 
+/** Words written with a capital that name no thing: "I'm", days and months. */
+const CAPITALIZED = /^(?:i['’]\w*|(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?|january|february|march|april|may|june|july|august|september|october|november|december)$/i;
+
+/**
+ * The terms of the words a text writes as names: with a capital inside a
+ * sentence ("How do I run Kafka locally?"), or in capitals ("CORS").
+ * @param {string} text
+ */
+export function namesOf(text) {
+    const out = [];
+    for (const sentence of String(text ?? '').split(/(?<=[.!?;:])\s+|\n+/)) {
+        const words = sentence.trim().split(/\s+/);
+        for (const [i, raw] of words.entries()) {
+            const word = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+            if (word.length < 2 || CAPITALIZED.test(word)) continue;
+            if ((i > 0 && /^\p{Lu}/u.test(word)) || (/^[\p{Lu}\p{N}]+$/u.test(word) && /\p{Lu}{2}/u.test(word))) out.push(...terms(word));
+        }
+    }
+    return out;
+}
+
 export class Index {
     constructor() {
         /** Slot → note record, or null once removed. */
@@ -192,6 +214,7 @@ export class Index {
         for (const tag of note.tags ?? []) addStrong(tag.replace(/[/_-]+/g, ' '), WEIGHTS.tags);
         addStrong(segments.join(' ').replace(/\.md$/i, ''), WEIGHTS.path, false);
         for (const heading of note.headings ?? []) addStrong(heading, WEIGHTS.headings);
+        for (const term of note.defined ?? []) addStrong(term, WEIGHTS.defined);
         const bodyTerms = terms(note.body ?? '');
         const body = new Map();
         for (const t of bodyTerms) body.set(t, (body.get(t) ?? 0) + 1);
@@ -318,7 +341,8 @@ export class Index {
      * whether it belongs to the folder; and the few that matched some words
      * but stayed out (`others`, for the page's "why not"), each with `why`:
      * `name` (only a project's name in common), `few` (too few words in
-     * common, or too few that say what the note is about), `part` (a coding
+     * common, or too few that say what the note is about; with `unknown`,
+     * the names the prompt writes that no note has), `part` (a coding
      * request's words in common carry too little of what it asks), `other`
      * (another project's note), `less` (it fits, but under the floors).
      *
@@ -327,21 +351,26 @@ export class Index {
      * parts it has; a session in a known project's folder, or in a folder
      * inside it, names that project for its own notes, and "this repo" or
      * "this service" there says its name ("Who owns this repo?").
-     * A word is distinctive in a note when it is in the note's title,
-     * aliases, tags or headings, in at most 6% of the notes, or twice in its
-     * body.
+     * A term a list in a note defines counts as one of its aliases. A word
+     * is distinctive in a note when it is in the note's title, aliases, tags
+     * or headings, in at most 6% of the notes, or twice in its body.
      *
      * A question (any prompt that is not a coding request) fits a note
      * that shares two words with it, a project's name counting as one, at
-     * least one beyond it. One word is enough when it is in the note's
-     * title, aliases, tags, path or headings and the prompt asks only that
-     * word; when it is distinctive and only in the note's body, beside a
-     * project the prompt or the session names; or when it is in the note's
-     * title, aliases, tags or headings, in at most 6% of the notes and the
-     * rarest word the prompt shares with the vault, and the prompt has no
-     * word the vault lacks and names no other project. An everyday request
-     * word ("run", "test", "file") is never enough alone, not even beside a
-     * project's name.
+     * least one beyond it. One word is enough when it is all the prompt
+     * asks beyond everyday request words ("run", "test", "file") and a
+     * project's name the note's own, and it is in the note's title, aliases,
+     * tags, path or headings, or distinctive in its body; when it is
+     * distinctive and only in the note's body, beside a project the prompt
+     * or the session names; or when it is in the note's title, aliases, tags
+     * or headings, in at most 6% of the notes and the rarest word the prompt
+     * shares with the vault, and the prompt has no word the vault lacks and
+     * names no other project. An everyday request word is enough alone only
+     * when it is all the prompt asks ("How do I run lantern-web?"). A
+     * question that names a thing no note has (a word it writes with a
+     * capital inside a sentence, or in capitals, other than a day, a month
+     * or "I'm") fits only a note of a project it or the session names, or
+     * one that shares three words with it ("How do I run Kafka locally?").
      *
      * A coding request (text.js isCodingRequest: a sentence starts with a
      * verb such as "write", "add" or "fix", or it speaks of "this function"
@@ -357,6 +386,10 @@ export class Index {
      * - when they are only in its body: they carry 45% of the prompt's
      *   weight, and a single one fits only beside a project the prompt or
      *   the session names, in a prompt that asks more than one word.
+     * It also fits, whatever its share, when what the request's first work
+     * verb acts on is in the note's title and the note is a project's the
+     * prompt or the session names ("Write a migration for the ledger…":
+     * Schema migrations).
      *
      * A note that belongs to a project (its `project` or `repo`, or its
      * folder under Projects/) is left out when the session's folder or the
@@ -452,12 +485,17 @@ export class Index {
         total += nameWeight;
         // For its own notes, a session in a project's folder says that project's name.
         const hereWeight = here ? Math.max(0, ...this.partsOf(here).map((t) => idfOf(this.notesWith(t)))) : 0;
-        // What a coding request works on, beyond everyday words: a thing one of the session project's notes is titled for.
-        const object = coding && here ? workObject(prompt).filter((t) => !EVERYDAY.has(t) && !names.has(t)) : [];
+        // What a coding request works on, beyond everyday words: a thing a note of the project it names, or the
+        // session's, is titled for.
+        const object = coding && context.size > 0 ? workObject(prompt).filter((t) => !EVERYDAY.has(t) && !names.has(t)) : [];
         // A question's lone title word must be the rarest word it shares with the vault, in a prompt with no
         // word the vault lacks.
         const namesAsked = query.some((t) => names.has(t));
         const unknown = query.some((t) => !names.has(t) && !EVERYDAY.has(t) && this.notesWith(t) === 0);
+        const plainAsked = query.filter((t) => !names.has(t) && !EVERYDAY.has(t)).length;
+        // A name the prompt writes with a capital inside a sentence, or in capitals, that no note has ("Kafka", "CORS"):
+        // the question is about something the vault does not know.
+        const alien = [...new Set(namesOf(prompt).filter((t) => !EVERYDAY.has(t) && !names.has(t) && this.notesWith(t) === 0))];
         let rarest = Infinity;
         for (const t of query) {
             if (names.has(t) || EVERYDAY.has(t)) continue;
@@ -512,12 +550,13 @@ export class Index {
             const share = asks > 0 ? (hit.covered + said) / asks : 0;
             const titled = hit.marked > 0;
             let why = '';
+            let strange = null;
             if (hit.topics === 0) why = 'name';
             else if (coding) {
                 if ((titled ? hit.distinct : hit.topics) + (named ? 1 : 0) < need || (!titled && hit.topics === 1 && (!named || topics === 1))) why = 'few';
                 else if (share < (titled ? SHARE_TITLED : SHARE_BODY)) why = 'part';
-                // "Write a migration…" in tide-ledger's folder works on what its Schema migrations note is about.
-                if (why === 'part' && object.length && own.includes(here) && terms(hit.doc.title).some((t) => object.includes(t))) why = '';
+                // "Write a migration…" in tide-ledger's folder, or "…for the ledger", works on what its Schema migrations note is about.
+                if (why === 'part' && object.length && own.some((name) => context.has(name)) && terms(hit.doc.title).some((t) => object.includes(t))) why = '';
             } else {
                 const lone = hit.topics === 1;
                 const df = lone ? this.notesWith(hit.lone) : 0;
@@ -525,10 +564,15 @@ export class Index {
                 const inBody = lone && hit.strong === 0;
                 // One word in the title, aliases, tags or headings, rare and the rarest the prompt shares with the vault.
                 const alone = lone && titled && df <= rare && df <= rarest && !unknown && (named || !namesAsked);
-                // An everyday request word is never enough alone, not even beside a project's name.
-                const plain = hit.plain > 0;
-                if (inBody ? !(named && hit.distinct > 0 && plain) : hit.topics + (named ? 1 : 0) < need && !(alone && plain)) why = 'few';
+                // An everyday request word is enough alone only when it is all the prompt asks beside a project's name.
+                const plain = hit.plain > 0 || topics === 1;
+                // The one word the prompt asks beyond everyday request words (and a project's name it says).
+                const only = plainAsked === 1 && hit.plain === 1 && (named || !namesAsked);
+                if (inBody ? !((named || only) && hit.distinct > 0 && plain) : hit.topics + (named ? 1 : 0) < need && !(alone && plain) && !only) why = 'few';
                 else if (!plain && hit.topics < 2) why = 'few';
+                // A question about a thing no note names fits a note of a project it or the session names, or one that shares three words.
+                else if (alien.length > 0 && !named && hit.topics < 3) why = 'few';
+                if (why === 'few' && alien.length > 0 && !named && hit.topics >= 2) strange = alien.map((t) => words.get(t) ?? t);
             }
             if (why === '' && context.size > 0 && own.length > 0 && !own.some((name) => context.has(name))) why = 'other';
             scored.push({
@@ -547,6 +591,7 @@ export class Index {
                 plain: hit.plain,
                 body: hit.strong === 0,
                 share,
+                ...(strange ? { unknown: strange } : {}),
             });
         }
         scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
