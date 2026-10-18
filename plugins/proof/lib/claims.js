@@ -636,7 +636,8 @@ function metricsIn(text) {
 }
 
 /** A clause with its inline code as a plain word: "setting `exported=true`" holds no verb. */
-const prose = (s) => s.replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), 'code');
+// A version in code stays a version: "`orders` on staging is on `1.14.2` now".
+const prose = (s) => s.replace(new RegExp(`${OPEN}(v?\\d+\\.\\d+\\.\\d+(?:-[\\w.]+)?|v\\d+(?:\\.\\d+)*)${CLOSE}`, 'g'), '$1').replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), 'code');
 
 /** The kind of claim a clause makes, with what it is about; or undefined. */
 function claimOf(clause) {
@@ -678,7 +679,8 @@ function claimOf(clause) {
         const raw = s.replace(LIVES_IN, ' ');
         const before = raw.slice(0, m.index);
         const after = raw.slice(m.index);
-        if (inCode(before) || ADJECTIVE.test(prose(before))) continue;
+        // "the published checksum" is an adjective; "the playbook rolled it out", "the job deployed the image" are acts.
+        if (inCode(before) || (ADJECTIVE.test(prose(before)) && !/^\S+(?:\s+out)?\s+(?:it|them|this|that|these|those|everything|the|a|an|to|out)\b/i.test(after))) continue;
         if (/^pushed\s+(back|for|ahead|through)\b/i.test(after)) continue;
         // Code at work, not a deploy: "`LRU.Get` released the mutex", "pushes the job onto the queue", "merged the two maps".
         if (CODE_ACT.some((re) => re.test(after)) || codeSubject(before)) continue;

@@ -41,7 +41,7 @@ const REGISTRY_READ_CMD = /\bnpm\s+(view|info|show)\b|\bpip3?\s+index\s+versions
 /** A request to a server, or a status read of what runs. */
 const PROBE_CMD = /\b(curl|wget|httpie|xh|hey|ab)\b|\bhttp\s+(get|head|post\s+)?\S*https?:|\bkubectl\b[^|;&]*\b(get\s+(pods?|po|deploy(ments?)?|svc|services?)|describe)\b|\bsystemctl\s+status\b|\bdocker\s+(ps|compose\s+ps)\b|\b(fly|flyctl)\s+status\b|\bheroku\s+ps\b|\baws\s+[\w-]+\s+(?:describe-[\w-]+|get-[\w-]+|list-[\w-]+|wait)\b|\bgcloud\s+(?:[\w-]+\s+){1,3}(?:describe|list)\b|\baz\s+(?:[\w-]+\s+){1,3}(?:show|list)\b/i;
 /** Runs that apply infrastructure, a playbook or a database migration. */
-const MIGRATE_CMD = /\b(sqlite3|duckdb)\s+\S+\s*<\s*\S+|\b(psql|mysql|mariadb|sqlcmd)\b[^|;&]*(\s-f\s|\s--file[= ]|<\s*\S+)|\balembic\s+upgrade\b|\b(rails|rake)\s+db:(migrate|schema:load|setup)\b(?!:status)|\bprisma\s+(migrate\s+(deploy|dev|reset)|db\s+push)\b|\b(knex|sequelize(-cli)?)\s+(migrate:latest|db:migrate)\b|\bgoose\b[^|;&]*\bup\b|\bmigrate\b[^|;&]*\s(up|-up)\b|\bflyway\s+migrate\b|\bdbmate\s+(up|migrate)\b|\bliquibase\s+update\b|\b(php\s+artisan|manage\.py|django-admin)\s+migrate\b(?!:status)|\bdiesel\s+migration\s+run\b|\bsqlx\s+migrate\s+run\b|\bmix\s+ecto\.migrate\b|\bdotnet\s+ef\s+database\s+update\b|\b(npm|pnpm|yarn|bun)\s+(run\s+)?(db:)?migrate\b|\bdrizzle-kit\s+(push|migrate)\b|\b(make|just|task)\s+(db[-:])?migrate\b|\btypeorm(-ts-node-\w+)?\s+migration:run\b|\bmikro-orm\s+migration:up\b|\batlas\s+(migrate|schema)\s+apply\b|\bsupabase\s+(db\s+(push|reset)|migration\s+up)\b|\bhasura\s+migrate\s+apply\b|\bsqitch\s+deploy\b|\bdoctrine:migrations:migrate\b|\bmix\s+ecto\.(setup|reset)\b|\b(rails|rake)\s+db:prepare\b/i;
+const MIGRATE_CMD = /\b(sqlite3|duckdb)\s+\S+\s*<\s*\S+|\b(psql|mysql|mariadb|sqlcmd)\b[^|;&]*(\s-f\s|\s--file[= ]|<\s*\S+)|\balembic\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*upgrade\b|\b(rails|rake)\s+db:(migrate|schema:load|setup)\b(?!:status)|\bprisma\s+(migrate\s+(deploy|dev|reset)|db\s+push)\b|\b(knex|sequelize(-cli)?)\s+(migrate:latest|db:migrate)\b|\bgoose\b[^|;&]*\bup\b|\bmigrate\b[^|;&]*\s(up|-up)\b|\bflyway\s+migrate\b|\bdbmate\s+(up|migrate)\b|\bliquibase\s+update\b|\b(php\s+artisan|manage\.py|django-admin)\s+migrate\b(?!:status)|\bdiesel\s+migration\s+run\b|\bsqlx\s+migrate\s+run\b|\bmix\s+ecto\.migrate\b|\bdotnet\s+ef\s+database\s+update\b|\b(npm|pnpm|yarn|bun)\s+(run\s+)?(db:)?migrate\b|\bdrizzle-kit\s+(push|migrate)\b|\b(make|just|task)\s+(db[-:])?migrate\b|\btypeorm(-ts-node-\w+)?\s+migration:run\b|\bmikro-orm\s+migration:up\b|\batlas\s+(migrate|schema)\s+apply\b|\bsupabase\s+(db\s+(push|reset)|migration\s+up)\b|\bhasura\s+migrate\s+apply\b|\bsqitch\s+deploy\b|\bdoctrine:migrations:migrate\b|\bmix\s+ecto\.(setup|reset)\b|\b(rails|rake)\s+db:prepare\b/i;
 /** A training run: a training script, a trainer launcher, or a make or npm target that trains. */
 const TRAIN_CMD = /\b[\w-]*(train|finetune|fine_tune|fine-tune|sft|pretrain)[\w-]*\.(py|sh)\b|\b(torchrun|deepspeed|fairseq-train|axolotl|mlx_lm\.lora)\b|\baccelerate\s+launch\b|\bllamafactory-cli\s+train\b|\btune\s+run\b|\b(python3?|uv\s+run|poetry\s+run)\s+(-m\s+)?[\w.]*(train|finetune|sft)\w*\b|\b(make|just|task|npm\s+run|pnpm|yarn)\s+[\w:-]*(train|finetune|fine-tune)\b|\byolo\s+(\w+\s+)?train\b|\bdvc\s+(repro|exp\s+run)\b|\bmlflow\s+run\b/i;
 /** Lines of a training run's own output: epochs and losses. */
@@ -960,10 +960,10 @@ const TARGET_WORDS = {
  */
 function namedCount(text, { inWords = false } = {}) {
     if (inWords) {
-        const w = /\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/i.exec(text);
+        const w = /\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+|(?<=\ball\s+\d+\s+)[a-z][\w-]*\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/i.exec(text);
         return w ? { passed: num(w[1]), total: num(w[1]) } : undefined;
     }
-    const m = /\b(\d+)\s*\/\s*(\d+)\b|\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/i.exec(text);
+    const m = /\b(\d+)\s*\/\s*(\d+)\b|\b(?:all\s+)?(\d+)\s+(?:of\s+(?:its|the)\s+)?(?:unit\s+|e2e\s+|integration\s+|(?<=\ball\s+\d+\s+)[a-z][\w-]*\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/i.exec(text);
     if (!m) return undefined;
     return { passed: num(m[1] ?? m[3]), total: num(m[2] ?? m[3]) };
 }
@@ -1399,7 +1399,9 @@ function passedFor(subject, claim, list) {
     // "Invoice tests: 9/9 pass" after `pytest -k invoice` and a full run with an unrelated failure: the claim is about the run its
     // filter names, unless a later failing run names that filter too.
     const byFilter = subject === 'tests' || subject === 'any'
-        ? fitting.filter((i) => i.tests?.filtered && Array.isArray(i.filter) && i.filter.some((w) => new RegExp(`\\b${w}`, 'i').test(words)))
+        ? fitting.filter((i) => i.tests?.filtered && Array.isArray(i.filter) && i.filter.some((w) => new RegExp(`\\b${w}`, 'i').test(String(words).replace(/_/g, ' '))))
+            // A later run of the same filter that passed, its counts sent to a file (`-v > /tmp/drain.log`), speaks for it.
+            .filter((i) => !fitting.slice(fitting.indexOf(i) + 1).some((j) => j.ok === true && typeof j.cmd === 'string' && i.filter.every((w) => filterOf(unpicked(j.cmd)).includes(w))))
         : [];
     const failsThere = byFilter.length > 0 && fitting.slice(fitting.indexOf(byFilter.at(-1)) + 1).some((i) => i.ok === false && failsOn(i, focusOf(byFilter.at(-1))));
     const relevant = byCommand.length ? byCommand : byFilter.length && !failsThere ? byFilter : bySuite.length ? bySuite : fitting;
@@ -1474,7 +1476,8 @@ function passedFor(subject, claim, list) {
     if (count && counted.length && !(repeats && Number(repeats[1] ?? repeats[2] ?? repeats[3]) === count.total)) {
         const sums = counted.reduce((a, i) => a + i.tests.passed, 0);
         const listed = namedCounts(sentence).reduce((a, n) => a + n, 0);
-        const fit = (t) => t.passed === count.passed || t.total === count.total || t.passed === count.total || (t.parts ?? []).includes(count.passed) || (listed > count.passed && t.passed === listed);
+        // "all 42 tests pass" after "Passed: 40, Skipped: 2, Total: 42": the total it names fits only when that many passed.
+        const fit = (t) => t.passed === count.passed || (t.total === count.total && (t.passed === t.total || !/\b(?:all|every|each)\b/i.test(words))) || t.passed === count.total || (t.parts ?? []).includes(count.passed) || (listed > count.passed && t.passed === listed);
         if (!(counted.some((i) => fit(i.tests)) || sums === count.passed)) {
             const last = counted.at(-1);
             const shown = last.tests;
@@ -1735,11 +1738,14 @@ function judgeFixed(claim, list, prompt = '') {
     }
     const kinds = FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
     const fitting = checks.filter((i) => kinds.includes(i.kind));
+    // "The flake is fixed": a flaky test shows itself by failing now and then, so any test run after the change that failed says it is still there.
+    const flaked = /\bflak(?:e|es|y|iness)\b/i.test(claim.part ?? claim.text ?? '') ? checks.filter((i) => i.ok === false && (i.kind === 'test' || i.tests)).at(-1) : undefined;
+    if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: `A test run after the change still failed: ${flaked.text}.` };
     const last = (fitting.length ? fitting : checks).at(-1);
     if (last.ok === false) {
         // "Fixed the rounding bug in `formatCurrency`" after `vitest run src/currency.test.ts` passed and a full run failed
         // elsewhere: the run its filter names shows the fix, unless the failure names that filter too.
-        const words = String(claim.part ?? claim.text ?? '').replace(/([a-z])([A-Z])/g, '$1 $2');
+        const words = String(claim.part ?? claim.text ?? '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
         const named = fitting.filter((i) => i.ok === true && i.tests?.filtered && focusOf(i).some((w) => new RegExp(`\\b${w}`, 'i').test(words))).at(-1);
         const failing = named ? fitting.slice(fitting.indexOf(named) + 1).filter((i) => i.ok === false) : [];
         if (named && !failing.some((i) => failsOn(i, focusOf(named)))) return { verdict: 'backed', evidence: [said(named)], why: '' };
