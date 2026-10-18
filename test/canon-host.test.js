@@ -163,6 +163,7 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     // "Who owns it" keeps its verb; "called" and "named" only name a thing.
     assert.deepEqual(distinctTerms('Who owns quartz-cache?'), ['own', 'quartz', 'cache'].map((w) => stem(w)));
     assert.deepEqual(promptTerms('What is the mascot called? A service named quartz'), ['mascot', 'servic', 'quartz']);
+    assert.deepEqual(promptTerms('Remember that the gateway always listens, unless someone stops it'), ['remember', 'gateway', 'listen', 'stop']);
     // The words as the prompt wrote them, by their terms.
     assert.deepEqual([...wordsOf('Rotating the certificates, rotated again').entries()], [['rotat', 'rotating'], ['certificat', 'certificates']]);
 });

@@ -27,7 +27,8 @@ weren what whatever when where whether which while who whom whose why will with 
 yes yet you your yours yourself yourselves
 hi hello hey thx ty cool nice great good fine awesome perfect looks look looking sounds sound ahead carry continue
 proceed lgtm sorry wait hmm hm ah ugh anyway also again stuff bit lot lots really actually basically just
-called named
+called named that although unless already always usually none nothing everything someone everyone somebody anybody
+everybody less
 `.split(/\s+/).filter(Boolean));
 
 /**

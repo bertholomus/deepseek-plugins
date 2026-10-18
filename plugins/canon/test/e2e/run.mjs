@@ -618,7 +618,8 @@ try {
         await waitFor(async () => (await api('state')).ok === false, 'Canon to stop', 20000, 300);
         if (window?.page) {
             const { page } = window;
-            await waitFor(async () => (await cardsShown(page).count()) === 0 && (await page.getByRole('button', { name: 'Canon', exact: true }).count()) === 0, 'the card and the entry to go', 20000, 300).catch(() => {});
+            await waitFor(async () => (await cardsShown(page).count()) === 0 && (await page.getByRole('button', { name: 'Canon', exact: true }).count()) === 0
+                && (await page.locator('style[data-plugin="dsh-plugin-canon"]').count()) === 0, 'the card, the entry and the style to go', 20000, 300).catch(() => {});
             const style = await page.locator('style[data-plugin="dsh-plugin-canon"]').count();
             check('while Canon is off, its card, its sidebar entry and its style are gone', (await cardsShown(page).count()) === 0 && (await page.getByRole('button', { name: 'Canon', exact: true }).count()) === 0 && style === 0, `style tags: ${style}`);
         }
@@ -635,6 +636,7 @@ try {
             const card = cardsShown(page).first();
             const back = await card.waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
             check('switched on, its entry and the card come back', back && (await card.locator('[data-canon-note]').count()) >= 1);
+            check('on again repeats nothing: one style sheet', (await page.locator('style[data-plugin="dsh-plugin-canon"]').count()) === 1, String(await page.locator('style[data-plugin="dsh-plugin-canon"]').count()));
             check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
         }
     }, async () => {
