@@ -577,6 +577,17 @@ test('settings in Plugins: the form has every live setting, takes what the confi
     assert.equal(inbox.parse('Inbox/Kept'), undefined);
     // None saved (or not a folder): the default, Drafts.
     assert.equal(formKit.fieldSpec(settingsFields(() => undefined).find((f) => f.name === 'promoteFolder')).parse('Drafts/Kept'), undefined);
+    // The whole disk and the home folder as the vault: the form refuses them as the profile does, in its words.
+    const vaultField = field('vault');
+    const vaultSpec = formKit.fieldSpec(vaultField);
+    for (const [value, what] of [['/', 'the whole disk'], ['//', 'the whole disk'], ['/srv/..', 'the whole disk'], ['~', 'your home folder'], ['~/', 'your home folder'], ['~/./', 'your home folder']]) {
+        assert.equal(vaultSpec.parse(value), undefined, value);
+        assert.equal(formKit.invalidWords(vaultField), `The vault's own folder, not ${what}: a full path, such as /Users/you/Canon, or one starting with ~/, such as ~/Obsidian/Canon.`, value);
+        assert.throws(() => check({ vault: value }), (error) => error.message.includes(`must be the vault's own folder, not ${what}`), value);
+    }
+    assert.deepEqual(plain(vaultSpec.parse(' ~/Obsidian/Canon ')), { kind: 'set', value: '~/Obsidian/Canon' });
+    assert.equal(vaultSpec.parse('Canon'), undefined);
+    assert.equal(formKit.invalidWords(vaultField), 'A full path, such as /Users/you/Canon, or one starting with ~/, such as ~/Obsidian/Canon.', 'a folder that is not a full path gets the path words');
     assert.doesNotMatch(JSON.stringify(TEXT) + CSS.join('') + JSON.stringify(FIELDS) + SETTINGS_NOTE + SETTINGS_SUMMARY, OTHER_NAMES);
 
     // Drawn through DSH's own settings form while DSH serves Canon's settings.

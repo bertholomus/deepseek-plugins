@@ -71,10 +71,22 @@ export function cleanTags(tags) {
     return out;
 }
 
-/** A file name from a title: letters, digits, spaces, - and _, at most 80 characters, never hidden. */
+/** A file name's longest title part, in characters. */
+const SLUG_MAX = 80;
+
+/**
+ * A file name from a title: letters, digits, spaces, - and _, never hidden,
+ * at most 80 characters, cut after the last whole word that fits (a single
+ * longer word is cut at 80).
+ */
 export function slugOf(title) {
-    const slug = String(title ?? '').replace(/[^\p{L}\p{N} _-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 80).trim();
-    return slug.replace(/^[-_ ]+/, '') || 'Note';
+    const text = String(title ?? '').replace(/[^\p{L}\p{N} _-]+/gu, ' ').replace(/\s+/g, ' ').trim();
+    let slug = text;
+    if (text.length > SLUG_MAX) {
+        const space = text.lastIndexOf(' ', SLUG_MAX);
+        slug = space > 0 ? text.slice(0, space) : text.slice(0, SLUG_MAX);
+    }
+    return slug.replace(/^[-_ ]+|[-_ ]+$/g, '') || 'Note';
 }
 
 /** Today as YYYY-MM-DD in the computer's own time zone. */

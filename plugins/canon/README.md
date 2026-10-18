@@ -397,7 +397,8 @@ moves to the line that says what happened.
 With **What Canon may write** set to **Drafts**, agents are offered
 `canon_capture` (title, body, kind, tags). In the default **Read only**, the
 model is never offered it. A capture writes one new file,
-`<drafts folder>/<YYYY-MM-DD> <title>.md`:
+`<drafts folder>/<YYYY-MM-DD> <title>.md` (the title's letters, digits,
+spaces, - and _, cut after the last whole word within 80 characters):
 
 ```markdown
 ---
@@ -452,7 +453,8 @@ Plugins → Canon shows the settings you can change while it runs, in DSH's
 own settings form: change a value, then **Save**. They apply at once, and
 What happened notes each save (*Settings changed: “What Canon may write”*).
 **Use the default** clears one. The form will not save a value out of range,
-or a promote folder inside the drafts folder, and says what fits instead.
+the whole disk or your home folder as the vault, or a promote folder inside
+the drafts folder, and says what fits instead.
 
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |

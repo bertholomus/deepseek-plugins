@@ -1076,6 +1076,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** Canon's settings on its page in Plugins: the same names, defaults and ranges as its config (lib/config.js). */
         const FOLDER = /^[\p{L}\p{N} _().,'&+-]+(?:\/[\p{L}\p{N} _().,'&+-]+)*$/u;
         const folderOk = (t) => FOLDER.test(t) && t.split('/').every((part) => !part.startsWith('.') && part.trim() === part);
+        /**
+         * What a vault folder that is a full path, or one starting with ~/, is not, as the profile refuses it
+         * (lib/config.js checkConfig): '/' is the whole disk and '~' or '~/' the home folder.
+         */
+        const notAVault = (t) => {
+            const home = t.startsWith('~');
+            const parts = [];
+            for (const part of (home ? t.slice(1) : t).split('/')) {
+                if (part === '' || part === '.') continue;
+                if (part !== '..') parts.push(part);
+                else if (parts.length > 0 && parts.at(-1) !== '..') parts.pop();
+                else if (home) parts.push(part);
+            }
+            if (parts.length > 0) return '';
+            return home ? 'your home folder' : 'the whole disk';
+        };
+        let notThat = '';
         const SETTINGS = [
             {
                 name: 'vault',
@@ -1083,8 +1100,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 title: 'Vault folder',
                 hint: 'Your Obsidian vault\'s folder: a full path, or one starting with ~/. Canon reads its notes; it never reads DSH\'s own folder.',
                 default: '',
-                accepts: (t) => t.startsWith('/') || t.startsWith('~/'),
-                invalid: 'A full path, such as /Users/you/Canon, or one starting with ~/, such as ~/Obsidian/Canon.',
+                accepts: (t) => {
+                    notThat = '';
+                    if (!t.startsWith('/') && t !== '~' && !t.startsWith('~/')) return false;
+                    notThat = notAVault(t);
+                    return notThat === '';
+                },
+                get invalid() {
+                    return notThat
+                        ? `The vault's own folder, not ${notThat}: a full path, such as /Users/you/Canon, or one starting with ~/, such as ~/Obsidian/Canon.`
+                        : 'A full path, such as /Users/you/Canon, or one starting with ~/, such as ~/Obsidian/Canon.';
+                },
                 group: 'Vault',
             },
             {

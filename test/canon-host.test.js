@@ -970,6 +970,13 @@ test('drafts: capture refuses in words while Canon is read only, for a note it c
     // Names and tags as files and Obsidian take them.
     assert.equal(slugOf('../../etc/passwd: "x"'), 'etc passwd x');
     assert.equal(slugOf('...'), 'Note');
+    // A long title is cut after its last whole word that fits in 80 characters, never inside a word.
+    const long = 'Ledger amounts are kept in each account\'s own currency, and they are never converted to USD';
+    assert.equal(slugOf(long), 'Ledger amounts are kept in each account s own currency and they are never');
+    assert.ok(slugOf(long).length <= 80 && long.replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').startsWith(`${slugOf(long)} `));
+    assert.equal(slugOf(`${'a'.repeat(79)} bc`), 'a'.repeat(79), 'a word that would end past 80 is left out');
+    assert.equal(slugOf(`${'a'.repeat(80)} b`), 'a'.repeat(80), 'a word that ends at 80 stays');
+    assert.equal(slugOf('x'.repeat(100)), 'x'.repeat(80), 'one longer word is cut at 80');
     assert.equal(cleanTitle('two\nlines'), 'two lines');
     assert.deepEqual(cleanTags('a, #b ,c d'), ['a', 'b', 'c-d']);
     assert.deepEqual(KINDS, ['decision', 'fact', 'howto', 'gotcha']);
