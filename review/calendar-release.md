@@ -125,3 +125,27 @@ original finding named different files.
       0.2.0-rc.2 window check still open (tokens/parts verified there).
 - [x] Off leaves nothing behind; on again repeats nothing (style tag guarded by `data-plugin-css`;
       toasts/popovers/dialogs unmount with the views).
+
+## 6. For the Lead — dsh-test command list (glass-calendar, sent 2026-10-18)
+
+Instance `glass-calendar` exists and is up (port 19734; calendar loaded from this checkout at
+63b0daf). One command per line, with the output needed:
+
+1. `~/.local/bin/dsh-test --name glass-calendar fingerprint` — before-line (pid + patchSha256) for
+   review/RELEASE-PROGRESS.md.
+2. `~/.local/bin/dsh-test --name glass-calendar status` — isolation ok; live pid + patch hash
+   unchanged vs the before-line.
+3. `~/.local/bin/dsh-test --name glass-calendar doctor` — Import check: 0 error(s); Isolation
+   check: ok; rows: calendar.
+4. `~/.local/bin/dsh-test --name glass-calendar logs -n 200` — no calendar errors/exceptions (the
+   store.js "live-home paths" warning is expected; see §1).
+5. Window check (the state=200 MiniMe's check used): open the test window (or `dsh-test url`),
+   sign in, confirm the Calendar page renders and `POST /api/dsh-plugin-calendar/state` returns
+   200 through the signed-in shell. Raw GET is 404 by design (RPC envelope; 415 without a JSON
+   body) — that is the endpoint existing, not a failure.
+6. `~/.local/bin/dsh-test --name glass-calendar fingerprint` — after-line, same pid + patchSha256.
+7. `~/.local/bin/dsh-test --name glass-calendar destroy` — cleanup, after 1–6.
+
+Push note: commits 5b0aa26 + 63b0daf are local; `git push gh release/glass-v1` failed twice with
+"Could not resolve host: github.com" (same DNS outage as this session's npm fetches). Push when
+the network is back, or fold into the next push that already carries them.
