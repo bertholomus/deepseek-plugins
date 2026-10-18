@@ -42,27 +42,65 @@ when a turn needs it (no folder watcher); a turn never waits more than
 ## What a turn gets
 
 Canon searches the notes' words, not their meaning. A note's title,
-aliases, tags, path and headings count for more than its body; words are
-lightly stemmed ("listens" finds "listen"), and words that say nothing
-("please", "thanks", "looks good", "called") are left out. So are a
-prompt's words about the vault and about answering from it ("answer from
-the team's shared notes and cite the note"): they say where to look, not
-what about. And so are everyday request words ("write", "add", "fix",
-"test", "run", "function", "file", "small"): they say what to do, not what
-about, so a note never fits on them.
+aliases, tags, path and headings count for more than its body, and so does
+a term a list in it defines in bold ("- **Standby**: the copy of a
+database…" in the glossary). Words are lightly stemmed ("listens" finds
+"listen", "rotation" finds "Rotating", "429s" finds "429"); short forms
+read as the whole word ("certs", "DB", "auth", "config", "k8s"), and a few
+words people use in operations as the notes' own ("revert" and "undo" as
+roll back, "reboot" as restart, "RAM" as memory, "TTL" as expiry). Words
+that say nothing ("please", "thanks", "looks good", "called") are left out.
+So are a prompt's words about the vault and about answering from it
+("answer from the team's shared notes and cite the note"): they say where
+to look, not what about.
 
-A note fits a prompt when the words it shares with it carry enough of what
-the prompt asks. Each word of the prompt weighs as much as it is rare in
-the vault (a word no note has weighs most; everyday request words weigh
-too, though no note fits on them), and the words a note shares must carry:
+Canon tells a question from a coding request, and each has its rule. A
+prompt is a coding request when a sentence of it starts with a verb that
+asks for work ("Write…", "Add…", "Fix…", "Can you check…") or it speaks of
+code in front of the person ("this function", "my regex"). Any other
+prompt is a question, and so is a request to be told ("Run me through a
+release", "Read me the restore steps").
+
+A question fits a note that shares two words with it; a project's name
+counts as one, and a note needs a word beyond it. When that word is only
+in the note's body, it must be in few of the vault's notes or twice in the
+body. An everyday request word ("run", "test", "file") beside a project's
+name is enough only when it is all the prompt asks: "How do I run
+lantern-web?" gets its local-run note, "Why is this useEffect running
+twice?" in lantern-web's folder gets none. One word is also enough:
+
+- when it is all the prompt asks beyond everyday request words, and it is
+  in the note's title, aliases, tags, path or headings, in few notes, or
+  twice in its body: "What runs on 6412?" gets quartz-cache's ports note,
+  "What's a standby?" the glossary;
+- when it is in the note's title, aliases, tags or headings, in few notes
+  and the rarest word the prompt shares with the vault, and the prompt has
+  no word the vault lacks and names no other project.
+
+A question that names a thing no note has (a word it writes with a capital
+inside a sentence, or in capitals) fits only a note of a project it or the
+session names, or one that shares three words with it: "How do I run Kafka
+locally?" gets no note, though the local-run notes share "run" and
+"locally". The page names the word.
+
+A coding request leaves its everyday request words ("write", "add", "fix",
+"test", "function", "file", "small") out of the words in common: they say
+what to do, not what about. Each word of the prompt weighs as much as it is
+rare in the vault (a word no note has weighs most; everyday request words
+weigh too), and the words a note shares must carry:
 
 - a third of that weight when one of them is in the note's title, aliases,
-  tags or headings, and two of them (a project's name can be one; one, for
-  a prompt of one word) must say what the note is about: be in those
-  fields, in few of the vault's notes, or twice in its body;
-- 55% of it when they are only in its body; a single word in its body fits
+  tags or headings, and two of them (a project's name can be one) must say
+  what the note is about: be in those fields, in few of the vault's notes,
+  or twice in its body;
+- 45% of it when they are only in its body; a single word in its body fits
   only beside a project that the prompt or the session names, in a prompt
   that asks more than that word.
+
+A coding request also fits a note of a project the prompt or the session
+names, whatever its share, when the note's title names what the request
+works on: "Write a migration that adds a currency column to accounts." in
+`~/Projects/tide-ledger` gets the schema migrations note.
 
 So most everyday coding requests get no note, though notes share a word or
 two with them: "Write a small helper that checks whether a request has a JSON
@@ -74,9 +112,12 @@ rules keep a project's notes to the prompts about them:
   (`lantern-api` is "lantern" and "api"), and a note needs a word beyond
   it: "Does the lantern API support websockets?" gets no note, though
   every lantern note shares the name.
-- A session in a project's folder names that project for its own notes:
+- A session in a project's folder, or in a folder inside it
+  (`~/Projects/lantern-api/internal/auth`), names that project for its own
+  notes, and "this repo", "this service" or "this app" there say its name:
   "Which ports does this service listen on?" in `~/Projects/quartz-cache`
-  gets quartz-cache's ports note.
+  gets quartz-cache's ports note, and "Who owns this repo?" in
+  `~/Projects/tide-ledger` the owners note.
 - A note that belongs to a project (its `project` or `repo` field, or its
   folder under `Projects/`) stays out when the session's folder or the
   prompt points at other projects and not at its own: "the lantern API"
@@ -113,10 +154,17 @@ Background from the canon vault: shared long-term notes that may bear on this re
 
 Each note gets its path in the vault (the header says so, so a model does
 not look for it in the session's workspace), its title when the file name
-does not say it, and the passage that fits the prompt best, quoted so that
-its words never read as instructions. Fewer notes are added rather than
-cutting each to nothing; the whole block always stays within the
-characters allowed.
+does not say it, and the passage that fits the prompt best, quoted, under a
+header that calls the notes reference, not instructions. Fewer notes are
+added rather than cutting each to nothing; the whole block always stays
+within the characters allowed.
+
+Quoting does not stop a model from acting on a note's words: in round 2's
+runs with a real model, one answer ended with the sign-off the fixture's
+mascot note asks agents for. A note reaches every turn it fits without
+anyone choosing it, so keep instructions to agents out of notes: write what
+is true for people to read, and put what agents must do in their own
+instructions.
 
 DSH keeps the block in the session's log as Canon's context. Its
 **Trajectory** tab lists it in the turn's request; its Chat keeps context
@@ -128,33 +176,60 @@ Measured on labelled sets of prompts over the fixture vault
 (`test/fixtures/canon/vault`: 42 notes, 35 of them active, for five
 projects, people, decisions, runbooks and ideas), each prompt going through
 Canon's own recall exactly as a turn does, with the default settings (3
-notes, 2,000 characters). The floors were fixed before anything was
-measured (the first four in round 2, the everyday-coding one in round 3).
+notes, 2,000 characters), and given only the prompt and the session's
+folder (a test takes every label away and gets the same blocks). The floors
+were fixed before anything was measured (the first four in round 2, the
+everyday-coding one in round 3).
 
-The dev set (`test/fixtures/canon/relevance/dev.json`) has 238 prompts,
+The dev set (`test/fixtures/canon/relevance/dev.json`) has 922 prompts,
 each with its kind: round 2's 77 (below); the 113 prompts round 2's judge
 measured Canon on (its fixture set, ids `jf-`, less one that repeats a dev
-prompt word for word, and its generic set, ids `jg-`); and 48 everyday
-coding requests written for round 3 (`c01` to `c48`: 21 from sessions in the
-vault's projects' folders, 15 from unrelated folders, 12 from sessions with
-none). A note answers 67 of them; of the 171 that none does, 140 are
-everyday coding requests, 9 name a project but ask what no note says, 8
-are chat filler, 8 are words about the vault and 6 are others. Canon's
-rules were tuned on it (round 3: the fit rule above), so new prompts may do
-worse than these figures.
+prompt word for word, and its generic set, ids `jg-`); and 732 written in
+round 3, each group before it was measured, from sessions in a project's
+folder, in a folder inside one, in an unrelated folder and in none:
 
-| Figure | Round 2's rules | Now | Floor |
-| --- | --- | --- | --- |
-| The block's first note answers | 58 of 67 (86.6%) | 59 of 67 (88.1%) | at least 80% |
-| An answering note is in the block | 62 of 67 (92.5%) | 64 of 67 (95.5%) | at least 90% |
-| Notes per block that do not answer | 0.40 (25 in 62 blocks) | 0.30 (19 in 64 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 109 of 171 (63.7%) | 170 of 171 (99.4%) | at least 70% |
-| No block, for an everyday coding request no note answers | 80 of 140 (57.1%) | 139 of 140 (99.3%) | at least 90% |
+- everyday coding requests that no note answers, many asked as a question
+  or told as a problem (ids `c`, `q`, `w`);
+- questions a note answers, asked the way a person asks: in other words
+  than the note's title, on a word of its body or headings, short (`n`,
+  `m`, `k`), and one or two for every active note (`zp`);
+- other forms: coding tasks a note answers (`t`, `zc`), requests to be told
+  (`i`), "this repo" (`d`), typos and lower case (`y`), long prompts (`l`),
+  pasted errors (`e`), other names for a project (`h`), times, people and
+  short forms (`b`, `g`), a project's name and one everyday word, "remind
+  me" and numbers (`z`, `zb`), tasks told as orders, statements, names no
+  note has and words alone (`zr`);
+- prompts no note answers: about a project (`r`, `j`), and in each of those
+  forms (`o`, `x`, `zx`, `zy`, `zd`, `zq`, `zs`).
 
-The prompts no note answers, by kind, now: everyday coding requests 139 of
-140 with no block; chat filler 8 of 8; words about the vault 8 of 8 (7 of
-8 with round 2's rules); a project named, but nothing a note says, 9 of 9;
-others 6 of 6.
+A note answers 562 of them; of the 360 that none does, 255 are everyday
+coding requests, 64 name a project but ask what no note says, 17 are chat
+filler, 8 are words about the vault and 16 are others. Canon's rules were
+tuned on it, so new prompts may do worse than these figures (see the
+hold-outs below).
+
+| Figure | Round 2's rules | Round 3's first rule (14893d8) | Now | Floor |
+| --- | --- | --- | --- | --- |
+| The block's first note answers | 447 of 562 (79.5%) | 390 of 562 (69.4%) | 517 of 562 (92.0%) | at least 80% |
+| An answering note is in the block | 461 of 562 (82.0%) | 403 of 562 (71.7%) | 531 of 562 (94.5%) | at least 90% |
+| Notes per block that do not answer | 0.36 (173 in 474 blocks) | 0.25 (104 in 415 blocks) | 0.37 (198 in 537 blocks) | at most 1.0 |
+| No block, for a prompt no note answers | 245 of 360 (68.1%) | 346 of 360 (96.1%) | 321 of 360 (89.2%) | at least 70% |
+| No block, for an everyday coding request no note answers | 153 of 255 (60.0%) | 250 of 255 (98.0%) | 235 of 255 (92.2%) | at least 90% |
+
+The prompts no note answers, by kind, now: everyday coding requests 235 of
+255 with no block; chat filler 17 of 17; words about the vault 8 of 8; a
+project named, but nothing a note says, 47 of 64; others 14 of 16.
+
+Round 3's first rule weighed the words a note shares against all that the
+prompt asks, for every prompt. That kept notes off everyday coding
+requests, but a person asks in other words than a note's title, so most of
+a question's weight sat in words no note has, and its words in common
+carried too little of it. The rules now tell questions from coding
+requests (above). Each later group of round 3's was measured once before
+any rule changed for it; as first measured (as written, before repeats of
+earlier prompts were left out), the block's first note answered 38 of 45
+(`z`), 31 of 35 (`zb`), 22 of 25 (`zc`), 58 of 69 (`zp`) and 37 of 44
+(`zr`).
 
 `npm test` holds the dev set to the figures it reached. To measure again,
 with each prompt that got a wrong note, an extra one or a block it should
@@ -164,24 +239,37 @@ not have:
 node scripts/canon-relevance.mjs --set dev --misses
 ```
 
-What it still misses (dev, round 3):
+What it still misses (dev, now):
 
-- One word in a note's body, in a prompt that asks only that word: "What
-  does bastion mean?" and the glossary.
-- Words a note says another way: "How do I ship a new build of this
-  service to production?" in harbor-gateway's folder, and "Deploying the
-  gateway" (it says "deploy" and "roll out", never "ship" or
-  "production"); "Add an index on entries.created_at in tide-ledger." and
-  "Schema migrations", whose words in common carry too little of it.
-- A note with the prompt's words in its title before the one that answers:
-  "Cluster layout" before "Restarting a quartz-cache node" for "How do I
-  restart a node without losing data?", "Browser support" before "Running
-  lantern-web locally" for "What Node version does lantern-web need?".
-- One everyday coding request gets a note: "Add a timeout so the fetch call
-  gives up after 10 seconds." gets On-call, which has "call", "10" and
-  "seconds".
-- A long prompt (a pasted log and a question) spreads its weight over many
-  words, so a note may share too little of it; ask the question on its own.
+- One common word of a note's body beside its project's name: "What Node
+  version does lantern-web need?" and "Running lantern-web locally", which
+  says "Node 20 is required", but "node" is in six notes. Letting such a
+  word fit, as round 2's rules did, put 9 more answering notes in blocks,
+  and added 54 notes that do not answer and a block to 12 more prompts that
+  no note answers.
+- Words a note says another way: "Who looks after lantern-web?" and the
+  owners note; "How do I ship a new build of this service to production?"
+  in harbor-gateway's folder and "Deploying the gateway" (it says "deploy"
+  and "roll out", never "ship" or "production").
+- Tasks told as orders whose words in common carry too little of them:
+  "Add an index on entries.created_at in tide-ledger." and "Schema
+  migrations"; "Set up the VPN for a new hire." and the onboarding note.
+- A note that shares more of the prompt's words before the one that
+  answers: "Cluster layout" ("node", "losing", "data") before "Restarting a
+  quartz-cache node" for "How do I restart a quartz node without losing
+  data?"; "Release checklist" before the rollback runbook for "We shipped a
+  bad lantern-api release and users are seeing errors."
+- A name no note has, beside two words in common: "Do we page people
+  through PagerDuty or our own tool?" gets no note, though the on-call note
+  answers it.
+- Everyday coding requests that share a rare word or two with a note: "Add
+  a timeout so the fetch call gives up after 10 seconds." gets the on-call
+  note ("call", "10", "seconds"); "How do I add a column with a default
+  value in SQL?" in tide-ledger's folder gets the Postgres decision, the
+  one note with "SQL".
+- A long coding request (a pasted log and a question) spreads its weight
+  over many words, so a note may share too little of it; ask the question
+  on its own.
 
 ### Round 2
 
@@ -221,6 +309,12 @@ the dev set, on the fixture vault as it is, and measured once, on October
 Those are round 2's rules' figures. `npm test` measures it again with every
 change and holds Canon to the four floors on it; to measure it by hand:
 `node scripts/canon-relevance.mjs --set holdout`.
+
+Round 3's first rule (14893d8) fell short of two of those floors there: the
+block's first note, and an answering note in the block. The rules were then
+reworked on prompts of round 3's own (the dev set above), never on the
+hold-out, whose figures are not used to choose between rules; with the
+rules now, `npm test` still finds it short of at least one of the four.
 
 That hold-out has no coding request among its 24 prompts that no note
 answers (they are chat, questions about the vault and project switches),
@@ -468,8 +562,8 @@ promoted to. Earlier turns keep the blocks they got in their logs.
 ## Limits
 
 - Canon matches words, not meaning: a note that says "listener" for a
-  prompt that says "port" is not found. Titles, aliases and tags are the
-  way to make a note easy to find.
+  prompt that says "port" is not found. Titles, aliases, tags and the terms
+  a list defines in bold are the way to make a note easy to find.
 - It reads the vault on this computer. A vault that syncs (iCloud,
   Obsidian Sync) is read as it is on disk at the moment.
 - One block per prompt: a long turn does not get new notes at later steps,
