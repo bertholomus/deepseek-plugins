@@ -28,7 +28,7 @@ const READ_TOOL = /(^|_)(read|grep|glob|ls|list|view|cat|search|find|fetch|open|
 const BOOKKEEPING_TOOL = /^(todo_write|todo_read|todowrite|create_goal|get_goal|update_goal|ask_user_question|question|present|plan|think|exit_plan_mode)$/i;
 
 const TEST_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(test|t|e2e|test:\S+|check|verify|ci)\b|\b(node|deno|bun)\s+(--test|test)\b|\bnpx\s+(jest|vitest|mocha|playwright|ava|tap|cypress)\b|\b(jest|vitest|mocha|pytest|py\.test|tox|nox|rspec|phpunit|ctest|ava|karma|cypress\s+run|playwright\s+test)\b|\bgo\s+test\b|\bcargo\s+(test|nextest)\b|\bmvnw?\s+(\S+\s+)*(test|verify)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(test\w*|check\w*|connected\w*Test)\b|\bxcodebuild\b[^|;&]*\btest\b|\b(flutter|dart)\s+test\b|\bsbt\s+(\S+\s+)*test\b|\b(nx|turbo|lerna)\s+(run\s+)?([\w:-]+\s+)*?(\S+:)?test\b|\bpnpm\s+(-r|--recursive)\s+test\b|\b(stack|cabal)\s+test\b|\bzig\s+build\s+test\b|\bgotestsum\b|\b(python3?|uv\s+run|poetry\s+run)\s+-m\s+(pytest|unittest)\b|\bmake\s+(-\S+\s+(\S+\s+)?)*(test|check|ci|e2e)\b|\bdotnet\s+test\b|\bswift\s+test\b|\bmix\s+test\b|\brake\s+(test|spec)\b|\bbundle\s+exec\s+(rspec|rake\s+(test|spec))\b|\bscripts\/e2e|\b\S*test\S*\.(sh|mjs|js|py)\b|\be2e\.(mjs|js|sh)\b|\bbazel\s+test\b|(^|[\s/])(ci|verify|check|checks|validate|precommit|pre-commit)([-_.]\S*)?\.(sh|mjs|js|py)\b|\bscripts\/(ci|verify|check|validate)\S*|\bpre-commit\s+run\b|\bdbt\s+(test|build)\b|\bbats\b|\bprove\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(test|t|e2e|test:\S+)\b/i;
-const BUILD_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check|tsc|bundle)\b|\btsc\b|\bcargo\s+(build|check)\b|\bgo\s+(build|vet)\b|\bmake(\s+(all|build|install|release))?\s*($|[;&|])|\bmvnw?\s+(\S+\s+)*(package|compile|install)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(build|assemble\w*|bundle\w*|jar|shadowJar|compile\w*)\b|\bdotnet\s+build\b|\bswift\s+build\b|\bwebpack\b|\bvite\s+build\b|\besbuild\b|\brollup\b|\bnext\s+build\b|\bnode\s+--check\b|\bpython3?\s+-m\s+(py_compile|compileall)\b|\bxcodebuild\b|\bcmake\s+--build\b|\bninja\b|\bdocker\s+(build|buildx\s+build|compose\s+build)\b|\bbazel\s+build\b|\bmix\s+compile\b|\bdbt\s+(run|seed|snapshot|compile)\b|\b(nx|turbo|lerna)\s+(run\s+)?(\S+:)?build\b|\bnx\s+run-many\b[^|;&]*--target[= ]build\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check)\b/i;
+const BUILD_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check|tsc|bundle)\b|\btsc\b|\bcargo\s+(build|check)\b|\bgo\s+(build|vet)\b|\bmake(\s+(all|build|install|release))?\s*($|[;&|])|\bmvnw?\s+(\S+\s+)*(package|compile|install)\b|\bgradlew?\s+(\S+\s+)*(\S*:)?(build|assemble\w*|bundle\w*|jar|shadowJar|compile\w*)\b|\bdotnet\s+build\b|\bswift\s+build\b|\bwebpack\b|\bvite\s+build\b|\besbuild\b|\brollup\b|\bnext\s+build\b|\bnode\s+--check\b|\bpython3?\s+-m\s+(py_compile|compileall)\b|\bxcodebuild\b|\bcmake\s+--build\b|\bninja\b|\bdocker\s+(build|buildx\s+build|compose\s+build)\b|\bbazel\s+build\b|\bmix\s+compile\b|\bdbt\s+(run|seed|snapshot|compile)\b|\bhugo\b(?!\s+(?:server|serve|new|version|env|mod|config|list|gen|completion|help|import|deploy)\b)|\b(?:bundle\s+exec\s+)?jekyll\s+build\b|\b(?:@11ty\/)?eleventy\b|\bmkdocs\s+build\b|\bsphinx-build\b|\b(?:astro|gatsby|zola|mdbook|docusaurus|vuepress|vitepress)\s+build\b|\bnuxt\s+(?:build|generate)\b|\bhexo\s+(?:generate|g)\b|\bpelican\s+content\b|\b(nx|turbo|lerna)\s+(run\s+)?(\S+:)?build\b|\bnx\s+run-many\b[^|;&]*--target[= ]build\b|\b(npm|pnpm|yarn|bun)(\s+(--filter|-F|-C|--prefix|--cwd|--dir|--workspace|-w|workspace)\s+\S+|\s+-{1,2}[\w-]+(=\S+)?)+\s+(run\s+)?(build|build:\S+|compile|typecheck|type-check)\b/i;
 const LINT_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(lint|lint:\S+|format:check|fmt:check|check:format)\b|\b(eslint|ruff|flake8|pylint|mypy|pyright|golangci-lint|shellcheck|stylelint|rubocop|swiftlint|biome\s+(check|lint)|oxlint|phpstan|psalm)\b|\bprettier\s+(--check|-c)\b|\bblack\s+--check\b|\bcargo\s+(clippy|fmt\s+--check)\b|\bgofmt\s+-l\b|\b(bash|sh|zsh|dash|ksh)\s+-n\b|\bphp\s+-l\b|\b(ruby|perl)\s+-c\b|\bterraform\s+(validate|fmt\s+-{1,2}check)\b|\bnginx\s+-t\b|\b(yamllint|hadolint|actionlint|markdownlint(-cli2)?|ktlint|detekt|credo|standardrb|tflint|staticcheck|revive)\b|\bsqlfluff\s+lint\b|\bbuf\s+lint\b|\b(dart|flutter)\s+analyze\b/i;
 const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status)|workflow\s+view)\b|\bgh\s+pr\s+view\b(?=[^|;&]*\b(?:statusCheckRollup|checks|mergeStateStatus)\b)|\bglab\s+ci\b|\bcircleci\b|\bbuildkite\b|\bcurl\b[^|;&]*\/(actions|checks|statuses|pipelines)\b/i;
 /** Where a command ships work: a repository, a package registry, or a running environment. */
@@ -401,6 +401,9 @@ export function deployIn(text) {
     return undefined;
 }
 
+/** The line of a CI read that shows a failure: "X  ci  main  push  1h", "build  fail  2m". */
+const CI_FAILED = /^.*(?:^\s*(?:X|✗|✘|×)\s|\bfail(?:ed|ure|ing)?\b|\bcancell?ed\b|\btimed[_ ]out\b|\baction_required\b).*$/im;
+
 /** A CI read that shows success (true), failure (false), or neither. */
 export function ciIn(text) {
     if (typeof text !== 'string' || text === '') return undefined;
@@ -582,6 +585,39 @@ function outcome(exit, extra) {
 /** What kind of run a shell command is. */
 /** A test run limited to some tests: a name filter, a single file or a single test. */
 const FILTERED_RUN = /\s(-k|-t|--testNamePattern|--grep|-g|-run|--run|--filter|--tests|--select)\s|\s-Dtest=|\s(-k|-t|--grep|--filter|--testNamePattern)=|\bpytest\b[^|;&]*\s-m\s|::\w|\.(test|spec)\.[cm]?[jt]sx?\b|_spec\.rb(:\d+)?\b|\btest_\w+\.py\b|\bcargo\s+(test|nextest\s+run)\s+(--?[\w-]+(=\S+)?\s+)*(?!--?)[a-z_][\w:]*/;
+/** A test run's filter given by a flag: `-k login`, `-t "parses dates"`, `--testNamePattern=Date`, `-run TestParse`. */
+const FILTER_FLAG = /(?:^|\s)(?:-k|-t|--testNamePattern|--test-name-pattern|--grep|-g|-run|--run|--filter|--tests|--select|-Dtest)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s|;&]+))/g;
+/** Runners that take test files or name filters as plain words: `vitest run date`, `jest src/date`, `pytest tests/test_auth.py`. */
+const POSITIONAL_RUNNER = /\b(?:vitest(?:\s+run)?|jest|mocha|ava|pytest|py\.test|rspec|phpunit|bun\s+test|deno\s+test|go\s+test|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|t)(?:\s+--)?)((?:\s+[^\s|;&>]+)*)/i;
+/** Flags of those runners that take a value, so the word after them is not a filter. */
+const VALUE_FLAG = /^-(?:c|-config|-reporter|-project|-dir|-root|-environment|-env|-shard|-maxWorkers|-max-workers|-testTimeout|-test-timeout|-outputFile|-output-file|-workspace|-filter|-pool|-mode|-color|-cov-report|-cov|-tb|-junitxml|-durations|-maxfail|p|-rootdir|-basetemp|-ignore|-deselect|m|-require|r|-timeout|-format|f|o|-count|count|-parallel|parallel|-tags|tags|-run|run|k|t|g|-grep|-testNamePattern|-tests|-select|-coverprofile|coverprofile|-bench|bench)$/;
+/** Words that say nothing about which tests a filter picks. */
+const FILTER_GENERIC = new Set('test tests spec specs src lib app pkg cmd internal py ts js tsx jsx mjs cjs rb go rs unit integration e2e the and not or true false verbose dot json coverage run all main index'.split(' '));
+/** The words a test run was limited by, lower case: `['date']` for `vitest run date`; empty for a whole run. */
+function filterOf(command) {
+    const words = new Set();
+    const add = (text) => {
+        for (const part of String(text ?? '').replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/)) {
+            if (part.length >= 3 && !FILTER_GENERIC.has(part) && !/^\d+$/.test(part)) words.add(part);
+        }
+    };
+    for (const m of command.matchAll(FILTER_FLAG)) add(m[1] ?? m[2] ?? m[3]);
+    const pos = POSITIONAL_RUNNER.exec(command);
+    if (pos) {
+        const args = pos[1].trim().split(/\s+/).filter(Boolean);
+        for (let at = 0; at < args.length; at += 1) {
+            const arg = args[at];
+            if (arg === '--') continue;
+            if (arg.startsWith('-')) {
+                if (!arg.includes('=') && VALUE_FLAG.test(arg)) at += 1;
+                continue;
+            }
+            if (/^[\w-]+=/.test(arg) || arg === '.' || arg === './...' || /^\.\/?$/.test(arg)) continue;
+            add(arg.replace(/\/\.\.\.$/, ''));
+        }
+    }
+    return [...words].slice(0, 6);
+}
 /** A run whose counts hold more than tests: `dbt build` counts models, seeds and snapshots with them. */
 const MIXED_RUN = /\bdbt\s+build\b/i;
 /** A request that only reads: curl, wget or httpie with no method that writes and no body. */
@@ -644,13 +680,27 @@ function searchOf(tool, args, out, command) {
     }
     else if (command) term = SEARCH_CMD.exec(command)?.[3];
     if (!term) return undefined;
+    // `grep -rl X | xargs sed -i …`: the matches went to another command, so the output is not what the search found.
+    if (command && /\b(?:grep|egrep|fgrep|rg|ag|ack)\b[^|;&]*\|\s*(?:xargs|while\b|parallel|sed\b|awk\b|perl\b|tee\b|cut\b|sort\s+-u\s*\|\s*xargs)/.test(command)) return undefined;
+    // `… | wc -l`, `grep -c`, `rg --count`: the search prints a count, which is read as the number it prints.
+    const flags = command ? SEARCH_CMD.exec(command)?.[1] ?? '' : '';
+    const wc = command ? /\|\s*wc\s+-l\b/.test(command) : false;
+    const countFlag = /(?:^|\s)(?:--count(?:-matches)?|-[a-zA-Z]*c[a-zA-Z]*)(?=\s|$)/.test(flags) || (SEARCH_TOOL.test(tool) && /"output_mode"\s*:\s*"count"|"count"\s*:\s*true/.test(typeof args === 'string' ? args : JSON.stringify(args ?? {})));
     // What an `echo` chained after the search prints is not a match ("grep -n oban mix.exs; echo done").
     const echoed = new Set([...(command ?? '').matchAll(/\becho\s+(["']?)([^"';&|\n]{1,80})\1/g)].map((m) => m[2].trim()));
     const body = out.replace(/^\[(stderr|exit code: -?\d+)\]$/gm, '').split(/\r?\n/).filter((l) => !echoed.has(l.trim())).join('\n').trim();
     const none = body === '' || /^\(no output\)$/i.test(body) || /^(no (matches|files|results)( found)?\.?|found 0 (matches|files|results)|0 (matches|results))\b/i.test(body);
+    if (wc || countFlag) {
+        const counts = body.split(/\r?\n/).map((l) => /(?:^|:)\s*(\d+)\s*$/.exec(l.trim())).filter(Boolean).map((m) => Number(m[1]));
+        const hits = none || counts.length === 0 ? 0 : wc ? counts.at(-1) : counts.reduce((a, n) => a + n, 0);
+        return { term: clip(term, 80), hits, counted: true };
+    }
     const hits = none ? 0 : body.split(/\r?\n/).filter((l) => l.trim() !== '' && !/^(\[|found \d+ |\(no output\))/i.test(l.trim())).length;
     return { term: clip(term, 80), hits };
 }
+
+/** What a search found, in words: "nothing found", "3 lines found", "a count of 2". */
+const foundText = (search) => (search.hits === 0 ? 'nothing found' : search.counted ? `a count of ${search.hits}` : `${search.hits === 1 ? 'one line' : `${search.hits} lines`} found`);
 
 /** Commands a tool's output says it ran itself: a deploy's release command, an npm script's echo, a CI log's "$ npm test". */
 function innerRuns(out) {
@@ -688,7 +738,9 @@ export function itemOf({ name, args, text, isError = false }) {
     const codes = codesIn(out);
     if (codes.length) facts.codes = codes;
     if (tests && !(shell && /^(deploy|probe|lint|hash|build)$/.test(kindOfCommand(commandOf(args), tests)))) {
-        facts.tests = { ...tests, ...(shell && FILTERED_RUN.test(command) ? { filtered: true } : {}), ...(shell && MIXED_RUN.test(command) ? { mixed: true } : {}) };
+        const filter = shell ? filterOf(command) : [];
+        facts.tests = { ...tests, ...(shell && (FILTERED_RUN.test(command) || filter.length) ? { filtered: true } : {}), ...(shell && MIXED_RUN.test(command) ? { mixed: true } : {}) };
+        if (filter.length) facts.filter = filter;
     }
     if (hash) facts.hash = hash;
     if (metric) facts.metric = metric;
@@ -746,7 +798,8 @@ export function itemOf({ name, args, text, isError = false }) {
         // A download that went through (`curl -sO …` before a checksum) is a request that answered.
         const fetched = kind !== 'probe' && /\b(curl|wget)\b/i.test(command) && exit === 0 && !/\bcurl: \(\d+\)|\b(4\d\d|5\d\d) (Not Found|Forbidden|Unauthorized|Internal Server Error|Bad Gateway|Service Unavailable)\b/i.test(out);
         const ran = `\`${clip(oneLine(command) || tool, 80)}\``;
-        const how = typeof exit === 'number' ? `exited ${exit}` : exit === null ? 'ran' : exit === 'error' ? 'failed to run' : exit === 'denied' ? 'was denied by the sandbox' : exit === 'timeout' ? 'timed out' : `ended (${exit})`;
+        // A run that failed though it exited 0 (a CI read that lists a failed run, `npm test | tail`) is not said to have exited 0.
+        const how = ok === false && exit === 0 ? 'ran' : typeof exit === 'number' ? `exited ${exit}` : exit === null ? 'ran' : exit === 'error' ? 'failed to run' : exit === 'denied' ? 'was denied by the sandbox' : exit === 'timeout' ? 'timed out' : `ended (${exit})`;
         // A status read that lists some pods well and some not ("2 in CrashLoopBackOff, 3 Running").
         const unwell = kind === 'probe' && http === undefined && UNWELL.test(out);
         const mixed = unwell && WELL.test(out);
@@ -754,11 +807,12 @@ export function itemOf({ name, args, text, isError = false }) {
             : unwell ? `it shows ${UNWELL_STATE.exec(out)?.[1] ?? 'a pod that is not ready'}${mixed ? ' next to others running' : ''}`
             : crashed ? `it ended in a crash: ${crashLine(tail)}`
             : failMark ? `it printed "${lineAt(out, failMark.index)}"`
-            : search && kind === 'run' ? (search.hits ? `${search.hits === 1 ? 'one line' : `${search.hits} lines`} found` : 'nothing found')
+            : kind === 'ci' && ok === false && CI_FAILED.exec(out) ? `it shows a failure: "${lineAt(out, CI_FAILED.exec(out).index)}"`
+            : search && kind === 'run' ? foundText(search)
             : facts.tests ? `${tests.passed} passed, ${tests.failed} failed`
                 : hash ? hash.slice(0, 12)
                     : facts.state && kind !== 'ci' ? `status ${facts.state}`
-                        : metric ?? (kind === 'deploy' && extra ? 'went through' : '');
+                        : metric ?? (kind === 'deploy' && extra ? 'went through' : ok === false && exit === 0 ? 'its output reports a failure' : '');
         return {
             tool, kind, ok, exit,
             cmd: clip(oneLine(command), 240),
@@ -790,7 +844,7 @@ export function itemOf({ name, args, text, isError = false }) {
     }
     if (READ_TOOL.test(tool)) {
         const file = fileOf(args);
-        const looked = search ? ` ${search.term}: ${search.hits ? `${search.hits === 1 ? 'one line' : `${search.hits} lines`} found` : 'nothing found'}` : '';
+        const looked = search ? ` ${search.term}: ${foundText(search)}` : '';
         return { tool, kind: 'read', ok: !isError, ...facts, text: clip(`${tool}${file ? ` ${base(file)}` : ''}${looked}`, 180) };
     }
     // Any other tool (a plugin's or a server's): its own words say how it went.
@@ -808,7 +862,7 @@ const ACCEPT = {
     tests: ['test'],
     build: ['build', 'test'],
     lint: ['lint'],
-    ci: ['ci', 'test'],
+    ci: ['ci'],
     hash: ['hash'],
     any: ['test', 'build', 'lint', 'ci', 'hash'],
     run: ['test', 'build', 'lint', 'ci', 'hash', 'run', 'probe', 'deploy'],
@@ -818,14 +872,14 @@ const FIX_CHECKS = {
     tests: ['test'],
     build: ['build', 'test'],
     lint: ['lint'],
-    ci: ['ci', 'test'],
+    ci: ['ci'],
     any: ['test', 'run', 'probe', 'build', 'deploy', 'hash', 'ci'],
 };
 const NONE_RAN = {
     tests: 'No test ran in this turn.',
     build: 'No build or test ran in this turn.',
     lint: 'No lint ran in this turn.',
-    ci: 'No CI result was read and no test ran in this turn.',
+    ci: 'No CI result was read in this turn.',
     hash: 'No checksum was computed in this turn.',
     any: 'Nothing in this turn ran tests, a build, lint or a CI check.',
     run: 'Nothing ran in this turn to try it: only reads and edits.',
@@ -919,16 +973,62 @@ function printed(items, metric) {
     return items.some((i) => (i.nums ?? []).some((n) => near(n, metric.value, room)));
 }
 
-/** Whether a figure of an "it got faster" claim follows from two printed ones: their difference, ratio or change in percent. */
+/** Times in a claim's unit, as the benchmark readings hold them (ms). */
+const MS_PER = { ns: 1e-6, 'µs': 0.001, us: 0.001, ms: 1, s: 1000, sec: 1000, secs: 1000, seconds: 1000, min: 60000, mins: 60000, minutes: 60000 };
+
+/**
+ * One metric's before and after in this turn, `[from, to]` pairs: the same benchmark run twice (each reading's first
+ * value in the first run and in the last), a run that printed a before and an after, or an output line that moved
+ * ("p50 310 ms -> 120 ms").
+ */
+function beforeAfter(items) {
+    const pairs = [];
+    const runs = items.filter((i) => (i.series ?? []).length && i.kind !== 'read');
+    const firstOf = (item) => {
+        const m = new Map();
+        for (const r of item.series) if (!m.has(r.l)) m.set(r.l, r.v);
+        return m;
+    };
+    if (runs.length >= 2 && ranCommand(runs[0], runs.at(-1).cmd ?? '')) {
+        const a = firstOf(runs[0]);
+        const b = firstOf(runs.at(-1));
+        for (const [label, from] of a) if (b.has(label)) pairs.push([from, b.get(label)]);
+    }
+    for (const run of runs.filter((i) => i.ab)) {
+        const seen = new Map();
+        for (const r of run.series) {
+            if (!seen.has(r.l)) seen.set(r.l, [r.v, r.v]);
+            else seen.get(r.l)[1] = r.v;
+        }
+        for (const pair of seen.values()) if (pair[0] !== pair[1]) pairs.push(pair);
+    }
+    for (const item of items) {
+        const m = /(\d+(?:\.\d+)?)\s*([a-zµ%/]*)\s*(?:→|->|=>|⟶|\bto\b)\s*(\d+(?:\.\d+)?)\s*([a-zµ%/]*)/i.exec(item.metric ?? '');
+        if (m) pairs.push([Number(m[1]) * (MS_PER[m[2].toLowerCase()] ?? 1), Number(m[3]) * (MS_PER[(m[4] || m[2]).toLowerCase()] ?? 1)]);
+        // A benchmark tool's own change ("-56.70% (p=0.000 n=10)", "change: [-45.1% …]"): before 100, after 100 plus the change.
+        const change = /([-+−])(\d+(?:\.\d+)?)%\s*\(p\s*=|\bchange:\s*\[\s*([-+−]?)(\d+(?:\.\d+)?)%/i.exec(item.metric ?? '');
+        if (change) {
+            const sign = (change[1] ?? change[3]) === '+' || (change[1] ?? change[3]) === '' ? 1 : -1;
+            pairs.push([100, 100 + sign * Number(change[2] ?? change[4])]);
+        }
+    }
+    return pairs.filter(([a, b]) => a > 0 && b > 0 && a !== b);
+}
+
+/**
+ * Whether an amount or a factor a claim gives ("40% less", "3x faster", "cut 300 ms") follows from one metric's
+ * before and after in this turn: their change in percent, their ratio, or their difference.
+ */
 function derivable(items, metric) {
     const room = slack(metric);
-    const all = [...new Set(items.flatMap((i) => i.nums ?? []))].slice(0, 160);
-    for (const a of all) {
-        for (const b of all) {
-            if (a === b || a <= 0 || b <= 0) continue;
-            if (near(a - b, metric.value, room)) return true;
-            if (near(a / b, metric.value, Math.max(room, 0.15))) return true;
-            if (near(((a - b) / a) * 100, metric.value, Math.max(room, 1.5))) return true;
+    for (const [from, to] of beforeAfter(items)) {
+        if (metric.unit === 'x' || metric.unit === '×') {
+            if (near(Math.max(from, to) / Math.min(from, to), metric.value, Math.max(room, 0.15))) return true;
+        } else if (metric.unit === '%') {
+            if (near((Math.abs(from - to) / from) * 100, metric.value, Math.max(room, 1.5)) || near((Math.abs(from - to) / to) * 100, metric.value, Math.max(room, 1.5))) return true;
+        } else {
+            const per = MS_PER[metric.unit] ?? 1;
+            if (near(Math.abs(from - to), metric.value * per, room * per)) return true;
         }
     }
     return false;
@@ -996,7 +1096,9 @@ function otherFigure(claim, list) {
     const [from, to] = arrows;
     if (printed(list, to)) return undefined;
     const text = claim.text ?? claim.part ?? '';
-    for (const run of list.filter((i) => (i.series ?? []).length)) {
+    const named = (l) => labelIn(l, text) || ((l === 'median' || l === 'p50') && /\b(?:median|p50)\b/i.test(text)) || (l === 'avg' && /\b(?:mean|average)\b/i.test(text));
+    const per = MS_PER[to.unit] ?? 1;
+    for (const run of list.filter((i) => (i.series ?? []).length && i.kind !== 'read')) {
         const labels = [...new Set(run.series.map((r) => r.l))].filter((l) => labelIn(l, text));
         if (labels.length !== 1) continue;
         const readings = run.series.filter((r) => r.l === labels[0]);
@@ -1006,7 +1108,15 @@ function otherFigure(claim, list) {
             return { verdict: 'contradicted', evidence: [said(run)], why: `It says ${labels[0]} went to ${to.text}; the turn's own benchmark shows ${labels[0]} at ${now}${IN_MS.test(labels[0]) ? ' ms' : ''}.` };
         }
     }
-    return undefined;
+    // "cut mean latency from 120 ms to 95 ms" when the turn's last benchmark, after its last change, measured 150 ms.
+    const change = lastIndex(list, (i) => i.code && i.ok !== false);
+    const run = list.filter((i, at) => at > change && (i.series ?? []).length && i.kind !== 'read' && i.ok !== false).at(-1);
+    if (!run) return undefined;
+    const labels = [...new Set(run.series.map((r) => r.l))].filter(named);
+    if (labels.length !== 1) return undefined;
+    const now = run.series.filter((r) => r.l === labels[0]).at(-1).v;
+    if (near(now, to.value * per, slack(to) * per)) return undefined;
+    return { verdict: 'contradicted', evidence: [said(run)], why: `It says ${labels[0]} went to ${to.text}; the turn's own benchmark shows ${labels[0]} at ${now}${IN_MS.test(labels[0]) ? ' ms' : ''}.` };
 }
 
 /** The benchmark readings that moved the wrong way for an "it got faster" claim, as words; undefined when none did. */
@@ -1051,8 +1161,6 @@ const lastIndex = (list, test) => {
 };
 const listed = (parts) => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]);
 
-/** Figures that come from arithmetic on what printed ("3x faster", "40% less", "saved 2 s"). */
-const derived = (metric, claim) => metric.unit === 'x' || metric.unit === '×' || /\b(by|less|fewer|faster|slower|smaller|cut|drop(ped)?|reduc\w*|improv\w*|sav(ed|es|ing)|shav\w*|lower|higher)\b/i.test(claim.part ?? '') && metric.unit === '%';
 
 /** Commands that install or fetch a published thing: "(`npm i pkg@1.2.0`)" after a publish says how to use it. */
 const INSTALL_CMD = /^\s*(?:npm\s+(?:i|install|add)|pnpm\s+(?:add|i|install)|yarn\s+add|bun\s+(?:add|install)|npx|pip3?\s+install|pipx\s+install|uv\s+(?:add|pip\s+install)|poetry\s+add|cargo\s+(?:add|install)|go\s+(?:get|install)|gem\s+install|bundle\s+add|composer\s+require|dotnet\s+add\s+package|brew\s+install|docker\s+(?:pull|run)|helm\s+(?:install|pull))\b/i;
@@ -1105,8 +1213,10 @@ function namedChecks(claim, list) {
         const moved = otherFigure(claim, list);
         if (moved) return moved;
     }
-    const required = (claim.metrics ?? []).filter((m) => !derived(m, claim));
-    const missing = required.filter((m) => !printed(list, m) && !(claim.improved && !m.arrow && derivable(list, m)));
+    // Every figure must have printed, but an amount or a factor ("40% less", "3x faster") may follow from one metric's
+    // before and after. A reading ("p95 is 120 ms") and both sides of "from X to Y" must print as they are.
+    const required = claim.metrics ?? [];
+    const missing = required.filter((m) => !printed(list, m) && !(!m.arrow && (m.amount || m.unit === 'x' || m.unit === '×') && derivable(list, m)));
     if (missing.length) {
         return { verdict: 'unbacked', evidence: [], why: `It quotes ${listed(missing.slice(0, 3).map((m) => m.text))}, which no output in this turn shows.` };
     }
@@ -1174,9 +1284,14 @@ function passedFor(subject, claim, list) {
     const several = (claim.subjects ?? []).length > 1;
     const kinds = Object.values(SUBJECT_CMD);
     const commands = (claim.commands ?? []).filter((c) => !several || !SUBJECT_CMD[subject] || SUBJECT_CMD[subject].test(c) || !kinds.some((re) => re.test(c)));
-    const fits = (i) => accept.includes(i.kind) || (i.tests && subject !== 'lint' && subject !== 'hash' && subject !== 'run') || (SUBJECT_CMD[subject]?.test(i.cmd ?? '') ?? false) || commands.some((c) => ranCommand(i, c));
+    // A CI claim is shown only by a CI read: a local test run says nothing about the checks on the PR.
+    const fits = (i) => accept.includes(i.kind) || (i.tests && subject !== 'lint' && subject !== 'hash' && subject !== 'run' && subject !== 'ci') || (SUBJECT_CMD[subject]?.test(i.cmd ?? '') ?? false) || (subject !== 'ci' && commands.some((c) => ranCommand(i, c)));
     const fitting = list.filter(fits);
-    if (fitting.length === 0) return { verdict: 'unbacked', evidence: [], why: NONE_RAN[subject] ?? NONE_RAN.any };
+    if (fitting.length === 0) {
+        const local = subject === 'ci' ? list.filter((i) => i.kind === 'test' || i.tests).at(-1) : undefined;
+        if (local && local.ok === true) return { verdict: 'unbacked', evidence: [said(local)], why: 'A local test run passed; no CI result was read in this turn.' };
+        return { verdict: 'unbacked', evidence: [], why: NONE_RAN[subject] ?? NONE_RAN.any };
+    }
     // "Tested it by pointing DEST at a dead host": something ran after the last change, whatever it printed.
     if (subject === 'run') {
         const ran = fitting.at(-1);
@@ -1191,6 +1306,14 @@ function passedFor(subject, claim, list) {
     const relevant = byCommand.length ? byCommand : bySuite.length ? bySuite : fitting;
     const last = relevant.at(-1);
     const what = LAST_FAILED[subject] ?? 'run';
+    // CI read before the last push is about the commit before it.
+    if (subject === 'ci') {
+        const push = lastIndex(list, (i) => /\bgit\s+push\b/i.test(i.cmd ?? '') && i.shipped !== false);
+        if (push > list.lastIndexOf(last)) return { verdict: 'unbacked', evidence: [said(last), said(list[push])], why: `The last CI read in this turn came before the last push (${list[push].text}), so it does not show the pushed code.` };
+    }
+    // "1 test passed" after a run where 1 passed and 2 failed: the run's own count, which reports the failures.
+    const early = subject === 'tests' || subject === 'any' ? namedCount(words) : undefined;
+    if (early && last.tests && last.tests.failed > 0 && early.passed === last.tests.passed && !/\b(?:all|every|each|both|whole|full|entire)\b/i.test(words) && !partOfAll(words)) return { verdict: 'none', evidence: [], why: '' };
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${what} in this turn did not pass: ${last.text}.` };
     if (last.ok === null) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear how the last ${what} ended: ${last.text}.` };
     if (NO_WARNINGS.test(claim.text ?? words) && (last.warnings ?? 0) > 0) {
@@ -1247,6 +1370,9 @@ function passedFor(subject, claim, list) {
     return { verdict: 'backed', evidence: relevant.slice(-3).map(said), why: '' };
 }
 
+/** "12/12", "3 of 3": a count said to be all of the run. */
+const partOfAll = (words) => /\b(\d+)\s*(?:\/|of|out of)\s*\1\b/.test(words);
+
 /** "All 4 pass", "all 12 green": a count said to pass, with no noun. */
 const ALL_PASS_COUNT = /\ball\s+(\d+)\s+(?:of\s+(?:them|these|those)\s+)?(?:pass(?:es|ed)?|passing|green|succeed(?:ed)?)\b/i;
 
@@ -1284,7 +1410,7 @@ function judgeSearch(claim, list) {
     const searches = list.filter((i) => i.search && same(i));
     if (searches.length === 0) return { verdict: 'unbacked', evidence: [], why: term ? `No search for ${clip(claim.term, 60)} ran in this turn.` : 'No search ran in this turn.' };
     const last = searches.at(-1);
-    if (last.search.hits > 0) return { verdict: 'contradicted', evidence: [said(last)], why: `The last search in this turn still found ${last.search.hits === 1 ? 'a line' : `${last.search.hits} lines`}: ${last.text}.` };
+    if (last.search.hits > 0) return { verdict: 'contradicted', evidence: [said(last)], why: `The last search in this turn still found ${last.search.counted ? `a count of ${last.search.hits}` : last.search.hits === 1 ? 'a line' : `${last.search.hits} lines`}: ${last.text}.` };
     return { verdict: 'backed', evidence: [said(last)], why: '' };
 }
 
@@ -1453,10 +1579,17 @@ function judgeFixed(claim, list, prompt = '') {
         if (shown.length) return { verdict: 'backed', evidence: shown.slice(-3).map(said), why: '' };
         return { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn measured it: no benchmark or timing ran.' };
     }
-    // A doc edit after the last run ("a line under Unreleased in CHANGELOG.md") changes nothing the run showed.
-    const changed = (i) => i.change || i.kind === 'change';
-    const code = lastIndex(list, (i) => changed(i) && !(i.kind === 'change' && !i.code));
-    const lastChange = code >= 0 ? code : lastIndex(list, changed);
+    // A fix needs a change to the code that went through: a failed edit, an edit of docs alone or a commit is none,
+    // and a passing run with nothing changed shows the code works, not that anything was fixed.
+    const lastChange = lastIndex(list, codeChange);
+    if (lastChange < 0) {
+        const kinds = FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
+        const runs = list.filter((i) => RUNS.has(i.kind));
+        const last = (runs.filter((i) => kinds.includes(i.kind)).at(-1) ?? runs.at(-1));
+        if (last && last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last run in this turn did not pass: ${last.text}.` };
+        if (!last) return { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn changed the code or ran a check.' };
+        return { verdict: 'unbacked', evidence: [said(last)], why: 'Nothing in this turn changed the code; a passing run alone does not show a fix.' };
+    }
     const after = list.slice(lastChange + 1).filter((i) => RUNS.has(i.kind));
     // A command that changed files and ran something in one go counts as a run after the change.
     const same = lastChange >= 0 && RUNS.has(list[lastChange].kind) ? [list[lastChange]] : [];
@@ -1473,6 +1606,20 @@ function judgeFixed(claim, list, prompt = '') {
     const last = (fitting.length ? fitting : checks).at(-1);
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
+}
+
+/** Git commands that only record or send work (a commit, a tag, a push): they change no code. */
+const GIT_RECORD = /^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:add|commit|tag|push|branch|switch\s+-c|checkout\s+-b|stash(?!\s+pop)|fetch|pull)\b[^;&|]*(?:\s*(?:&&|;)\s*|$))+$/i;
+/** Paths a command names: `README.md`, `src/app.ts`. */
+const CMD_PATHS = /(?:^|[\s'"=>])((?:[\w.@-]+\/)*[\w@-][\w.@-]*\.[a-z][a-z0-9]{0,7})(?=$|[\s'";|&)])/gi;
+/** Whether an item changed code that went through: an edit of a file that is not docs, or a command that changed files. */
+function codeChange(i) {
+    if (!(i.change || i.kind === 'change') || i.ok === false) return false;
+    if (i.kind === 'change' && !i.cmd) return i.code === true || !i.file;
+    const cmd = i.cmd ?? '';
+    if (GIT_RECORD.test(cmd)) return false;
+    const paths = [...cmd.matchAll(CMD_PATHS)].map((m) => m[1]);
+    return !(paths.length > 0 && paths.every((f) => DOC_FILE.test(f)));
 }
 
 /** Verbs of a done claim whose output is a build or a generated file, not an edit. */
@@ -1731,6 +1878,13 @@ function filesCount(claim, list) {
 /** A request for a write-up of what was done: a summary, a note, a PR description, a standup line. */
 const WRITE_UP = /\bwrite\s+(?:it|that|this|these|them|those|everything|all of (?:it|that|this))\s+up\b|\b(?:write|draft|put together|prepare|compose|give me|make|turn (?:it|that|this) into)\s+(?:me\s+|us\s+)?(?:(?:it|that|this)\s+(?:up\s+)?(?:into|as)\s+)?(?:a|an|the|my|our|some)?\s*(?:short|quick|brief|one-line|small|little|tight|final)?\s*(?:pr description|pull request description|description|summary|recap|note|notes|message|update|status update|standup|stand-up|changelog entry|changelog|release notes?|commit message|email|post|tweet|blurb|announcement|one-?liner|tl;?dr|report|write-?up|paragraph)\b/gi;
 
+/** Whether a person's message asks for a change to files ("fix the race", "add a test"); "do not change any file" does not. */
+export function asksForChange(text) {
+    if (typeof text !== 'string' || text.trim() === '') return false;
+    const t = text.replace(WRITE_UP, ' ').replace(/\b(?:do\s+not|don'?t|never|without|no\s+need\s+to)\s+(?:[\w-]+\s+){0,3}?(?:change|edit|touch|modify|fix|add|write|update|create|delete|remove)\w*[^.!?\n]*/gi, ' ');
+    return CHANGE_ASK.test(t);
+}
+
 /** Whether a person's message asks for new work (then an earlier turn's evidence does not back this turn's claims). */
 export function asksForWork(text) {
     if (typeof text !== 'string' || text.trim() === '') return false;
@@ -1745,6 +1899,6 @@ export function asksForWork(text) {
     const asking = '(?:the|these|those|all|any|both|my|our|your|its|their)\\s+(?:[\\w.-]+\\s+){0,3}?(?:pass|work|run|fail|exist|match|look|need|have|still|compile|build|apply)\\b';
     const imperative = new RegExp(`^(please\\s+|now\\s+|then\\s+|also\\s+|and\\s+)?(?!do\\s+(?:not|n't)\\b|do\\s+(?:you|we|they|i)\\b|do\\s+${asking})${VERB}\\b`, 'i');
     return told.some((x) => imperative.test(x))
-        || new RegExp(`\\b(can|could|would|will) you\\s+(please\\s+)?${VERB}\\b`, 'i').test(t)
+        || new RegExp(`\\b(can|could|would|will) you\\s+(?:(?:please|also|just|now|quickly|then|first|still|maybe|go ahead and|kindly)\\s+)*${VERB}\\b`, 'i').test(t)
         || new RegExp(`\\b(i want|i'd like|i need|we need|let's)\\b[^.?!]{0,40}\\b${VERB}\\b`, 'i').test(t);
 }

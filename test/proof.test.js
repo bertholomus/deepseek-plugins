@@ -223,8 +223,12 @@ test('judge: "it got faster" needs a measurement, and the turn\'s own numbers go
     assert.equal(judge(claim, [before, edit('src/enc.ts'), bash('npm run bench', 'p50 120ms p95 300ms')]).verdict, 'backed');
     // Slower than before: the turn's own numbers say otherwise.
     assert.equal(judge(claim, [before, edit('src/enc.ts'), bash('npm run bench', 'p50 480ms p95 900ms')]).verdict, 'contradicted');
-    // No figure it quotes printed anywhere.
-    assert.equal(judge(claim, [edit('src/enc.ts'), bash('npm run bench', 'p50 280ms p95 600ms')]).verdict, 'unbacked');
+    // The turn's last benchmark, after the change, measured another figure than the one it gives.
+    const other = judge(claim, [edit('src/enc.ts'), bash('npm run bench', 'p50 280ms p95 600ms')]);
+    assert.equal(other.verdict, 'contradicted');
+    assert.match(other.why, /p50 went to 120 ms; the turn's own benchmark shows p50 at 280 ms/);
+    // No figure it quotes printed anywhere, and nothing measured it after the change.
+    assert.equal(judge(claim, [bash('npm run bench', 'p50 280ms p95 600ms'), edit('src/enc.ts')]).verdict, 'unbacked');
     const worse = judge(only('The encoder is much faster now.'), [before, edit('src/enc.ts'), bash('npm run bench', 'p50 480ms p95 900ms')]);
     assert.equal(worse.verdict, 'contradicted');
     assert.match(worse.why, /went the other way: p50 310 ms -> 480 ms/);
