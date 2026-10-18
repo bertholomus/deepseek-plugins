@@ -55,7 +55,9 @@ function tokens(text) {
  * A query as FTS5 runs it.
  * @param {string} text
  * @param {{ prefix?: boolean }} [options] - prefix: the last word may be cut short (the person is still typing it).
- * @returns {{ match: string, words: string[], excluded: string[] }} `match` is '' when nothing searchable is left.
+ * @returns {{ match: string, own: string, words: string[], excluded: string[] }} `match` is '' when nothing
+ *   searchable is left. `own` matches the rows `match` does whose own text (request, reply, tools: not the
+ *   title of their file, which every row of it holds) says one of the words.
  */
 export function parseQuery(text, { prefix = false } = {}) {
     const raw = String(text ?? '');
@@ -81,7 +83,7 @@ export function parseQuery(text, { prefix = false } = {}) {
         else groups.push([piece]);
         joinNext = false;
     }
-    if (groups.length === 0) return { match: '', words, excluded };
+    if (groups.length === 0) return { match: '', own: '', words, excluded };
     // Still typing: the last word matches as a prefix ("deplo" finds "deploy").
     const typing = prefix && !/\s$/.test(raw);
     const last = groups.at(-1).at(-1);
@@ -90,7 +92,12 @@ export function parseQuery(text, { prefix = false } = {}) {
     // FTS5 joins two phrases with a space, but a group in brackets only with an explicit AND.
     const positive = groups.map((g) => (g.length === 1 ? render(g[0]) : `(${g.map(render).join(' OR ')})`)).join(' AND ');
     const match = excluded.length ? `(${positive})${excluded.map((e) => ` NOT ${quote(e)}`).join('')}` : positive;
-    return { match, words, excluded };
+    // A turn whose own text has a word of it, as bm25 with the title's weight at 0 tells (lib/store.js), but
+    // without scoring each row: the index alone answers (5,000 rows counted in 0.5 ms instead of 3). One group
+    // of words needs no second look at the whole row: a word of it in the turn's own text matches it already.
+    const said = `{prompt reply tools} : (${groups.flat().map(render).join(' OR ')})`;
+    const own = groups.length > 1 ? `(${match}) AND ${said}` : excluded.length ? `(${said})${excluded.map((e) => ` NOT ${quote(e)}`).join('')}` : said;
+    return { match, own, words, excluded };
 }
 
 const DAY = 86_400_000;

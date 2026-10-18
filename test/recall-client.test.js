@@ -182,12 +182,17 @@ test('words: a result says what it is, where, when and which turn; hits are mark
     assert.equal(countLine(FOUND, 'any'), '7 matching turns in 3 sessions and files · 12 ms');
     assert.equal(countLine({ ...FOUND, total: 1, sessions: 1, took: 0.4 }, 'handoff'), '1 matching turn in 1 note · <1 ms');
     assert.equal(countLine({ ...FOUND, total: 5000, totalMore: true, sessions: 400, sessionsMore: true }, 'session'), '5,000+ matching turns in 400+ sessions · 12 ms');
+    // Sessions whose title alone has the words are counted apart: no turn of theirs says them.
+    assert.equal(countLine({ ...FOUND, total: 2, sessions: 2, titled: 1 }, 'any'), '2 matching turns in 2 sessions and files, and 1 more by title only · 12 ms');
+    assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 1 }, 'handoff'), 'No turn says it; 1 note matches by title only · 12 ms');
+    assert.equal(countLine({ ...FOUND, total: 0, sessions: 0, titled: 3 }, 'any'), 'No turn says it; 3 sessions and files match by title only · 12 ms');
     assert.equal(failureText('Give words to search for in query, or a result id in open.'), 'the agent gave no words to search for.');
     assert.equal(failureText('Error: Recall\'s index is starting. Try again in a moment.'), 'Recall\'s index is starting. Try again in a moment.');
     assert.equal(runningTitle({ query: 'deploy gateway' }), 'Searching past work for “deploy gateway”');
     assert.equal(runningTitle({ open: '3.4' }), 'Reading a past turn');
     assert.equal(doneTitle({ kind: 'results', query: 'deploy', total: 7, sessions: 3 }, {}), 'Searched past work for “deploy”: 7 turns in 3 sessions and files');
     assert.equal(doneTitle({ kind: 'results', query: 'zzz', total: 0, sessions: 0 }, {}), 'Searched past work for “zzz”: nothing found');
+    assert.equal(doneTitle({ kind: 'results', query: 'kestrel', total: 0, sessions: 0, titled: 1 }, {}), 'Searched past work for “kestrel”: 1 session or file by title only');
     assert.equal(doneTitle({ kind: 'turn', turn: OWN }, {}), 'Read a past turn: “Fix the gateway”');
     assert.equal(indexLine({ index: STATUS }), 'Recall has 1,234 turns from 56 sessions and files. Up to date.');
     assert.equal(indexLine({ index: { ...STATUS, busy: true, queued: 12 } }), 'Recall has 1,234 turns from 56 sessions and files. Reading 12 more files…');
@@ -342,6 +347,17 @@ test('search: typing waits for a pause, Enter and filters search at once with wh
     s = finder.store.get();
     assert.deepEqual(plain(s.results.map((r) => `${r.file}.${r.turn}`)), ['3.4', '9.2', '12.3', '20.1']);
     assert.equal(s.more, false);
+    let card = client.internals.SearchCard({ data: STATE });
+    assert.equal(withAttr(card, 'data-recall-more').length + withAttr(card, 'data-recall-end').length, 0, 'the whole list: no more, and nothing to say');
+    // A list cut short (the files of the 4,000 turns a search looks through, or its 1,000th result) says so where it stops.
+    finder.store.set({ ...finder.store.get(), found: { ...finder.store.get().found, sort: 'newest', cut: 'cap', looked: 4000 } });
+    card = client.internals.SearchCard({ data: STATE });
+    assert.equal(withAttr(card, 'data-recall-more').length, 0);
+    assert.equal(textIn(withAttr(card, 'data-recall-end')), 'These are the sessions and files of the 4,000 newest matching turns. Add a word or a filter to find others.');
+    const { endLine } = client.internals;
+    assert.equal(endLine({ text: 'deploy', sort: 'best', cut: 'cap', looked: 4000 }, 312), 'These are the sessions and files of the 4,000 best-matching turns. Add a word or a filter to find others.');
+    assert.equal(endLine({ text: '', sort: 'best', cut: 'cap', looked: 4000 }, 312), 'These are the sessions and files of the 4,000 newest turns. Add a word or a filter to find others.');
+    assert.equal(endLine({ text: 'deploy', sort: 'best', cut: 'length', looked: 4000 }, 1000), 'The list stops at 1,000 results. Add a word or a filter to find others.');
     answer = { ok: false, error: { code: 'recall/refused', message: 'Recall\'s index is starting. Try again in a moment.' } };
     await finder.search();
     s = finder.store.get();
@@ -407,15 +423,31 @@ test('results: each says where it is and opens at its turn (this DSH) or in the 
     assert.deepEqual(loads.at(-1), ['sess-own-1', 70], 'another turn of the same session');
     assert.equal(jump.get().turn, 7);
     button(row, 'Read here').props.onClick();
-    assert.deepEqual(plain(finder.store.get().reading), { id: '3.4' }, 'Read here: the reading view, not the session');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '3.4', from: '[data-recall-peek="3.4"]' }, 'Read here: the reading view, not the session; Back comes to it again');
+    // Every button is named with what it opens, not only "Read here" or "turn 2".
+    assert.equal(withAttr(row, 'data-recall-open')[0].props['aria-label'], 'Open “Fix the gateway” at turn 4');
+    assert.deepEqual(withAttr(row, 'data-recall-other').map((e) => e.props['aria-label']), ['Open “Fix the gateway” at turn 2', 'Open “Fix the gateway” at turn 7']);
+    assert.equal(button(row, 'Read here').props['aria-label'], 'Read “Fix the gateway”, turn 4 here');
 
     const transcript = ResultRow({ r: TRANSCRIPT, home: HOME });
     assert.match(textIn(transcript), /^Untitled transcriptCoding-agent transcript · ~\/work\/parser · glm-5\.3-flash · turn 2/);
     assert.equal(button(transcript, 'Read here'), undefined, 'it opens here anyway');
+    assert.equal(withAttr(transcript, 'data-recall-open')[0].props['aria-label'], 'Read “Untitled transcript”, turn 2 here');
     withAttr(transcript, 'data-recall-open')[0].props.onClick();
-    assert.equal(finder.store.get().reading.id, '9.2');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '9.2', from: '[data-recall-open="9.2"]' });
     const note = ResultRow({ r: NOTE, home: HOME });
-    assert.match(textIn(note), /1 other section of this note match:section 5/);
+    assert.match(textIn(note), /1 other section of this note matches:section 5/);
+    assert.equal(withAttr(note, 'data-recall-other')[0].props['aria-label'], 'Read “Gateway handoff”, section 5 here');
+    withAttr(note, 'data-recall-other')[0].props.onClick();
+    assert.deepEqual(plain(finder.store.get().reading), { id: '12.5', from: '[data-recall-other="12.5"]' });
+    const two = ResultRow({ r: { ...NOTE, hits: 3, others: [{ turn: 5, seq: 0 }, { turn: 6, seq: 0 }] }, home: HOME });
+    assert.match(textIn(two), /2 other sections of this note match:section 5section 6/);
+    // A session whose title alone has the words: said so, it opens at its first turn, and no other turn is offered.
+    const titled = ResultRow({ r: { ...OWN, id: '5.1', file: 5, turn: 1, seq: 4, snippet: '', hits: 0, others: [], titleOnly: true, asked: 'Check the build' }, home: HOME });
+    assert.match(textIn(titled), /Only its title matches: it opens at its first turn\.Asked: Check the build/);
+    assert.equal(withAttr(titled, 'data-recall-other').length, 0);
+    const titledNote = ResultRow({ r: { ...NOTE, turn: 1, snippet: '', hits: 0, others: [], titleOnly: true }, home: HOME });
+    assert.match(textIn(titledNote), /Only its title matches: it opens at its first section\./);
     // A window that cannot open sessions shows the turn in Recall instead.
     views.openSession = () => false;
     withAttr(row, 'data-recall-open')[0].props.onClick();
@@ -449,10 +481,11 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     assert.match(text, /^Back to the resultsFix the gatewaySession · ~\/work\/gateway · glm-5\.3 · turn 4 of 9 · 1 h ago/);
     assert.match(text, /Askedplease deploy the gateway to stagingReplyDeployed: 3 pods ready\.Commands and files it usedbash: make deploy ENV=staging/);
     assert.doesNotMatch(text, /sess-own-1|session\.v4/, 'no ids or log files where people read');
+    finder.read('3.4', '[data-recall-peek="3.4"]');
     button(view.tree, 'Turn after').props.onClick();
-    assert.equal(finder.store.get().reading.id, '3.5');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '3.5', from: '[data-recall-peek="3.4"]' }, 'Back still goes to what opened it');
     button(view.tree, 'Turn before').props.onClick();
-    assert.equal(finder.store.get().reading.id, '3.3');
+    assert.deepEqual(plain(finder.store.get().reading), { id: '3.3', from: '[data-recall-peek="3.4"]' });
     const opened = [];
     views.openSession = (id) => { opened.push(id); return true; };
     const loads = [];
@@ -475,6 +508,25 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     view.update({ id: '99.1' });
     await settle(5);
     assert.match(textIn(view.tree), /Couldn't read it: That result is no longer in the index \(its file changed or went\)\. Search again\./);
+});
+
+test('reading view: Back puts the focus on the button that opened it, even after Turn before or after; else on its row, else the search box', async () => {
+    const focused = [];
+    const present = new Set(['[data-recall-other="9.3"]', '[data-recall-open="9.2"]']);
+    const document = { querySelector: (sel) => (present.has(sel) ? { focus: () => focused.push(sel) } : null) };
+    const { client } = loadClient(CLIENT, { document });
+    const { SearchCard, finder } = client.internals;
+    const back = () => withAttr(SearchCard({ data: STATE }), 'data-recall-back')[0].props.onClick();
+    finder.read('9.3', '[data-recall-other="9.3"]');
+    finder.read('9.2', finder.store.get().reading.from);
+    back();
+    await settle(5);
+    assert.equal(finder.store.get().reading, undefined, 'the list again');
+    assert.deepEqual(focused, ['[data-recall-other="9.3"]'], 'the "turn 3" link that opened it, though the view moved to turn 2');
+    finder.read('9.2', '[data-recall-peek="9.2"]');
+    back();
+    await settle(5);
+    assert.deepEqual(focused.at(-1), '[data-recall-open="9.2"]', 'what opened it is gone: its row');
 });
 
 test('opening a session at a turn: the mark shows on that turn only, brings it into view, marks its rows, stops when the person scrolls, and goes when done', async (t) => {

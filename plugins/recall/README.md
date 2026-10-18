@@ -66,12 +66,23 @@ Some things are left out on purpose:
 
 Results are ranked best first:
 
-- A match in the title weighs most, then the request, the reply and the
-  commands. A new turn gets a small lift: 30% at first, fading over the
-  next few weeks.
-- Each session or file shows once, at its best turn, with *Also matches
-  turns 4, 7* for the others.
-- *Newest* sorts by time instead.
+- A turn that says the words itself, in its request, its reply or its
+  commands, always comes first. The request weighs most, then the reply
+  and the commands. A turn whose session title says the words too gets a
+  lift of a fifth, and a new turn gets a small lift: 30% at first, fading
+  over the next few weeks.
+- Each session or file shows once, at its best turn, with its other turns
+  that say the words listed under it. A turn that does not say them is
+  never listed, even when its session's title does: DSH names a session
+  from its first request, so the title's words are in no other turn.
+- A session or file whose title alone has the words comes once, after
+  every turn that says them, marked *Only its title matches*, and opens at
+  its first turn.
+- The count is of turns that say the words. Sessions and files that match
+  by their title alone are counted apart: *12 matching turns in 5 sessions
+  and files, and 1 more by title only*.
+- *Newest* sorts by time instead, with the same order: turns that say the
+  words first.
 - With nothing typed, the page lists the newest turns.
 
 **Filters** (on the page and in the tool):
@@ -84,7 +95,10 @@ Results are ranked best first:
 | Time | Any time, Past day, Past week, Past month, Past year |
 | Sort | Best match or Newest |
 
-A search that matches more than 5,000 turns counts to 5,000 and says *5000+*.
+A search that matches more than 5,000 turns counts to 5,000 and says
+*5,000+*. A list shows the sessions and files of the 4,000 best-matching
+(or newest) turns, up to 1,000 results; where it stops before its end,
+the page says so and suggests a word or a filter.
 
 ## The page
 
@@ -93,7 +107,8 @@ Recall has its own entry in the sidebar. Its page shows:
 - **The search box and filters.** The count says how many turns match, in
   how many sessions and files, and how long the search took.
 - **Results.** Each one shows its title, where it is (kind, folder, model,
-  turn or section), when, and the matching words in context.
+  turn or section), when, and the matching words in context, as plain
+  text (links, code marks and other Markdown taken out).
   - Pressing the title of a session of this DSH opens it at that turn.
     Anything else (another DSH's session, a transcript, a note) opens in
     Recall's reading view.
@@ -101,10 +116,14 @@ Recall has its own entry in the sidebar. Its page shows:
     leaving the page.
   - Other matching turns of the same session are listed under it (*2 other
     turns here match: turn 4, turn 7*), each one press away.
+  - Every button is named with what it opens, for screen readers too:
+    *Open “Fix the gateway” at turn 4*, *Read “Run log”, turn 2 here*.
   - **Show more results** loads the next page.
 - **The reading view.** It shows what was asked, the reply, the commands
   and files used, the file and line, and **Turn before** / **Turn after**
-  (**Section before** / **Section after** for notes).
+  (**Section before** / **Section after** for notes). **Back to the
+  results** returns to the list with the focus on the button that opened
+  it, even after Turn before or after.
 - **The index card.** It lists each folder Recall searches with its state
   (*up to date*, *reading*, *not there*, *cannot read*) and its files and
   turns. Below that come **Files Recall could not read**, **Folders left
@@ -182,37 +201,38 @@ DSH sessions:
 
 | Search | Matching turns | Median | p95 | In the index (median) |
 | --- | ---: | ---: | ---: | ---: |
-| one common word | 5000+ | 46.3 ms | 65 ms | 46.2 ms |
-| two words | 5000+ | 44 ms | 124.4 ms | 43.2 ms |
-| a phrase | 1433 | 23.9 ms | 45.7 ms | 23.7 ms |
-| typing (last word a prefix) | 5000+ | 91.2 ms | 147.1 ms | 91 ms |
-| a rare word | 1 | 0.5 ms | 1.2 ms | 0.4 ms |
-| either word (OR) | 5000+ | 61.1 ms | 97.3 ms | 60.9 ms |
-| a word left out | 5000+ | 26.6 ms | 40.5 ms | 26.1 ms |
-| sessions of the past month | 5000+ | 27.2 ms | 39.7 ms | 27 ms |
-| one folder | 2227 | 31.5 ms | 49.8 ms | 31.3 ms |
-| one model | 5000+ | 35.6 ms | 52.5 ms | 35.5 ms |
-| newest first | 5000+ | 21.5 ms | 29.9 ms | 21.2 ms |
-| nothing typed (newest turns) | 5000+ | 1.1 ms | 2.8 ms | 0.9 ms |
-| third page | 5000+ | 56.4 ms | 74.5 ms | 56.3 ms |
-| **All 260 searches** | | **33.7 ms** | **96.3 ms** | 33.5 ms |
+| one common word | 5,000+ | 40.3 ms | 42.1 ms | 40.1 ms |
+| two words | 5,000+ | 39.5 ms | 43.1 ms | 39.4 ms |
+| a phrase | 1,380 | 20.7 ms | 22.8 ms | 20.5 ms |
+| typing (last word a prefix) | 5,000+ | 81.2 ms | 85.1 ms | 81.1 ms |
+| a rare word | 1 | 0.3 ms | 0.6 ms | 0.3 ms |
+| either word (OR) | 5,000+ | 54.6 ms | 57 ms | 54.4 ms |
+| a word left out | 5,000+ | 22.6 ms | 26.2 ms | 22.5 ms |
+| sessions of the past month | 5,000+ | 22.9 ms | 25.2 ms | 22.8 ms |
+| one folder | 2,187 | 27.4 ms | 29 ms | 27.3 ms |
+| one model | 5,000+ | 31.3 ms | 32.8 ms | 31.2 ms |
+| newest first | 5,000+ | 18 ms | 19.3 ms | 17.8 ms |
+| nothing typed (newest turns) | 5,000+ | 0.8 ms | 1 ms | 0.7 ms |
+| third page | 5,000+ | 49.5 ms | 51.9 ms | 49.4 ms |
+| **All 260 searches** | | **27.4 ms** | **80.8 ms** | 27.3 ms |
 
 Every search is well inside the 300 ms target. The slowest of the 260 took
-201 ms.
+107 ms. The counts are of turns that say the words; counting them that way
+moved the median by under 2 ms, measured side by side on one index.
 
 **Building and keeping up:**
 
-- **The first index** took 19.9 s (6,057 turns a second) and came to
-  284.8 MB.
-- **DSH's own thread** was held up at most 12.6 ms meanwhile (p99 11.4 ms).
-- **Searches during that build** took a median of 57.3 ms (p95 104.4 ms).
+- **The first index** took 16.6 s (7,244 turns a second) and came to
+  285.6 MB.
+- **DSH's own thread** was held up at most 18.9 ms meanwhile (p99 11.3 ms).
+- **Searches during that build** took a median of 54.8 ms (p95 84.5 ms).
 - **Reading one turn in full**: under 0.1 ms.
-- **A new turn** was found 75 ms after DSH said its session moved; a new
-  session, 40 ms after. With DSH's 1.5 s of batching, the real-DSH test
+- **A new turn** was found 12 ms after DSH said its session moved; a new
+  session, 41 ms after. With DSH's 1.5 s of batching, the real-DSH test
   measures a turn searchable about 1.7 s after it was asked.
-- **A restart** opened the index in 22 ms and answered the first search in
-  97 ms. Its look through all 10,001 files took 0.4 s and read none again.
-- **After a stop that did not close the index**, opening it took 2.0 s:
+- **A restart** opened the index in 20 ms and answered the first search in
+  93 ms. Its look through all 10,001 files took 0.4 s and read none again.
+- **After a stop that did not close the index**, opening it took 1.6 s:
   SQLite's full check runs then.
 
 To measure again:
@@ -350,6 +370,10 @@ transcripts or notes it reads.
   minutes.
 - **Sessions of another DSH** open in Recall's reading view, not in the
   chat: this DSH cannot open them.
+- **Long lists.** A search lists the sessions and files of its 4,000
+  best-matching (or newest) turns, and at most 1,000 results. Where a list
+  stops before its end, the page and the tool say so; more words or a
+  filter reach the rest.
 - **New turns** wait for DSH's session event plus 1.5 s. Changes in other
   folders wait for the next minute's look, or **Look for changes now**.
 

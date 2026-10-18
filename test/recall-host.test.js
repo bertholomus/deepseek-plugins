@@ -20,6 +20,7 @@ import { NOTE_LIMITS, isNote, readNote } from '../plugins/recall/lib/handoffs.js
 import { momentOf, parseQuery, spanOf } from '../plugins/recall/lib/query.js';
 import { LIMITS, addReply, addTool, newTurn, rowOf, toolLine } from '../plugins/recall/lib/turns.js';
 import { SCHEMA_VERSION, Store } from '../plugins/recall/lib/store.js';
+import { plainText } from '../plugins/recall/lib/plain.js';
 import { Engine, folderOf } from '../plugins/recall/lib/engine.js';
 import { IndexThread } from '../plugins/recall/lib/thread.js';
 import { DEFAULTS, LIVE_SETTINGS, MAX_FOLDERS, SETTING_TITLES, checkConfig, expandFolder, indexing, sourcesOf, tildePath } from '../plugins/recall/lib/config.js';
@@ -357,7 +358,11 @@ test('notes: one row per heading with its line; headings in code are text; front
 // ── Queries ───────────────────────────────────────────────────────────
 
 test('queries: words, "phrases", -left out, OR and a word still being typed become an FTS5 query that is never a syntax error', () => {
-    assert.deepEqual(parseQuery('deploy gateway'), { match: '"deploy" AND "gateway"', words: ['deploy', 'gateway'], excluded: [] });
+    assert.deepEqual(parseQuery('deploy gateway'), { match: '"deploy" AND "gateway"', own: '("deploy" AND "gateway") AND {prompt reply tools} : ("deploy" OR "gateway")', words: ['deploy', 'gateway'], excluded: [] });
+    assert.equal(parseQuery('deploy -staging').own, '({prompt reply tools} : ("deploy")) NOT "staging"');
+    assert.equal(parseQuery('rollback OR deplo', { prefix: true }).own, '{prompt reply tools} : ("rollback" OR "deplo"*)');
+    assert.equal(parseQuery('"cache index"').own, '{prompt reply tools} : ("cache index")');
+    assert.equal(parseQuery('-only').own, '');
     assert.equal(parseQuery('"parser test" fix').match, '"parser test" AND "fix"');
     assert.equal(parseQuery('“curly phrase”').match, '"curly phrase"');
     assert.equal(parseQuery('deploy -staging').match, '("deploy") NOT "staging"');
@@ -392,6 +397,23 @@ test('queries: words, "phrases", -left out, OR and a word still being typed beco
     assert.deepEqual(hits('"quoted" a"b'), [4]);
     assert.deepEqual(hits('deploy-staging AND OR NOT NEAR'), []);
     db.close();
+    // `own`: the rows that match and say a word in their own text, exactly as bm25 with the title's weight at 0 tells.
+    const turns = new sqlite.DatabaseSync(':memory:');
+    turns.exec("CREATE VIRTUAL TABLE fts USING fts5(title, prompt, reply, tools, tokenize = 'porter unicode61 remove_diacritics 2', prefix = '3')");
+    const row = turns.prepare('INSERT INTO fts (rowid, title, prompt, reply, tools) VALUES (?, ?, ?, ?, ?)');
+    row.run(1, 'Heron worker', 'Rename the worker to heron', 'Renamed it.', '');
+    row.run(2, 'Heron worker', 'Add a health check', 'Added it.', '');
+    row.run(3, 'Heron worker', 'Log the axolotl metric too', 'Logged.', 'bash: make heron-logs');
+    row.run(4, 'Heron worker', 'Log the staging metric', 'Logged on staging.', '');
+    row.run(5, 'Gyrfalcon ledger', 'The heron again', 'Yes.', '');
+    for (const text of ['heron', 'heron axolotl', 'heron -staging', 'worker', 'axolotl OR health', 'hero', 'heron OR gyrfalcon -axolotl', '"heron again"', 'worker heron -health']) {
+        const q = parseQuery(text, { prefix: text === 'hero' });
+        const byScore = turns.prepare('SELECT rowid FROM fts WHERE fts MATCH ? AND bm25(fts, 0, 2, 1, 0.7) < 0 ORDER BY rowid').all(q.match).map((r) => r.rowid);
+        const byIndex = turns.prepare('SELECT rowid FROM fts WHERE fts MATCH ? ORDER BY rowid').all(q.own).map((r) => r.rowid);
+        assert.deepEqual(byIndex, byScore, text);
+    }
+    assert.deepEqual(turns.prepare('SELECT rowid FROM fts WHERE fts MATCH ? ORDER BY rowid').all(parseQuery('heron').own).map((r) => r.rowid), [1, 3, 5], 'turns 2 and 4 say heron only in their title');
+    turns.close();
 });
 
 test('queries: dates and spans in words; anything else is refused in words', () => {
@@ -501,16 +523,17 @@ test('index: DSH sessions, transcripts and notes in one search, one result per s
     assert.equal(alpha.own, true);
     assert.equal(alpha.path, undefined, 'this DSH\'s own sessions open by id');
     assert.equal(alpha.turn, 1, 'its best turn');
-    assert.equal(alpha.hits, 3, 'every turn of a session titled "Gateway deploys" matches');
-    assert.deepEqual(alpha.others.map((o) => o.turn), [2, 3]);
+    assert.equal(alpha.hits, 1, 'only turn 1 says deploy: "Gateway deploys" is the title of all three, and a title is no hit of a turn\'s own');
+    assert.deepEqual(alpha.others, []);
     assert.ok(alpha.seq > 0);
     assert.equal(alpha.folder, '/work/alpha');
     assert.equal(alpha.model, 'glm-test');
     assert.equal(alpha.running, false);
     assert.match(clean(alpha.snippet), /\[deploy/i);
     assert.equal(alpha.asked, 'How do we deploy the gateway to staging?');
-    assert.equal(deploy.total, 6);
+    assert.equal(deploy.total, 4, 'the turns that say it');
     assert.equal(deploy.sessions, 4);
+    assert.equal(deploy.titled, 0);
     assert.ok(deploy.took >= 0);
 
     // The reply's hits make the snippet when there are some.
@@ -584,7 +607,142 @@ test('index: filters by kind, folder (its subfolders, not its neighbours), model
     // One file's matching turns, each a result (the reading view).
     const alpha = e.search({ text: 'gateway' }).results.find((r) => r.sessionId === 's-alpha');
     const inFile = e.search({ text: 'gateway', file: alpha.file });
-    assert.deepEqual(inFile.results.map((r) => r.turn).sort(), [1, 2, 3]);
+    assert.deepEqual(inFile.results.map((r) => r.turn).sort(), [1, 3], 'turn 2 says nothing of a gateway: only the session\'s title does');
+});
+
+test('index: a session\'s title is no hit of its turns: the turn that says the words opens, its "other turns" say them too, the counts are of those, and a session with the words only in its title comes once, last, at its first turn', () => {
+    const home = tempDir('recall-titles');
+    const sessions = join(home, 'sessions');
+    const at = (iso) => Date.parse(iso);
+    // The judge's shapes. DSH names a session from its first request, so its title's words are in every turn of it.
+    const heron = sessionWriter(sessionFile(sessions, 's-heron', 'p1'), { id: 's-heron', cwd: '/work/heron', createdAt: at('2026-10-10T17:00:00Z') }).header();
+    heron.turn({ prompt: 'Rename the worker to heron', reply: 'Renamed it: the heron worker starts with the service.' });
+    heron.turn({ prompt: 'Add a health check', reply: 'Added the healthz endpoint.' });
+    heron.turn({ prompt: 'Log the axolotl metric too', reply: 'Logged.' });
+    heron.title('Heron worker');
+    const gyr = sessionWriter(sessionFile(sessions, 's-gyr', 'p2'), { id: 's-gyr', cwd: '/work/gyr', createdAt: at('2026-10-11T17:00:00Z') }).header();
+    gyr.turn({ prompt: 'Start the gyrfalcon ledger', reply: 'Started it.' });
+    for (let i = 2; i <= 7; i += 1) gyr.turn({ prompt: `Step ${i}: tidy the imports`, reply: 'Done.' });
+    gyr.turn({ prompt: 'Write the notes file', reply: 'Wrote it.', tools: [['write_file', { path: '/work/gyr/gyrfalcon_notes.txt' }]] });
+    gyr.title('Long gyrfalcon session');
+    // The newest session, with the word only in its title (renamed by hand): it still matches, but after every turn that says it.
+    const osprey = sessionWriter(sessionFile(sessions, 's-osprey', 'p3'), { id: 's-osprey', cwd: '/work/osprey', createdAt: at('2026-10-16T17:00:00Z') }).header();
+    osprey.turn({ prompt: 'Check the build', reply: 'It passes.' });
+    osprey.turn({ prompt: 'And the lint', reply: 'Clean.' });
+    osprey.title('Heron check');
+    sessionWriter(sessionFile(sessions, 's-old', 'p4'), { id: 's-old', cwd: '/work/birds', createdAt: at('2026-06-01T17:00:00Z') }).header()
+        .turn({ prompt: 'What bird was that?', reply: 'A grey heron, by the lake.' });
+    const notes = join(home, 'notes');
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, 'kestrel.md'), ['---', 'title: Kestrel plan', '---', '## Goal', 'Ship the dashboard.', '', '## Next', 'Review the charts.'].join('\n'));
+    const { e, drain } = engineAt(home, { now: () => NOW });
+    e.handle('configure', { sources: [{ kind: 'session', root: sessions, own: true }, { kind: 'handoff', root: notes, own: false }] });
+    drain();
+
+    const found = e.search({ text: 'heron' });
+    assert.deepEqual(found.results.map((r) => [r.sessionId, r.turn, r.titleOnly === true]), [['s-heron', 1, false], ['s-old', 1, false], ['s-osprey', 1, true]],
+        'the turns that say heron first (the one whose title says it too lifted), the newest session last: only its title says it');
+    const first = found.results[0];
+    assert.equal(first.hits, 1);
+    assert.deepEqual(first.others, [], 'turns 2 and 3 never say heron: they are no "other turns" here');
+    assert.match(clean(first.snippet), /\[heron\]/);
+    assert.deepEqual([found.total, found.totalMore, found.sessions, found.titled, found.titledMore], [2, false, 2, 1, false], 'two turns say it; one more session matches by its title alone');
+    const titleOnly = found.results[2];
+    assert.deepEqual([titleOnly.hits, titleOnly.others, titleOnly.snippet, titleOnly.asked], [0, [], '', 'Check the build'], 'it opens at its first turn, with nothing marked as said there');
+    // Newest first keeps the same rule: a session that matches by its title alone never comes above a turn that says the words.
+    assert.deepEqual(e.search({ text: 'heron', sort: 'newest' }).results.map((r) => r.sessionId), ['s-heron', 's-old', 's-osprey']);
+    // Typing ("hero" as a prefix) and a phrase take the same rule.
+    assert.deepEqual(e.search({ text: 'hero', prefix: true }).results.map((r) => [r.sessionId, r.titleOnly === true]), [['s-heron', false], ['s-old', false], ['s-osprey', true]]);
+    assert.deepEqual(e.search({ text: '"heron worker"' }).results.map((r) => [r.sessionId, r.turn]), [['s-heron', 1]], 'turn 1\'s reply says "heron worker"');
+
+    // The gyrfalcon session: turns 1 and 8 say it (8 in a tool's path), so one other turn matches, not seven.
+    const gyrfalcon = e.search({ text: 'gyrfalcon' });
+    assert.equal(gyrfalcon.results.length, 1);
+    const g = gyrfalcon.results[0];
+    assert.deepEqual([g.turn, g.hits, g.others.map((o) => o.turn)], [1, 2, [8]]);
+    assert.equal(gyrfalcon.total, 2);
+    assert.deepEqual(e.search({ text: 'gyrfalcon_notes.txt' }).results.map((r) => r.turn), [8], 'the turn that wrote the file');
+    // A turn that says one word, in a session whose title says the other: it says the words, and it opens.
+    const both = e.search({ text: 'heron axolotl' }).results;
+    assert.deepEqual(both.map((r) => [r.sessionId, r.turn, r.titleOnly === true]), [['s-heron', 3, false]]);
+    assert.deepEqual(e.search({ text: 'axolotl' }).results.map((r) => r.turn), [3]);
+    // One file's matching turns (the reading view's list): only those that say it, or its first turn when none does.
+    assert.deepEqual(e.search({ text: 'heron', file: first.file }).results.map((r) => r.turn), [1]);
+    const ospreyOnly = e.search({ text: 'heron', file: titleOnly.file });
+    assert.deepEqual(ospreyOnly.results.map((r) => [r.turn, r.titleOnly === true]), [[1, true]]);
+    // A note's title (its front matter) works the same: one result, at its first section.
+    const kestrel = e.search({ text: 'kestrel' });
+    assert.deepEqual(kestrel.results.map((r) => [r.kind, r.title, r.turn, r.label, r.titleOnly === true]), [['handoff', 'Kestrel plan', 1, 'Goal', true]]);
+    assert.deepEqual([kestrel.total, kestrel.sessions, kestrel.titled], [0, 0, 1]);
+});
+
+test('index: a page is never short while there is more: a few sessions that hold most matching turns make the search look further; a list cut short says where it stops', () => {
+    const home = tempDir('recall-pages');
+    const logs = join(home, 'agent-logs');
+    mkdirSync(logs, { recursive: true });
+    const jsonl = (rows) => `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`;
+    const t0 = Date.parse('2026-10-10T10:00:00Z');
+    // Three long transcripts whose 480 turns all say pelican, and say it most; 30 short ones that say it once.
+    for (let f = 0; f < 3; f += 1) {
+        const rows = [];
+        for (let i = 0; i < 160; i += 1) rows.push({ role: 'user', content: `pelican pelican ${i}`, timestamp: new Date(t0 + f * 1000 + i).toISOString() }, { role: 'assistant', content: 'pelican' });
+        writeFileSync(join(logs, `long-${f}.jsonl`), jsonl(rows));
+    }
+    for (let f = 0; f < 30; f += 1) {
+        writeFileSync(join(logs, `short-${f}.jsonl`), jsonl([
+            { role: 'user', content: `A long request about the harbour, its boats, the weather, the tides and the gulls, and once a pelican ${f}`, timestamp: new Date(t0 - DAY + f).toISOString() },
+            { role: 'assistant', content: 'Noted, with nothing more to say about birds, boats or tides today.' },
+        ]));
+    }
+    const { e, drain } = engineAt(home, { now: () => NOW });
+    e.handle('configure', { sources: [{ kind: 'transcript', root: logs, own: false }] });
+    drain();
+    const found = e.search({ text: 'pelican' });
+    assert.equal(found.results.length, 20, 'a full page, though the best 400 turns are all in three files');
+    assert.deepEqual([found.total, found.sessions, found.more, found.cut], [510, 33, true, undefined]);
+    const last = e.search({ text: 'pelican', offset: 20 });
+    assert.deepEqual([last.results.length, last.more, last.cut], [13, false, undefined], 'the whole list: it ends, and nothing is cut');
+    assert.equal(new Set([...found.results, ...last.results].map((r) => r.file)).size, 33);
+
+    // The bounds, with the index's rows made up: the files of the 4,000 turns a search looks through, and 1,000 results.
+    const rowsOf = (n, perFile) => Array.from({ length: n }, (_, i) => ({ id: i + 1, file: Math.floor(i / perFile) + 1, turn: (i % perFile) + 1, seq: 0, time: NOW - i * 1000, done: 1, kind: 'transcript', folder: '', model: '', label: '', line: 1, own: -1, score: -1 }));
+    const stand = (rows) => {
+        e.store.candidates = ({ cap }) => rows.slice(0, cap).map((r) => ({ ...r }));
+        e.store.count = () => rows.length;
+        e.store.snippets = () => new Map();
+        e.store.asked = () => new Map();
+        e.store.filesByIds = () => new Map();
+    };
+    stand(rowsOf(5000, 50));
+    const many = e.search({ text: 'pelican', sort: 'newest', offset: 60 });
+    assert.deepEqual([many.results.length, many.more, many.cut, many.looked, many.sessions, many.sessionsMore], [20, false, 'cap', 4000, 80, true], 'the 80 files of the 4,000 newest matching turns, and the page says so');
+    stand(rowsOf(5000, 1));
+    const long = e.search({ text: 'pelican', sort: 'newest', offset: 980 });
+    assert.deepEqual([long.results.length, long.more, long.cut], [20, false, 'length'], 'the 1,000th result is the last');
+    assert.deepEqual(e.search({ text: 'pelican', offset: 1000 }).results, [], 'never a page past it (no page twice)');
+    stand(rowsOf(300, 1));
+    assert.deepEqual([e.search({ text: 'pelican', offset: 280 }).more, e.search({ text: 'pelican', offset: 280 }).cut], [false, undefined]);
+});
+
+test('snippets: plain words, without the Markdown a reply is written in; the hit marks stay', () => {
+    const m = (w) => `\u0002${w}\u0003`;
+    assert.equal(plainText(`Wrote [${m('gyrfalcon')}_notes.txt](${m('gyrfalcon')}_notes.txt) with the list`), `Wrote ${m('gyrfalcon')}_notes.txt with the list`);
+    assert.equal(plainText(`Run it:\n\`\`\`bash\nmake ${m('deploy')}\n\`\`\`\nthen \`curl /healthz\``), `Run it:\n \nmake ${m('deploy')}\n \nthen curl /healthz`);
+    assert.equal(plainText(`## ${m('Deploy')} steps\n- **first** the gateway\n> quoted ${m('deploy')}`), `${m('Deploy')} steps\nfirst the gateway\nquoted ${m('deploy')}`);
+    assert.equal(plainText(`…_notes.txt](gyrfalcon_notes.txt) and ${m('more')}`), `…_notes.txt and ${m('more')}`, 'a link cut at the snippet\'s start');
+    assert.equal(plainText(`see [the ${m('notes')}](https://example.com/no…`), `see the ${m('notes')}`, 'and at its end');
+    assert.equal(plainText('a * b = c, my_var_name, 2 - 1'), 'a * b = c, my_var_name, 2 - 1', 'single marks in sums and names stay');
+    // Through the index: the page and the tool get the words, not the marks.
+    const home = tempDir('recall-plain');
+    const sessions = join(home, 'sessions');
+    sessionWriter(sessionFile(sessions, 's-md', 'p1'), { id: 's-md', cwd: '/work/md', createdAt: Date.parse('2026-10-10T17:00:00Z') }).header()
+        .turn({ prompt: 'Write the **gyrfalcon** notes', reply: 'Done: [gyrfalcon_notes.txt](gyrfalcon_notes.txt)\n\n```bash\ncat gyrfalcon_notes.txt\n```' });
+    const { e, drain } = engineAt(home, { now: () => NOW });
+    e.handle('configure', { sources: [{ kind: 'session', root: sessions, own: true }] });
+    drain();
+    const r = e.search({ text: 'gyrfalcon' }).results[0];
+    assert.equal(clean(r.snippet), 'Done: [gyrfalcon]_notes.txt\n\n \ncat [gyrfalcon]_notes.txt\n ');
+    assert.equal(r.asked, 'Write the gyrfalcon notes');
 });
 
 test('index: a result read in full by its id, with the turns next to it; an id that went says so', () => {
@@ -954,6 +1112,16 @@ test('tool: recall_search searches with the page\'s filters, bounded, and marks 
     assert.equal(asked[2][1].kind, undefined);
     await assert.rejects(spec.execute({}), /Give words to search for in query, or a result id in open\./);
     await assert.rejects(toolSpec({ ask: async () => ({}), refusal: () => 'Recall is switched off.' }).execute({ query: 'x' }), /Recall is switched off\./);
+    // A session whose title alone has the words: counted apart, and said to be so, so the agent never takes its first turn for the place.
+    const titled = searchText({ text: 'heron', filters: {}, total: 2, sessions: 2, titled: 1, results: [RESULT(1), RESULT(3, { id: '3.1', turn: 1, snippet: '', hits: 0, others: [], titleOnly: true })] }, { limit: 8 });
+    assert.match(titled, /^Recall found 2 matching turns in 2 sessions or files, and 1 session or file whose title alone has the words, for “heron”; the best 2 below\./);
+    assert.match(titled, /2\. “Session 3” \(DSH session, turn 1 [^\n]*\)\n {3}Asked: How do we deploy\?\n {3}Only its title has the words; this is its first turn\.\n {3}id 3\.1/);
+    assert.doesNotMatch(titled.split('2. ')[1], /Also matches|Match:/);
+    assert.match(searchText({ text: 'heron', filters: {}, total: 4200, sessions: 6, sessionsMore: true, cut: 'cap', looked: 4000, results: [RESULT(1)] }, { limit: 8 }),
+        /the best 1 below\. These are the sessions and files of its 4000 best-matching turns: more words or a filter find others\. Text from past sessions/);
+    const onlyTitled = searchText({ text: 'kestrel', filters: {}, total: 0, sessions: 0, titled: 1, results: [RESULT(4, { kind: 'handoff', turn: 1, snippet: '', hits: 0, others: [], titleOnly: true, label: 'Goal', line: 4 })] }, { limit: 8 });
+    assert.match(onlyTitled, /^Recall found no turn that says “kestrel”, only 1 session or file whose title alone has the words; the best 1 below\./);
+    assert.match(onlyTitled, /Only its title has the words; this is its first section\./);
 });
 
 test('tool: a whole search answer stays within its bound; one turn in full is cut to its limits', async () => {

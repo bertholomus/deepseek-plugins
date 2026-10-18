@@ -16,12 +16,21 @@
  * @module dsh-plugin-recall/store
  */
 import { chmodSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { plainText } from './plain.js';
 
 /** Bump when the tables change: an index of another version is built again. */
 export const SCHEMA_VERSION = 3;
 
 /** bm25 weights of the columns: title, prompt, reply, tools. */
 const WEIGHTS = [4.0, 2.0, 1.0, 0.7];
+/**
+ * The same without the title: a row's own text. Every row of a file holds
+ * its file's title, so a word only in the title matches every turn of it;
+ * with the title's weight 0 such a row scores exactly 0 (bm25 adds nothing
+ * for a word it does not find in a weighted column), and a row whose own
+ * text has a hit scores below 0.
+ */
+const OWN_WEIGHTS = [0, 2.0, 1.0, 0.7];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (
@@ -317,30 +326,48 @@ export class Store {
 
     /**
      * The best-matching rows for an FTS5 query (or the newest rows with no
-     * query), at most `cap`, with their file's facts.
+     * query), at most `cap`, with their file's facts. Each row has `own`,
+     * its score on its own text (below 0 when its request, reply or tools
+     * say the words; 0 when only its file's title does), and `score`, on
+     * its title too (below `own` when the title says some of them). Best
+     * first: the rows whose own text matches come first, by `own`, then the
+     * rows that match by their title alone. Newest first: by time (the
+     * engine puts the rows that say the words first).
      * @param {{ match?: string, sort?: 'best'|'newest', cap?: number, filters?: object }} q
      */
     candidates({ match = '', sort = 'best', cap = 400, filters = {} }) {
         const w = Store.where(filters);
         const cols = 'd.id, d.file, d.turn, d.seq, d.time, d.done, d.kind, d.folder, d.model, d.label, d.line';
         if (!match) {
-            return this.db.prepare(`SELECT ${cols}, 0 AS score FROM docs d WHERE 1 = 1${w.sql} ORDER BY d.time DESC LIMIT ?`).all(...w.args, cap);
+            return this.db.prepare(`SELECT ${cols}, -1 AS own, 0 AS score FROM docs d WHERE 1 = 1${w.sql} ORDER BY d.time DESC LIMIT ?`).all(...w.args, cap);
         }
-        const order = sort === 'newest' ? 'd.time DESC' : 'score';
+        // Only what the order needs is scored for every matching row: SQLite scores the other column for the rows
+        // it keeps (sorting newest first by own text too took 45 ms instead of 15 on 10k sessions).
+        const order = sort === 'newest' ? 'd.time DESC' : 'own';
         // CROSS JOIN keeps the full-text match as the outer loop: led by a filter's index instead (kind and date,
         // say), SQLite would run the match again for every row the filter lets through (8.7 s instead of 19 ms on
         // 10k sessions, measured by scripts/recall-bench.mjs).
-        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${WEIGHTS.join(', ')}) AS score FROM fts CROSS JOIN docs d ON d.id = fts.rowid
-            WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
+        return this.db.prepare(`SELECT ${cols}, bm25(fts, ${OWN_WEIGHTS.join(', ')}) AS own, bm25(fts, ${WEIGHTS.join(', ')}) AS score
+            FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
     }
 
-    /** How many rows match, counting up to `cap` (more is said as "cap+"). */
+    /**
+     * How many rows match an FTS5 query (the engine gives query.js's `own`,
+     * so a row that matches only by its file's title is not counted), or
+     * how many rows there are with no query, counting up to `cap` (more is
+     * said as "cap+").
+     */
     count({ match = '', filters = {}, cap = 5000 }) {
         const w = Store.where(filters);
         const inner = match
             ? `SELECT 1 FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} LIMIT ?`
             : `SELECT 1 FROM docs d WHERE 1 = 1${w.sql} LIMIT ?`;
         return this.db.prepare(`SELECT count(*) AS n FROM (${inner})`).get(...(match ? [match] : []), ...w.args, cap + 1).n;
+    }
+
+    /** A file's first row (where a file that matches by its title alone opens). */
+    firstRow(fileId) {
+        return this.sql('SELECT id, file, turn, seq, time, done, kind, folder, model, label, line FROM docs WHERE file = ? ORDER BY turn LIMIT 1').get(fileId);
     }
 
     /**
@@ -358,7 +385,7 @@ export class Store {
             FROM fts WHERE fts MATCH ? AND rowid IN (${marks})`).all(match, ...ids);
         for (const r of rows) {
             const best = [r.reply, r.tools, r.prompt, r.title].find((text) => typeof text === 'string' && text.includes('\u0002'));
-            out.set(r.id, best ?? '');
+            out.set(r.id, plainText(best ?? ''));
         }
         return out;
     }
@@ -368,7 +395,7 @@ export class Store {
         const out = new Map();
         if (ids.length === 0) return out;
         const marks = ids.map(() => '?').join(', ');
-        for (const r of this.db.prepare(`SELECT rowid AS id, substr(prompt, 1, ?) AS text FROM fts WHERE rowid IN (${marks})`).all(chars, ...ids)) out.set(r.id, r.text);
+        for (const r of this.db.prepare(`SELECT rowid AS id, substr(prompt, 1, ?) AS text FROM fts WHERE rowid IN (${marks})`).all(chars, ...ids)) out.set(r.id, plainText(r.text));
         return out;
     }
 

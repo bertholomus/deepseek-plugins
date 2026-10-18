@@ -1187,6 +1187,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return r?.kind === 'transcript' ? 'Untitled transcript' : 'Untitled session';
         }
         const ownSession = (r) => r?.kind === 'session' && r.own === true && typeof r.sessionId === 'string' && r.sessionId !== '';
+        /** A result's turn in words, for a button's name: “Long session”, turn 2 (section 2 of a note). */
+        const turnName = (r, turn = r.turn) => `${quoted(titleOf(r), 60)}, ${r.kind === 'handoff' ? 'section' : 'turn'} ${turn}`;
+        /** What pressing a result does, named with it: "Open “Long session” at turn 2", or "Read “Notes”, section 2 here". */
+        const openName = (r, turn = r.turn, where = 'here') => (ownSession(r) ? `Open ${quoted(titleOf(r), 60)} at turn ${turn}` : `Read ${turnName(r, turn)} ${where}`);
         /** Where a result is in its file: its turn, or its note's section and line. */
         function placeOf(r) {
             if (r.kind === 'handoff') return [r.label && r.label !== r.title ? `section ${quoted(r.label, 40)}` : 'its first section', Number.isFinite(r.line) ? `line ${r.line}` : ''].filter(Boolean).join(', ');
@@ -1217,11 +1221,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** "120 matching turns in 34 sessions and files · 18 ms". */
         function countLine(found, kind) {
             if (!found) return '';
-            const turns = `${count(found.total)}${found.totalMore ? '+' : ''} matching ${found.total === 1 && !found.totalMore ? 'turn' : 'turns'}`;
             const [one, many] = KIND_PLURAL[kind] ?? ['session or file', 'sessions and files'];
-            const where = `${count(found.sessions)}${found.sessionsMore ? '+' : ''} ${found.sessions === 1 && !found.sessionsMore ? one : many}`;
             const took = Number.isFinite(found.took) ? ` · ${found.took < 1 ? '<1' : Math.round(found.took)} ms` : '';
-            return `${turns} in ${where}${took}`;
+            // Sessions whose title alone has the words: counted apart, as no turn of theirs says them.
+            const titled = found.titled > 0 ? `${count(found.titled)}${found.titledMore ? '+' : ''}` : '';
+            const single = found.titled === 1 && !found.titledMore;
+            if (titled && found.total === 0 && !found.totalMore) return `No turn says it; ${titled} ${single ? one : many} ${single ? 'matches' : 'match'} by title only${took}`;
+            const turns = `${count(found.total)}${found.totalMore ? '+' : ''} matching ${found.total === 1 && !found.totalMore ? 'turn' : 'turns'}`;
+            const where = `${count(found.sessions)}${found.sessionsMore ? '+' : ''} ${found.sessions === 1 && !found.sessionsMore ? one : many}`;
+            return `${turns} in ${where}${titled ? `, and ${titled} more by title only` : ''}${took}`;
+        }
+
+        /** Where a list stops before its end: at its 1,000th result, or at the files of the turns a search looks through. */
+        function endLine(found, shown) {
+            if (found?.cut === 'length') return `The list stops at ${plural(shown, 'result')}. Add a word or a filter to find others.`;
+            const turns = !found?.text?.trim() ? 'newest turns' : found.sort === 'newest' ? 'newest matching turns' : 'best-matching turns';
+            return `These are the sessions and files of the ${count(found?.looked ?? 0)} ${turns}. Add a word or a filter to find others.`;
         }
 
         // ── Shared state ──────────────────────────────────────────────
@@ -1332,9 +1347,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 more() {
                     return search({ offset: store.get().results.length });
                 },
-                /** Show one turn or note section in full, in the page's reading view. */
+                /**
+                 * Show one turn or note section in full, in the page's reading view. `from` is the control that
+                 * opened it (a selector), where Back puts the focus again; Turn before and after pass it on.
+                 */
                 read(id, from) {
-                    if (typeof id === 'string' && /^\d{1,12}\.\d{1,9}$/.test(id)) patch({ reading: { id, from } });
+                    if (typeof id === 'string' && /^\d{1,12}\.\d{1,9}$/.test(id)) patch({ reading: { id, from: typeof from === 'string' ? from : undefined } });
                 },
                 closeReading() {
                     patch({ reading: undefined });
@@ -1532,17 +1550,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** Open a result: a session of this DSH at its turn, anything else in Recall's reading view. */
-        function openResult(r, { turn = r.turn, seq = r.seq, query = finder.store.get().query.text, page = false } = {}) {
+        function openResult(r, { turn = r.turn, seq = r.seq, query = finder.store.get().query.text, page = false, from } = {}) {
             const id = `${r.file}.${turn}`;
             if (ownSession(r)) {
                 void openAt({ sessionId: r.sessionId, turn, seq, query }).then((opened) => {
                     if (opened) return;
-                    finder.read(id);
+                    finder.read(id, from);
                     if (page) views.openPage();
                 });
                 return;
             }
-            finder.read(id);
+            finder.read(id, from);
             if (page) views.openPage();
         }
 
@@ -1773,24 +1791,26 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         type: 'button',
                         className: `${P}-open`,
                         'data-recall-open': id,
-                        title: own ? 'Open the session at this turn' : 'Read this here',
-                        onClick: () => openResult(r),
+                        'aria-label': openName(r),
+                        onClick: () => openResult(r, { from: `[data-recall-open="${id}"]` }),
                     }, titleOf(r)),
                     h('div', { className: `${P}-meta` }, metaParts(r, home).join(' · '), r.time ? ' · ' : '', r.time ? h(kit.TimeText, { at: r.time }) : null),
                     r.snippet ? h('p', { className: `${P}-snippet` }, ...snippetParts(r.snippet)) : null,
+                    r.titleOnly ? h('p', { className: `${P}-asked`, 'data-recall-title-only': '' }, `Only its title matches: it opens at its first ${r.kind === 'handoff' ? 'section' : 'turn'}.`) : null,
                     asked ? h('p', { className: `${P}-asked` }, `Asked: ${asked}`) : null,
                     others.length > 0 ? h('div', { className: `${P}-others` },
-                        h('span', null, r.kind === 'handoff' ? `${plural(rest, 'other section')} of this note match:` : `${plural(rest, 'other turn')} here match${rest === 1 ? 'es' : ''}:`),
+                        h('span', null, `${plural(rest, r.kind === 'handoff' ? 'other section' : 'other turn')} ${r.kind === 'handoff' ? 'of this note' : 'here'} ${rest === 1 ? 'matches' : 'match'}:`),
                         ...others.map((o) => h('button', {
                             key: o.turn,
                             type: 'button',
                             className: `${P}-link`,
                             'data-recall-other': `${r.file}.${o.turn}`,
-                            onClick: () => openResult(r, { turn: o.turn, seq: o.seq }),
+                            'aria-label': openName(r, o.turn),
+                            onClick: () => openResult(r, { turn: o.turn, seq: o.seq, from: `[data-recall-other="${r.file}.${o.turn}"]` }),
                         }, r.kind === 'handoff' ? `section ${o.turn}` : `turn ${o.turn}`)),
                         rest > others.length ? h('span', null, `and ${count(rest - others.length)} more`) : null) : null),
                 own ? h('div', { className: `${P}-item-side` },
-                    h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => finder.read(id), 'data-recall-peek': id }, 'Read here')) : null);
+                    h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': `Read ${turnName(r)} here`, onClick: () => finder.read(id, `[data-recall-peek="${id}"]`), 'data-recall-peek': id }, 'Read here')) : null);
         }
 
         /** One turn or note section in full, with the turns beside it, and the way into its session. */
@@ -1816,7 +1836,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const t = state.t;
             const note = t.kind === 'handoff';
             const own = ownSession(t);
-            const go = (n) => finder.read(`${t.file}.${n}`);
+            const go = (n) => finder.read(`${t.file}.${n}`, finder.store.get().reading?.from);
             const where = own ? '' : `${note || t.kind === 'transcript' ? 'File' : 'Session file'}: ${homeless(t.path, home)}${t.line ? `, line ${t.line}` : ''}`;
             return h('div', { className: `${P}-read`, 'data-recall-reading': id },
                 back,
@@ -1884,9 +1904,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const kinds = new Set((data.index?.roots ?? []).map((r) => r.kind)).size;
             const reading = state.reading;
             const backToList = () => {
-                const from = reading?.id;
+                const { from, id } = reading ?? {};
                 finder.closeReading();
-                setTimeout(() => { windowDoc()?.querySelector?.(`[data-recall-open="${from}"]`)?.focus?.(); }, 0);
+                setTimeout(() => {
+                    const doc = windowDoc();
+                    const target = (from && doc?.querySelector?.(from)) || doc?.querySelector?.(`[data-recall-open="${id}"]`) || input.current;
+                    target?.focus?.();
+                }, 0);
             };
             const newer = q.text.trim() && state.turnsAt !== undefined && turns > state.turnsAt && !state.loading;
             let body;
@@ -1902,8 +1926,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         state.loading ? ' · searching…' : ''),
                     state.problem ? h(kit.ErrorLine, { key: 'error', lead: 'Not searched', text: state.problem, onRetry: () => void finder.search({ turns }) }) : null,
                     h('ul', { key: 'list', className: `${P}-results`, 'aria-label': 'Results' }, ...state.results.map((r) => h(ResultRow, { key: `${r.file}.${r.turn}`, r, home }))),
-                    state.more || newer ? h('div', { key: 'more', className: `${P}-more` },
+                    state.more || newer || (state.found?.cut && !state.loading) ? h('div', { key: 'more', className: `${P}-more` },
                         state.more ? h(ui.Button, { variant: 'outline', size: 'sm', disabled: state.loading, onClick: () => void finder.more(), 'data-recall-more': '' }, 'Show more results') : null,
+                        !state.more && state.found?.cut && !state.loading ? h('span', { className: `${P}-meta`, 'data-recall-end': state.found.cut }, endLine(state.found, state.results.length)) : null,
                         newer ? h('span', { className: `${P}-meta` }, 'Recall has read more since this search. ', h('button', { type: 'button', className: `${P}-link`, onClick: () => void finder.search({ turns }) }, 'Search again')) : null) : null,
                 ];
             }
@@ -2131,6 +2156,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function doneTitle(view, a) {
             if (view?.kind === 'turn') return `Read a past turn: ${quoted(titleOf(view.turn), 50)}`;
             const q = view?.query || a.query;
+            if ((!Number.isFinite(view?.total) || view.total === 0) && view?.titled > 0) return `Searched past work for ${quoted(q, 50)}: ${plural(view.titled, 'session or file', 'sessions and files')} by title only`;
             if (!Number.isFinite(view?.total) || view.total === 0) return `Searched past work for ${quoted(q, 50)}: nothing found`;
             return `Searched past work for ${quoted(q, 50)}: ${count(view.total)}${view.totalMore ? '+' : ''} ${view.total === 1 && !view.totalMore ? 'turn' : 'turns'} in ${plural(view.sessions ?? 0, 'session or file', 'sessions and files')}`;
         }
@@ -2160,7 +2186,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         h('div', { className: `${P}-tool-title` }, titleOf(r)),
                         h('div', { className: `${P}-tool-meta` }, [...metaParts(r, home), kit.timeText(r.time)].filter(Boolean).join(' · ')),
                         r.snippet ? h('p', { className: `${P}-tool-snippet` }, ...snippetParts(r.snippet)) : null),
-                    h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => openResult(r, { query: view.query, page: true }), 'data-recall-tool-open': `${r.file}.${r.turn}` }, ownSession(r) ? 'Open' : 'Read')))),
+                    h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': openName(r, r.turn, 'in Recall'), onClick: () => openResult(r, { query: view.query, page: true }), 'data-recall-tool-open': `${r.file}.${r.turn}` }, ownSession(r) ? 'Open' : 'Read')))),
                 h('div', { className: `${P}-tool-foot` },
                     h('button', { type: 'button', className: `${P}-link`, onClick: openSearch, 'data-recall-tool-page': '' }, 'Search this in Recall')));
         }
@@ -2313,7 +2339,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, TONE, finder, jump, views,
-            folderList, folderSpec, specOf, homeless, titleOf, metaParts, snippetParts, askedLine, countLine, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
+            folderList, folderSpec, specOf, homeless, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
             openAt, openResult, endJump, land, landWithoutMark, applySettings,
             RecallPage, RecallMark, RecallIcon, RecallToolView, SettledToolView, PreparingToolView, SearchCard, ResultRow, ReadingView, IndexCard, HistoryCard, HeaderCard, ThreadState, Filters, FilterMenu, NoResults,
         };

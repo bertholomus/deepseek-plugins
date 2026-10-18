@@ -5,10 +5,15 @@
  * run it in their own thread.
  *
  * Search: the words become an FTS5 query (lib/query.js); the best 400 or
- * so matching turns are ranked by bm25 over title, prompt, reply and tools,
- * lifted a little when recent, and grouped by session (or file), so one
- * long session does not fill the page: each result is a session's best
- * turn, with how many of its other turns match and which.
+ * so matching turns are ranked by bm25 over their own text (the request,
+ * the reply, the tools), lifted a fifth when their session's title says
+ * the words too and a little when recent, and grouped by session (or
+ * file), so one long session does not fill the page: each result is a
+ * session's best turn, with how many of its other turns match and which.
+ * A title's words are in every turn of its session, so a turn that matches
+ * by its title alone is never a hit of its own: a session that matches
+ * only by its title is one result, after every turn that says the words,
+ * at its first turn.
  *
  * @module dsh-plugin-recall/engine
  */
@@ -36,6 +41,10 @@ export function folderOf(value, home = homedir()) {
 
 /** How much more a recent turn counts: up to 30% for today, about half that after two weeks. */
 const lift = (time, now) => 1 + 0.3 * Math.exp(-Math.max(0, now - time) / (20 * DAY));
+/** How much more a turn that says the words counts when its session's title says them too. */
+const TITLE_LIFT = 1.2;
+/** A candidate row whose own text matches (its request, reply or tools say the words), not only its file's title. */
+const ownHit = (r) => r.own < 0;
 
 /** A transcript has no end-of-turn mark: its last turn is still running only while the transcript was written to lately. */
 export const TRANSCRIPT_QUIET_MS = 10 * 60_000;
@@ -150,42 +159,77 @@ export class Engine {
         const sort = q.sort === 'newest' ? 'newest' : 'best';
         const base = { text, words: parsed.words, excluded: parsed.excluded, sort, filters: { ...filters, from: span.from ?? null, to: span.to ?? null } };
         if (text.trim() && !parsed.match) return { ...base, total: 0, totalMore: false, sessions: 0, results: [], more: false, took: this.took(started), nothing: 'no-words' };
-        const cap = Math.min(SEARCH_LIMITS.candidates, Math.max(400, (offset + limit) * 10));
-        const rows = this.store.candidates({ match: parsed.match, sort: parsed.match ? sort : 'newest', cap, filters });
-        const now = this.now();
-        if (parsed.match && sort === 'best') {
-            for (const r of rows) r.rank = r.score * lift(r.time, now);
-            rows.sort((a, b) => a.rank - b.rank);
+        const look = (cap) => {
+            const rows = this.store.candidates({ match: parsed.match, sort: parsed.match ? sort : 'newest', cap, filters });
+            return { rows, cap, ordered: this.groupsOf(rows, { parsed, sort, file }) };
+        };
+        let found = look(Math.min(SEARCH_LIMITS.candidates, Math.max(400, (offset + limit) * 10)));
+        // A few sessions hold most of the matching turns: look through more of them before a page comes up short.
+        if (found.rows.length >= found.cap && found.ordered.length <= offset + limit && found.cap < SEARCH_LIMITS.candidates) found = look(SEARCH_LIMITS.candidates);
+        const { rows, cap, ordered } = found;
+        const capped = rows.length >= cap;
+        // A list goes as far as its 1,000th result, and as far as the files of the turns it looked through.
+        const end = Math.min(offset + limit, SEARCH_LIMITS.offset);
+        const page = ordered.slice(offset, end);
+        const more = ordered.length > end && end < SEARCH_LIMITS.offset;
+        const cut = more ? undefined : ordered.length > end ? 'length' : capped ? 'cap' : undefined;
+        // A file that matches by its title alone opens at its first turn: no turn of it says the words.
+        for (const g of page) {
+            if (g.titleOnly) g.best = this.store.firstRow(g.best.file) ?? g.best;
         }
-        // One result per file: its best turn, with its other matching turns.
+        const ids = page.filter((g) => !g.titleOnly).map((g) => g.best.id);
+        const snippets = this.store.snippets(parsed.match, ids);
+        const asked = this.store.asked(page.map((g) => g.best.id));
+        const files = this.store.filesByIds([...new Set(page.map((g) => g.best.file))]);
+        // Every row that says the words is here unless the cap cut them short: then the index counts them.
+        const all = !capped || (sort === 'best' && parsed.match && !ownHit(rows.at(-1)));
+        const total = all ? rows.filter(ownHit).length : this.store.count({ match: parsed.own, filters, cap: SEARCH_LIMITS.count });
+        const results = page.map((g) => this.resultOf(g, files.get(g.best.file), snippets.get(g.best.id), asked.get(g.best.id)));
+        const titled = ordered.filter((g) => g.titleOnly).length;
+        return {
+            ...base,
+            total: Math.min(total, SEARCH_LIMITS.count),
+            totalMore: total > SEARCH_LIMITS.count,
+            sessions: ordered.length - titled,
+            sessionsMore: capped,
+            titled,
+            titledMore: capped && titled > 0,
+            results,
+            more,
+            ...(cut ? { cut, looked: cap } : {}),
+            took: this.took(started),
+        };
+    }
+
+    /**
+     * The candidate rows ranked and sorted (the rows that say the words first, best or newest first; then those
+     * that match by their file's title alone), as one group per file: its best turn that says the words, with its
+     * other turns that do. Within one file (`file`), one group per turn.
+     */
+    groupsOf(rows, { parsed, sort, file }) {
+        if (parsed.match && sort === 'best') {
+            const now = this.now();
+            for (const r of rows) r.rank = (ownHit(r) ? r.own * (r.score < r.own ? TITLE_LIFT : 1) : r.score) * lift(r.time, now);
+        }
+        if (parsed.match) {
+            const byTime = (a, b) => b.time - a.time || b.id - a.id;
+            rows.sort((a, b) => (ownHit(a) !== ownHit(b) ? (ownHit(a) ? -1 : 1) : sort === 'best' ? a.rank - b.rank : byTime(a, b)));
+        }
+        // A file that matches only by its title is one result, after all of those.
         const groups = new Map();
         for (const r of rows) {
-            const key = file === undefined ? r.file : r.id;
+            const own = ownHit(r);
+            const key = file === undefined ? r.file : own ? r.id : `title:${r.file}`;
             const g = groups.get(key);
-            if (!g) groups.set(key, { best: r, hits: 1, others: [] });
-            else {
+            if (!g) groups.set(key, own ? { best: r, hits: 1, others: [] } : { best: r, hits: 0, others: [], titleOnly: true });
+            else if (own) {
                 g.hits += 1;
                 if (g.others.length < SEARCH_LIMITS.others) g.others.push({ turn: r.turn, seq: r.seq });
             }
         }
         const ordered = [...groups.values()];
-        const page = ordered.slice(offset, offset + limit);
-        const ids = page.map((g) => g.best.id);
-        const snippets = this.store.snippets(parsed.match, ids);
-        const asked = this.store.asked(ids);
-        const files = this.store.filesByIds([...new Set(page.map((g) => g.best.file))]);
-        const total = this.store.count({ match: parsed.match, filters, cap: SEARCH_LIMITS.count });
-        const results = page.map((g) => this.resultOf(g, files.get(g.best.file), snippets.get(g.best.id), asked.get(g.best.id)));
-        return {
-            ...base,
-            total: Math.min(total, SEARCH_LIMITS.count),
-            totalMore: total > SEARCH_LIMITS.count,
-            sessions: groups.size,
-            sessionsMore: rows.length >= cap,
-            results,
-            more: ordered.length > offset + limit,
-            took: this.took(started),
-        };
+        // One file's turns (the reading view's list): its title alone counts only when no turn says the words.
+        return file !== undefined && ordered.some((g) => !g.titleOnly) ? ordered.filter((g) => !g.titleOnly) : ordered;
     }
 
     took(started) {
@@ -214,6 +258,7 @@ export class Engine {
             asked: String(asked ?? '').replace(/\s+/g, ' ').trim(),
             hits: g.hits,
             others: g.others.sort((a, b) => a.turn - b.turn),
+            ...(g.titleOnly ? { titleOnly: true } : {}),
         };
     }
 
