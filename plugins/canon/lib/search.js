@@ -45,6 +45,13 @@ export const RARE = 0.06;
  */
 export const SHARE_TITLED = 1 / 3;
 export const SHARE_BODY = 0.45;
+/**
+ * A coding request fits a note that shares this many distinctive words with
+ * it whatever their share, and one more when the note is not of a project
+ * the prompt or the session names: pasted output ("…/overlay2/3fd9c1/…: no
+ * space left on device") thins the share, not the words in common.
+ */
+export const MANY_DISTINCT = 4;
 /** The lift for a note of the session's repo, and of the folder it sits in. */
 export const REPO_BOOST = 1.6;
 export const PARENT_BOOST = 1.2;
@@ -129,6 +136,19 @@ export function questionsOf(prompt) {
         .split(/\?+(?:\s+|$)|[,;]\s*(?:and|or|also|plus)\s+(?=(?:why|what|when|where|which|who|whose|how)\b)/i)
         .map((part) => part.trim())
         .filter(Boolean);
+}
+
+/**
+ * The sentences of a prompt that ask a question and ask for no work on code
+ * ("Add a field to the /v2/projects response. Does that need a v3?" asks
+ * "Does that need a v3?").
+ * @param {string} prompt
+ */
+export function asksOf(prompt) {
+    return String(prompt ?? '')
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => sentence.endsWith('?') && !isCodingRequest(sentence));
 }
 
 /** Words written with a capital that name no thing: "I'm", days and months. */
@@ -389,7 +409,11 @@ export class Index {
      * It also fits, whatever its share, when what the request's first work
      * verb acts on is in the note's title and the note is a project's the
      * prompt or the session names ("Write a migration for the ledger…":
-     * Schema migrations).
+     * Schema migrations), and when it shares four distinctive words with the
+     * prompt, five when it is not a note of a project the prompt or the
+     * session names: pasted output thins the share, not the words in common
+     * ("…/overlay2/3fd9c1/…: no space left on device. Clean it up": Disk
+     * full on a build agent).
      *
      * A note that belongs to a project (its `project` or `repo`, or its
      * folder under Projects/) is left out when the session's folder or the
@@ -398,7 +422,12 @@ export class Index {
      * also keeps the note that best answers each question asked alone
      * ("When does on-call hand over, and why did we choose NATS?"), by the
      * whole prompt's rules, which in a coding request needs its share of
-     * that question only.
+     * that question only. A coding request that asks a question of its own
+     * ("Add a created_by field to the /v2/projects response. Does that need
+     * a v3, or can it go into v2?") also keeps the note that best answers
+     * that question, asked alone by a question's rules, when the note is of
+     * a project the request or the session names and the whole request
+     * finds it short only on the share.
      * @param {string} prompt
      * @param {{ folder?: { repo: string, parent: string }, limit?: number }} [options]
      */
@@ -408,6 +437,16 @@ export class Index {
         const best = scored.find((r) => r.fits)?.score ?? 0;
         const leads = new Set();
         const questions = questionsOf(prompt);
+        // A coding request's own question ("…Does that need a v3?"), asked alone by a question's rules: its best
+        // note, when that note is of a project the request or the session names ("Any idea what's wrong?" is not).
+        if (coding) {
+            const asked = new Set();
+            for (const question of asksOf(prompt).slice(0, MAX_QUESTIONS)) {
+                const lead = this.rank(question, folder, false).scored.find((r) => r.fits && r.score >= MIN_SCORE);
+                if (lead) asked.add(lead.path);
+            }
+            for (const r of scored) if (asked.has(r.path) && r.named) leads.add(r.path);
+        }
         if (questions.length > 1) {
             for (const question of questions.slice(0, MAX_QUESTIONS)) {
                 const lead = this.rank(question, folder, coding).scored.find((r) => r.fits && r.score >= MIN_SCORE);
@@ -557,6 +596,8 @@ export class Index {
                 else if (share < (titled ? SHARE_TITLED : SHARE_BODY)) why = 'part';
                 // "Write a migration…" in tide-ledger's folder, or "…for the ledger", works on what its Schema migrations note is about.
                 if (why === 'part' && object.length && own.some((name) => context.has(name)) && terms(hit.doc.title).some((t) => object.includes(t))) why = '';
+                // A pasted log thins the share, not the words in common: many distinctive ones fit whatever their share.
+                if (why === 'part' && hit.distinct >= MANY_DISTINCT + (named ? 0 : 1)) why = '';
             } else {
                 const lone = hit.topics === 1;
                 const df = lone ? this.notesWith(hit.lone) : 0;

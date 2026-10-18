@@ -3,7 +3,8 @@
  * fixture vault (frozen: the sets' answers are its paths), with Canon's own
  * recall exactly as a turn runs it (test/helpers/canon-relevance.mjs).
  *
- * The dev set is tuned on and held to the figures it reached. The two
+ * The dev set (dev.json, and dev-fresh.json by two fresh writers) is tuned
+ * on and held to the figures it reached. The two
  * hold-outs are written by fresh writers who never saw Canon's code or the
  * dev set, measured and never tuned on: the first (no kinds) is held to the
  * four floors of OPEN-QUESTIONS #29, the second (with kinds) to those and
@@ -13,14 +14,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { DEV, FLOORS, HOLDOUT, HOLDOUT2, belowFloors, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
+import { FLOORS, HOLDOUT, HOLDOUT2, belowFloors, loadDev, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
 import { isCodingRequest } from '../plugins/canon/lib/text.js';
 
 /**
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 517, inBlock: 531, extra: 198, noBlock: 321, coding: 235 });
+const DEV_REACHED = Object.freeze({ first: 540, inBlock: 554, extra: 207, noBlock: 367, coding: 274 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
@@ -36,7 +37,7 @@ function figures(name, m) {
 }
 
 test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and questions and everyday coding requests of the builder\'s own; every answer an active note', async () => {
-    const set = loadSet(DEV, { kinds: true });
+    const set = loadDev();
     const of = (kind) => set.filter((e) => e.kind === kind);
     assert.ok(of('answers').length >= 200, 'at least 200 prompts a note answers');
     assert.ok(of('project').length >= 30, 'at least 30 questions about a project that no note answers');
@@ -84,6 +85,12 @@ test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and quest
     // and prompts no note answers in those forms (zs01, …).
     assert.ok(set.filter((e) => /^zr\d+$/.test(e.id) && e.kind === 'answers').length >= 40, 'orders, statements, unknown names, words alone');
     assert.ok(set.filter((e) => /^zs\d+$/.test(e.id) && e.kind !== 'answers').length >= 10, 'and prompts no note answers in them');
+    // And two fresh writers' prompts (he-01, hf-01, …; dev-fresh.json, OPEN-QUESTIONS #38), who read only the frozen
+    // vault and never saw Canon: everyday coding requests most of them, pasted errors and logs, tasks told as work to
+    // do; measured once before they were tuned on (README).
+    const fresh = set.filter((e) => /^h[ef]-\d+$/.test(e.id));
+    assert.ok(fresh.filter((e) => e.kind === 'answers').length >= 24, 'the fresh writers\' prompts a note answers');
+    assert.ok(fresh.filter((e) => e.kind === 'coding').length >= 40, 'and their everyday coding requests');
     // No prompt twice in one folder.
     const keys = set.map((e) => `${e.folder}\n${said(e.prompt)}`);
     assert.equal(new Set(keys).size, keys.length, 'a prompt repeats in its folder');
@@ -93,7 +100,7 @@ test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and quest
 });
 
 test('dev set: the figures reached are held (first note, an answering note in the block, notes that do not answer, no block, everyday coding requests)', async () => {
-    const m = await measure(loadSet(DEV, { kinds: true }));
+    const m = await measure(loadDev());
     const a = m.summary.answerable;
     const u = m.summary.unanswerable;
     const c = m.summary.coding;
@@ -107,7 +114,7 @@ test('dev set: the figures reached are held (first note, an answering note in th
 });
 
 test('the measure gives Canon only the prompt and the session\'s folder: the same blocks with every label taken away', async () => {
-    const set = loadSet(DEV, { kinds: true });
+    const set = loadDev();
     const bare = set.map((e, i) => ({ id: `x${i}`, folder: e.folder, prompt: e.prompt, answers: [] }));
     const [labelled, unlabelled] = [await measure(set), await measure(bare)];
     assert.deepEqual(unlabelled.rows.map((r) => r.got), labelled.rows.map((r) => r.got));
@@ -118,7 +125,7 @@ test('first hold-out: well formed and apart from the dev set (no prompt of it re
         t.skip('the first hold-out set is not there yet');
         return;
     }
-    const dev = new Set(loadSet(DEV).map((e) => said(e.prompt)));
+    const dev = new Set(loadDev().map((e) => said(e.prompt)));
     const repeats = loadSet(HOLDOUT).filter((e) => dev.has(said(e.prompt))).length;
     assert.equal(repeats, 0, `${repeats} of its prompts repeat a dev prompt`);
 });
@@ -140,7 +147,7 @@ test('second hold-out: well formed with kinds and apart from the dev set and the
         t.skip('the second hold-out set is not there yet');
         return;
     }
-    const earlier = new Set([...loadSet(DEV), ...(existsSync(HOLDOUT) ? loadSet(HOLDOUT) : [])].map((e) => said(e.prompt)));
+    const earlier = new Set([...loadDev(), ...(existsSync(HOLDOUT) ? loadSet(HOLDOUT) : [])].map((e) => said(e.prompt)));
     const repeats = loadSet(HOLDOUT2, { kinds: true }).filter((e) => earlier.has(said(e.prompt))).length;
     assert.equal(repeats, 0, `${repeats} of its prompts repeat a dev or first hold-out prompt`);
 });

@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
 import { ABOUT_THE_VAULT, EVERYDAY, distinctTerms, isCodingRequest, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
-import { Index, MIN_SCORE, SHARE_BODY, SHARE_TITLED, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
+import { Index, MANY_DISTINCT, MIN_SCORE, SHARE_BODY, SHARE_TITLED, asksOf, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, bestPassage, closedEntry, closedText, closedWhat, cut, folderProblem, paragraphs, plainText } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, buildBlock, entryBudget, notesThatFit, promptOf, summaryOf } from '../plugins/canon/lib/recall.js';
 import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
@@ -196,14 +196,17 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
     for (const prompt of ['Write a small helper that checks whether a request has a JSON body.', 'Can you add retries to the HTTP client?',
         'Please fix the failing test.', 'Why is my Docker image so large? Make it smaller.', 'The build fails with "x". Fix it.',
         'How can I make this SQL query faster?', 'Why does my regex match too much?', 'My Docker container exits right after it starts.',
-        'Write me a function that parses ISO dates.', 'Make us a regex that matches version strings.']) {
+        'Write me a function that parses ISO dates.', 'Make us a regex that matches version strings.',
+        // Pasted output that says where in the code it was: a stack trace, a traceback.
+        'getting this panic when i hit the export:\n\npanic: runtime error: invalid memory address\n\t/home/someone/src/api/internal/export/writer.go:57 +0x3c\n\nhow do i fix it',
+        'Traceback (most recent call last):\n  File "/opt/tools/report.py", line 57, in build_rows\nTypeError: can\'t compare offset-naive and offset-aware datetimes']) {
         assert.equal(isCodingRequest(prompt), true, prompt);
     }
     for (const prompt of ['Can I run a schema migration during the month-end close?', 'How do I add a feature flag?', 'Which ports does this service listen on?',
         'Our TLS certs expire next week; what\'s the procedure?', 'Tell me how to change the port the gateway listens on.', 'My laptop doesn\'t have Docker. Who do I ask?',
         'Restart the quartz node in zone b without dropping keys', 'Who is on call for quartz this week?',
         'Run me through a release, start to finish.', 'Read me the restore steps for the ledger.', 'Update us on the versioning rules.',
-        'Who owns this repo?', 'How do I run this app locally?']) {
+        'Who owns this repo?', 'How do I run this app locally?', 'The gateway answers on gateway.internal:8443; who owns it?']) {
         assert.equal(isCodingRequest(prompt), false, prompt);
     }
 });
@@ -632,6 +635,23 @@ test('search: a project\'s name is one word and a note needs another; words abou
     assert.equal(ask(migration, '/Users/someone/Elsewhere/scratch').others.find((o) => o.path === 'Projects/tide-ledger/Schema migrations.md')?.why, 'few');
     // The page says the two figures as they are.
     assert.deepEqual([SHARE_TITLED, SHARE_BODY], [1 / 3, 0.45], 'the page\'s words say "a third" and "45%"');
+    // Values and pasted output thin the share, not the words in common: four distinctive words fit a note of the
+    // session's project whatever their share ...
+    const bump = 'acme keeps hitting 429s on their nightly sync. bump their key (key_1234) to 250 req/s with bursts up to 500';
+    const limited = ask(bump, lantern).results[0];
+    assert.equal(limited?.path, 'Projects/lantern-api/Rate limits.md');
+    assert.ok(limited.share < SHARE_TITLED, `it carries ${limited.share}`);
+    // ... not from a folder of no project of the vault's, where a note needs five ...
+    assert.equal(ask(bump, '/Users/someone/code/scratch').others.find((o) => o.path === 'Projects/lantern-api/Rate limits.md')?.why, 'part');
+    // ... as a long paste of a full disk has with the runbook for it.
+    const full = 'the nightly build on ci-agent-07 died:\n\n```\nStep 4/9 : RUN npm ci\nfailed to register layer: write /var/lib/docker/overlay2/9e1b77/diff/usr/lib/node_modules/esbuild/bin/esbuild: no space left on device\nexit status 1\n```\n\ncan you clean it up so the queue moves';
+    const disk = ask(full, '/Users/someone/work/ci').results[0];
+    assert.equal(disk?.path, 'Runbooks/Disk full on a build agent.md');
+    assert.ok(disk.share < SHARE_TITLED, `it carries ${disk.share}`);
+    assert.equal(MANY_DISTINCT, 4, 'the page says "four" and "five"');
+    // Pasted output that says where in the code it was makes a coding request: a traceback finds no note.
+    const traceback = 'getting this when i run the report:\n\nTraceback (most recent call last):\n  File "/opt/tools/report.py", line 57, in build_rows\nTypeError: can\'t compare offset-naive and offset-aware datetimes\n\nwhats going on';
+    assert.deepEqual(ask(traceback, '/Users/someone/code/reports').results, []);
     // With a word beyond the name in the title, it is ("called" is not On-call's "call").
     assert.deepEqual(paths('What is the lantern team\'s mascot called?'), ['Misc/Lantern mascot.md']);
     // Words about the vault say where to look, not what about.
@@ -714,6 +734,16 @@ test('search: a session in a project\'s folder names that project; a prompt that
     assert.deepEqual(questionsOf(two), ['When does the lantern on-call rotation hand over', 'why did we choose NATS JetStream for the lantern job queue']);
     assert.deepEqual(questionsOf('Which port? And the health check? Thanks.'), ['Which port', 'And the health check', 'Thanks.']);
     assert.deepEqual(questionsOf('Restore the ledger, then tell me why it failed.'), ['Restore the ledger, then tell me why it failed.']);
+    // A coding request's own question is asked alone by a question's rules: its best note comes when it is of a
+    // project the request or the session names ...
+    const field = 'Add a created_by field to the /v2/projects response.';
+    const asks = `${field} Does that need a v3, or can it go into v2?`;
+    assert.deepEqual(asksOf(asks), ['Does that need a v3, or can it go into v2?']);
+    assert.deepEqual(asksOf('Can you add retries? Are three tries enough?'), ['Are three tries enough?'], 'a sentence that asks for work is no question of its own');
+    assert.deepEqual(paths(asks, '/Users/someone/Projects/lantern-api'), ['Decisions/2026-04 Lantern API versioning.md']);
+    assert.deepEqual(paths(field, '/Users/someone/Projects/lantern-api'), []);
+    // ... and not otherwise: Canon vault's list defines "Ideas" and says when something "goes wrong".
+    assert.deepEqual(paths('Write a function that pages through /v2/projects. Any idea what is wrong?', '/Users/someone/Projects/lantern-api'), []);
     const both = ask(two, '/Users/someone/Elsewhere/scratch').results;
     assert.deepEqual(both.map((r) => r.path), ['Decisions/2026-03 Lantern job queue on NATS JetStream.md', 'People/On-call.md']);
     assert.ok(both[1].score < both[0].score * 0.5, 'On-call is under half the best, kept as its question\'s best note');

@@ -44,6 +44,14 @@ export const VAULT = join(ROOT, 'test', 'fixtures', 'canon', 'vault');
 /** Where the sets live. */
 export const SETS = join(ROOT, 'test', 'fixtures', 'canon', 'relevance');
 export const DEV = join(SETS, 'dev.json');
+/**
+ * Dev prompts by two fresh writers who read only the frozen vault and never
+ * saw Canon (OPEN-QUESTIONS #38): part of the dev set from round 3,
+ * measured once before they were tuned on.
+ */
+export const DEV_FRESH = join(SETS, 'dev-fresh.json');
+/** The dev set's files: the dev measure reads them as one set. */
+export const DEV_FILES = Object.freeze([DEV, DEV_FRESH]);
 /** Written by fresh writers who never saw Canon's code or the dev set; measured once. */
 export const HOLDOUT = join(SETS, 'holdout.json');
 /** The second hold-out (OPEN-QUESTIONS #33), with everyday coding requests, from two more fresh writers. */
@@ -82,6 +90,20 @@ export function loadSet(file, { kinds = false } = {}) {
         if (typeof entry.prompt !== 'string' || entry.prompt.trim() === '') throw new Error(`${where} (${entry.id}): "prompt" must be text`);
         if (!Array.isArray(entry.answers) || entry.answers.some((a) => typeof a !== 'string')) throw new Error(`${where} (${entry.id}): "answers" must be a list of vault paths`);
         if (entry.kind === undefined ? kinds : !KINDS.includes(entry.kind)) throw new Error(`${where} (${entry.id}): "kind" must be one of ${KINDS.join(', ')}`);
+    }
+    return list;
+}
+
+/**
+ * The whole dev set: its files (DEV_FILES) as one list, every entry with a
+ * kind, no id in two of them.
+ */
+export function loadDev() {
+    const list = DEV_FILES.flatMap((file) => loadSet(file, { kinds: true }));
+    const ids = new Set();
+    for (const entry of list) {
+        if (ids.has(entry.id)) throw new Error(`the dev set's id ${entry.id} is used in two of its files`);
+        ids.add(entry.id);
     }
     return list;
 }

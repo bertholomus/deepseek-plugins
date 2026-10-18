@@ -268,17 +268,26 @@ function speaksOfCode(text) {
 const HEAD = /^([A-Za-z]+)(?:\s+(?:me|us)\b(\s+(?:through|on|in|about)\b)?)?/i;
 
 /**
+ * Where in the code a program's output says it was: a source file and a
+ * line ("writer.go:57", "src/list.js:14:22") or a traceback's line
+ * (`File "report.py", line 57`).
+ */
+const WHERE_IN_CODE = /[\w./-]\.(?:c|cc|cjs|cpp|cs|dart|ex|exs|go|h|java|js|jsx|kt|lua|mjs|php|py|rb|rs|scala|sh|svelte|swift|ts|tsx|vue):\d+\b|\bFile "[^"]+", line \d+/;
+
+/**
  * Whether a prompt is a coding request: one of its sentences starts with a
  * verb that asks for work on code (after "please", "can you" and the like),
- * or it speaks of code in front of the person ("Why does my regex match too
- * much?", "How can I make this SQL query faster?"). A question about how the
- * team works ("Can I run a migration during the close?") is not one, nor is
- * a request to be told ("Run me through a release").
+ * it speaks of code in front of the person ("Why does my regex match too
+ * much?", "How can I make this SQL query faster?"), or it pastes output that
+ * says where in the code it was (a stack trace, a failing test, a
+ * traceback: "writer.go:57"). A question about how the team works ("Can I
+ * run a migration during the close?") is not one, nor is a request to be
+ * told ("Run me through a release").
  * @param {string} prompt
  */
 export function isCodingRequest(prompt) {
     const text = String(prompt ?? '');
-    if (speaksOfCode(text)) return true;
+    if (speaksOfCode(text) || WHERE_IN_CODE.test(text)) return true;
     for (const sentence of text.split(/(?<=[.!?;:])\s+|\n+/)) {
         const head = sentence.trim().replace(LEAD_IN, '').match(HEAD);
         const first = head?.[1]?.toLowerCase();
