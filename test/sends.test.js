@@ -382,7 +382,7 @@ test('sends: the shell\'s words, quotes, here-documents and nested commands', ()
 });
 
 test('sends: a send that reaches only machines the user trusts is none, and every other send is named as before', () => {
-    const trustedHosts = ['nas.example', '100.64.0.7', '192.168.1.49'];
+    const trustedHosts = ['nas.example', '100.64.0.7', '192.0.2.49'];
     const trusting = (command, trustedSends = [], options = {}) => sendOf(command, { ...at, ...options, trustedHosts, trustedSends });
     // The brief's commands: no send with these trusted; with none trusted, the send they were. A copy from another
     // machine was none before either.
@@ -408,15 +408,15 @@ test('sends: a send that reaches only machines the user trusts is none, and ever
     // A name is matched on its machine alone, in any case: a user, a port, brackets and a path are left off.
     assert.deepEqual(['NAS.example', 'alex@100.64.0.7', 'nas:22', '[fd7a::1]:22', 'http://NAS:8080/x', 'fd7a::1', 'a b', '$NAS'].map(hostOf),
         ['nas.example', '100.64.0.7', 'nas', 'fd7a::1', 'nas', 'fd7a::1', '', '']);
-    for (const command of ['ssh NAS.EXAMPLE ls', 'ssh -p 2222 -l root nas.example ls', 'ssh ssh://alex@nas.example:22 ls', 'ssh -J 192.168.1.49 nas.example ls',
+    for (const command of ['ssh NAS.EXAMPLE ls', 'ssh -p 2222 -l root nas.example ls', 'ssh ssh://alex@nas.example:22 ls', 'ssh -J 192.0.2.49 nas.example ls',
         'ssh nas.example zfs list -o name,used', 'ssh nas.example ls -J jump.example.com', 'cat dump.sql | ssh nas.example "cat > /data/dump.sql"', 'NAS=nas.example; ssh "$NAS" df -h',
-        'scp -P 2222 -r dist alex@NAS.example:/data/www', 'scp nas.example:/data/a 192.168.1.49:/data/b', 'rsync -av dist/ nas.example:/data/x --chown=root:root',
+        'scp -P 2222 -r dist alex@NAS.example:/data/www', 'scp nas.example:/data/a 192.0.2.49:/data/b', 'rsync -av dist/ nas.example:/data/x --chown=root:root',
         'rsync -av -e "ssh -p 2222" dist/ nas.example:/srv/www/', 'rsync -av dist/ rsync://nas.example/www/', 'mosh nas.example', 'autossh -M 0 -fN nas.example',
-        'curl -X POST http://NAS.example:18780/v1/x', 'curl -sS -X POST -d @body.json 192.168.1.49:8080/v1/x', 'curl -x http://nas.example:3128 -X POST http://100.64.0.7/x',
+        'curl -X POST http://NAS.example:18780/v1/x', 'curl -sS -X POST -d @body.json 192.0.2.49:8080/v1/x', 'curl -x http://nas.example:3128 -X POST http://100.64.0.7/x',
         'wget --post-data=x http://nas.example/x', 'http POST nas.example:18780/v1/x a=b', 'bash -c "ssh nas.example ls"', './nas/deploy.sh', 'bash nas/deploy.sh']) {
         assert.equal(trusting(command), null, `trusted: ${command}`);
     }
-    assert.equal(trusting('Invoke-RestMethod -Method Post -Uri http://192.168.1.49:8080/v1/x', [], { shell: 'pwsh' }), null);
+    assert.equal(trusting('Invoke-RestMethod -Method Post -Uri http://192.0.2.49:8080/v1/x', [], { shell: 'pwsh' }), null);
     assert.equal(sendOf('ssh [fd7a::1] ls', { ...at, trustedHosts: ['[fd7a::1]:22'] }), null);
     // A script whose sends all reach a trusted machine says no more by its name; one that also sends elsewhere names that.
     assert.equal(sendOf('./nas/deploy.sh', at)?.what, 'runs ./nas/deploy.sh, which can copy files to nas.example (rsync)');
