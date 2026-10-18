@@ -32,9 +32,9 @@ const BUILD_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(build|build:\S+|compile|typ
 const LINT_CMD = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(lint|lint:\S+|format:check|fmt:check|check:format)\b|\b(eslint|ruff|flake8|pylint|mypy|pyright|golangci-lint|shellcheck|stylelint|rubocop|swiftlint|biome\s+(check|lint)|oxlint|phpstan|psalm)\b|\bprettier\s+(--check|-c)\b|\bblack\s+--check\b|\bcargo\s+(clippy|fmt\s+--check)\b|\bgofmt\s+-l\b|\b(bash|sh|zsh|dash|ksh)\s+-n\b|\bphp\s+-l\b|\b(ruby|perl)\s+-c\b|\bterraform\s+(validate|fmt\s+-{1,2}check)\b|\bnginx\s+-t\b|\b(yamllint|hadolint|actionlint|markdownlint(-cli2)?|ktlint|detekt|credo|standardrb|tflint|staticcheck|revive)\b|\bsqlfluff\s+lint\b|\bbuf\s+lint\b|\b(dart|flutter)\s+analyze\b/i;
 const CI_CMD = /\bgh\s+(run\s+(view|list|watch)|pr\s+(checks|status)|workflow\s+view)\b|\bgh\s+pr\s+view\b(?=[^|;&]*\b(?:statusCheckRollup|checks|mergeStateStatus)\b)|\bglab\s+ci\b|\bcircleci\b|\bbuildkite\b|\bcurl\b[^|;&]*\/(actions|checks|statuses|pipelines)\b/i;
 /** Where a command ships work: a repository, a package registry, or a running environment. */
-const PUSH_CMD = /\bgit\s+push\b|\bgh\s+pr\s+merge\b|\bgh-pages\b|\bgh\s+release\s+create\b/i;
+const PUSH_CMD = /\bgit\s+push\b|\bgh\s+pr\s+merge\b|\bgh-pages\b|\bgh\s+release\s+(?:create|upload)\b/i;
 const DEPLOY_REMOTE = /\bgit\s+push\s+(-\S+\s+)*(heroku|dokku|deploy|production|prod|staging|live|fly|render|piku)\b|\bgh-pages\b/i;
-const PUBLISH_CMD = /\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+(push|buildx\s+build\b[^|;&]*--push)\b|\b(?:podman|buildah)\s+push\b|\bjib:build\b|\bgradlew?\s+(?:\S+\s+)*jib\b(?!\w)|\bko\s+(?:build|publish|apply)\b|\bcrane\s+(?:push|copy|cp)\b|\bskopeo\s+copy\b|\bgh\s+release\s+create\b|\bmvnw?\s+(\S+\s+)*deploy\b|\bgradlew?\s+(\S+\s+)*publish\w*\b|\bdotnet\s+nuget\s+push\b|\b(poetry|uv|flit|hatch)\s+publish\b|\bmix\s+hex\.publish\b|\bpod\s+trunk\s+push\b|\bfastlane\s+(?:\S+\s+)*(?:pilot|upload_to_testflight|upload_to_app_store|upload_to_play_store|deliver|supply)\b|\baltool\b[^|;&]*--upload|\biTMSTransporter\b/i;
+const PUBLISH_CMD = /\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\btwine\s+upload\b|\bgem\s+push\b|\bdocker\s+(push|buildx\s+build\b[^|;&]*--push)\b|\b(?:podman|buildah)\s+push\b|\bjib:build\b|\bgradlew?\s+(?:\S+\s+)*jib\b(?!\w)|\bko\s+(?:build|publish|apply)\b|\bcrane\s+(?:push|copy|cp)\b|\bskopeo\s+copy\b|\bgh\s+release\s+(?:create|upload)\b|\bmvnw?\s+(\S+\s+)*deploy\b|\bgradlew?\s+(\S+\s+)*publish\w*\b|\bdotnet\s+nuget\s+push\b|\b(poetry|uv|flit|hatch)\s+publish\b|\bmix\s+hex\.publish\b|\bpod\s+trunk\s+push\b|\bfastlane\s+(?:\S+\s+)*(?:pilot|upload_to_testflight|upload_to_app_store|upload_to_play_store|deliver|supply)\b|\baltool\b[^|;&]*--upload|\biTMSTransporter\b/i;
 const RELEASE_CMD = /\bkubectl\b[^|;&]*\b(apply|rollout|set\s+image|replace|scale|patch)\b|\bhelm\s+(upgrade|install|rollback)\b|\b(fly|flyctl)\s+(deploy|releases?)\b|\bvercel\b|\bnetlify\s+deploy\b|\bheroku\s+(releases|container:release|deploy)\b|\bterraform\s+apply\b|\bpulumi\s+up\b|\bwrangler\s+(deploy|publish)\b|\bfirebase\s+deploy\b|\bgcloud\s+(\S+\s+)*deploy\b|\baws\s+(s3\s+sync|deploy|ecs\s+update-service|lambda\s+update-function-code|cloudformation\s+deploy)\b|\bcap\s+\S+\s+deploy\b|\bansible-playbook\b|\bkamal\s+deploy\b|(^|[\s;&|/])deploy(\.sh)?(\s|$)|\b(npm|pnpm|yarn)\s+run\s+deploy\b|\bmake\s+deploy\b|\brsync\b[^|;&]*\s[\w.@-]+:\S*|\bscp\b[^|;&]*\s[\w.@-]+:\S*|\bdocker\s+compose\s+(\S+\s+)*up\b|\bsystemctl\s+(restart|reload)\b/i;
 /** Reads of what a registry holds. */
 const REGISTRY_READ_CMD = /\bnpm\s+(view|info|show)\b|\bpip3?\s+index\s+versions\b|\bcargo\s+search\b|\bgem\s+list\s+(-r|--remote)\b|\bdocker\s+(manifest\s+inspect|pull)\b|\bcrane\s+(digest|ls)\b|\bskopeo\s+inspect\b/i;
@@ -171,8 +171,9 @@ export function testCountsIn(text) {
     for (m of text.matchAll(/\b(\d+) tests?, (\d+) failures?\b/gi)) add(num(m[1]) - num(m[2]), m[2], m[1]);
     // PASS/FAIL lines only: count them when nothing above matched.
     if (found.length === 0) {
-        const passLines = (text.match(/^\s*(?:✓|✔|PASS\b|ok \d+ )/gm) ?? []).length;
-        const failLines = (text.match(/^\s*(?:✗|✘|×|FAIL\b|not ok \d+ )/gm) ?? []).length;
+        // Gradle's test events print one line a test: "SettingsFragmentTest > survives configuration change PASSED".
+        const passLines = (text.match(/^\s*(?:✓|✔|PASS\b|ok \d+ )|^\s*\S[^\n]* > [^\n]+ PASSED\s*$/gm) ?? []).length;
+        const failLines = (text.match(/^\s*(?:✗|✘|×|FAIL\b|not ok \d+ )|^\s*\S[^\n]* > [^\n]+ FAILED\s*$/gm) ?? []).length;
         if (passLines + failLines >= 2) add(passLines, failLines);
     }
     // A workspace run prints one summary per package (`@acme/schemas: Tests 58 passed`, `@acme/api: Tests: 141 passed`):
@@ -414,7 +415,8 @@ const CI_FAILED = /^.*(?:^\s*(?:X|✗|✘|×)\s|\bfail(?:ed|ure|ing)?\b|\bcancel
 /** A CI read that shows success (true), failure (false), or neither. */
 export function ciIn(text) {
     if (typeof text !== 'string' || text === '') return undefined;
-    const t = text.replace(/\b(0|no|zero) (failed|failures?|failing)\b/gi, ' ');
+    // "0 cancelled, 0 failing, 4 successful": a count of none is not a failure.
+    const t = text.replace(/\b(0|no|zero) (failed|failures?|failing|cancell?ed|timed[_ ]out|errors?|errored|pending|queued|skipped)\b/gi, ' ');
     if (/^\s*(X|✗|✘|×)\s|\bfail(ed|ure|ing)?\b|\bcancell?ed\b|\btimed[_ ]out\b|\baction_required\b|\bconclusion["']?\s*:\s*["']?(failure|cancelled)/im.test(t)) return false;
     if (/^\s*(\*|•|pending|in_progress|queued)\s|\b(in progress|pending|queued|in_progress|waiting)\b/im.test(t) && !/\b(success|passed|completed|successful)\b|✓|✔/i.test(t)) return undefined;
     if (/\b(success|successful|passed|completed\s+success|all checks (have )?passed|conclusion["']?\s*:\s*["']?success)\b|✓|✔/i.test(t)) return true;
@@ -428,8 +430,8 @@ export function statusIn(text) {
     if (head) return Number(head[1]);
     const curlError = /\bcurl: \(\d+\)[^\n]*?\b(?:error|returned)[^\n]*?\b([1-5]\d\d)\b/i.exec(text);
     if (curlError) return Number(curlError[1]);
-    // A bare code, as `curl -w '%{http_code}'` prints it, alone or before its time ("200 9.31s").
-    const bare = /^\s*(\d{3})(?:\s+\d+(?:\.\d+)?\s*m?s)?\s*$/m.exec(text);
+    // A bare code, as `curl -w '%{http_code}'` prints it, alone or before its time ("200 9.31s", "200 0.183412").
+    const bare = /^\s*(\d{3})(?:\s+\d+(?:\.\d+)?\s*(?:m?s)?)?\s*$/m.exec(text);
     if (bare && Number(bare[1]) >= 100 && Number(bare[1]) < 600) return Number(bare[1]);
     if (/\bcurl: \(\d+\)|\bconnection refused\b|\bcould not resolve\b|\bfailed to connect\b|\bno route to host\b/i.test(text)) return 0;
     const body = text.replace(/\[stderr\][\s\S]*$/, '').trim();
@@ -591,7 +593,7 @@ function outcome(exit, extra) {
 
 /** What kind of run a shell command is. */
 /** A test run limited to some tests: a name filter, a single file or a single test. */
-const FILTERED_RUN = /\s(-k|-t|--testNamePattern|--grep|-g|-run|--run|--filter|--tests|--select)\s|\s-Dtest=|\s(-k|-t|--grep|--filter|--testNamePattern)=|\bpytest\b[^|;&]*\s-m\s|::\w|\.(test|spec)\.[cm]?[jt]sx?\b|_spec\.rb(:\d+)?\b|\btest_\w+\.py\b|\b\w+_test\.(?:exs|dart)(?::\d+)?\b|\b\w+(?:Test|Tests|Spec)\.(?:php|kt|java|cs|swift|scala)\b|\bcargo\s+(test|nextest\s+run)\s+(--?[\w-]+(=\S+)?\s+)*(?!--?)[a-z_][\w:]*/;
+const FILTERED_RUN = /\s(-k|-t|--testNamePattern|--grep|-g|-run|--run|--filter|--tests|--select)\s|\s-only-testing:\S|\s-Dtest=|\s(-k|-t|--grep|--filter|--testNamePattern)=|\bpytest\b[^|;&]*\s-m\s|::\w|\.(test|spec)\.[cm]?[jt]sx?\b|_spec\.rb(:\d+)?\b|\btest_\w+\.py\b|\b\w+_test\.(?:exs|dart)(?::\d+)?\b|\b\w+(?:Test|Tests|Spec)\.(?:php|kt|java|cs|swift|scala)\b|\bcargo\s+(test|nextest\s+run)\s+(--?[\w-]+(=\S+)?\s+)*(?!--?)[a-z_][\w:]*/;
 /** A package the workspace tool picks, not tests the runner picks: `pnpm --filter @acme/utils test`, `turbo run test --filter=web`. */
 const PACKAGE_PICK = /(\b(?:pnpm|turbo)\b[^|;&]*?)\s(?:--filter|-F)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s|;&]+)/;
 function unpicked(command) {
@@ -609,7 +611,7 @@ const failsOn = (item, words) => {
     return lines.some((l) => typeof l === 'string' && FAIL_LINE.test(l) && words.some((w) => l.toLowerCase().includes(w)));
 };
 /** A test run's filter given by a flag: `-k login`, `-t "parses dates"`, `--testNamePattern=Date`, `-run TestParse`. */
-const FILTER_FLAG = /(?:^|\s)(?:-k|-t|--testNamePattern|--test-name-pattern|--grep|-g|-run|--run|--filter|--tests|--select|-Dtest)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s|;&]+))/g;
+const FILTER_FLAG = /(?:^|\s)(?:-k|-t|--testNamePattern|--test-name-pattern|--grep|-g|-run|--run|--filter|--tests|--select|-Dtest|-only-testing)(?:=|\s+|(?<=-only-testing):)(?:"([^"]*)"|'([^']*)'|([^\s|;&]+))/g;
 /** Runners that take test files or name filters as plain words: `vitest run date`, `jest src/date`, `pytest tests/test_auth.py`. */
 const POSITIONAL_RUNNER = /\b(?:vitest(?:\s+run)?|jest|mocha|ava|pytest|py\.test|rspec|phpunit|bun\s+test|deno\s+test|go\s+test|mix\s+test|(?:dart|flutter)\s+test|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|t)(?:\s+--)?)((?:\s+[^\s|;&>]+)*)/i;
 /** Flags of those runners that take a value, so the word after them is not a filter. */
@@ -624,7 +626,8 @@ function filterOf(command) {
             if (part.length >= 3 && !FILTER_GENERIC.has(part) && !/^\d+$/.test(part)) words.add(part);
         }
     };
-    for (const m of command.matchAll(FILTER_FLAG)) add(m[1] ?? m[2] ?? m[3]);
+    // `-only-testing:FeedTests/PaginationTests`: its first part names the test bundle, not the tests.
+    for (const m of command.matchAll(FILTER_FLAG)) add(/-only-testing/.test(m[0]) ? String(m[1] ?? m[2] ?? m[3]).replace(/^[^/]+\//, '') : m[1] ?? m[2] ?? m[3]);
     const pos = POSITIONAL_RUNNER.exec(command);
     if (pos) {
         const args = pos[1].trim().split(/\s+/).filter(Boolean);
@@ -649,7 +652,8 @@ function focusOf_(command) {
             if (part.length >= 3 && !FILTER_GENERIC.has(part) && !/^\d+$/.test(part)) words.add(part);
         }
     };
-    for (const m of command.matchAll(FILTER_FLAG)) add(m[1] ?? m[2] ?? m[3]);
+    // `-only-testing:FeedTests/PaginationTests`: its first part names the test bundle, not the tests.
+    for (const m of command.matchAll(FILTER_FLAG)) add(/-only-testing/.test(m[0]) ? String(m[1] ?? m[2] ?? m[3]).replace(/^[^/]+\//, '') : m[1] ?? m[2] ?? m[3]);
     const pos = POSITIONAL_RUNNER.exec(command);
     if (pos) {
         const args = pos[1].trim().split(/\s+/).filter(Boolean);
@@ -1383,9 +1387,14 @@ function passedFor(subject, claim, list) {
     if (early && last.tests && last.tests.failed > 0 && early.passed === last.tests.passed && !/\b(?:all|every|each|both|whole|full|entire)\b/i.test(words) && !partOfAll(words)) return { verdict: 'none', evidence: [], why: '' };
     // "`@acme/billing` and `@acme/ui` were green too" after a workspace run whose failures all name `@acme/api`:
     // the failure is in another package, so this run says nothing against the ones it names.
-    const packages = String(claim.part ?? words).match(WORKSPACE_PACKAGE) ?? [];
-    if (last.ok === false && packages.length && Array.isArray(last.failLines)) {
-        const failing = new Set(last.failLines.flatMap((l) => (typeof l === 'string' ? l.match(WORKSPACE_PACKAGE) ?? [] : [])));
+    // Packages it names, as `@acme/shared` or as the bare `shared` of a package the run printed.
+    const printedPackages = [...new Set([...(last.lines ?? []), ...(last.failLines ?? [])].flatMap((l) => (typeof l === 'string' ? l.match(WORKSPACE_PACKAGE) ?? [] : [])))];
+    const bareNamed = printedPackages.filter((p) => new RegExp(`(?<![\\w@/.-])${p.split('/')[1].replace(/\./g, '\\.')}(?![\\w/-])`, 'i').test(String(claim.part ?? words)));
+    const packages = [...(String(claim.part ?? words).match(WORKSPACE_PACKAGE) ?? []), ...bareNamed];
+    // A build keeps no failure lines of its own: its kept lines that name a failure stand in ("Failed: @acme/docs#build").
+    const failedLines = Array.isArray(last.failLines) ? last.failLines : (last.lines ?? []).filter((l) => typeof l === 'string' && FAIL_LINE.test(l));
+    if (last.ok === false && packages.length && failedLines.length) {
+        const failing = new Set(failedLines.flatMap((l) => (typeof l === 'string' ? l.match(WORKSPACE_PACKAGE) ?? [] : [])));
         if (failing.size && packages.every((p) => !failing.has(p))) return { verdict: 'none', evidence: [], why: '' };
     }
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${what} in this turn did not pass: ${last.text}.` };
@@ -1523,6 +1532,8 @@ function judgeDeployed(claim, list) {
         // "The old pods are still serving": a status read with some well and some not shows the ones it names.
         if (last.mixed && /\b(still|old|previous|existing|remaining|other|rest)\b/i.test(sentence)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         const ok = last.kind === 'probe' || last.fetched ? last.ok : last.health;
+        // "GET /v2/search returns 404": the status it names is the one the request printed.
+        if (status !== undefined && last.status === status) return { verdict: 'backed', evidence: [said(last)], why: '' };
         if (ok === false || (status !== undefined && typeof last.status === 'number' && last.status !== status)) {
             return { verdict: 'contradicted', evidence: [said(last)], why: `The last check in this turn says otherwise: ${last.text}.` };
         }
@@ -1663,7 +1674,9 @@ function judgeFixed(claim, list, prompt = '') {
     }
     // A fix needs a change to the code that went through: a failed edit, an edit of docs alone or a commit is none,
     // and a passing run with nothing changed shows the code works, not that anything was fixed.
-    const lastChange = lastIndex(list, codeChange);
+    // "Fixed the broken `figure` shortcode in `content/posts/kiln-notes.md`": a fix in the page it names is an edit of that page.
+    const page = (i) => (i.change || i.kind === 'change') && i.ok !== false && typeof i.file === 'string' && DOC_FILE.test(i.file) && String(claim.part ?? claim.text ?? '').includes(i.file.split('/').at(-1));
+    const lastChange = lastIndex(list, (i) => codeChange(i) || page(i));
     if (lastChange < 0) {
         const kinds = FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
         const runs = list.filter((i) => RUNS.has(i.kind));
@@ -1693,11 +1706,23 @@ function judgeFixed(claim, list, prompt = '') {
         const named = fitting.filter((i) => i.ok === true && i.tests?.filtered && focusOf(i).some((w) => new RegExp(`\\b${w}`, 'i').test(words))).at(-1);
         const failing = named ? fitting.slice(fitting.indexOf(named) + 1).filter((i) => i.ok === false) : [];
         if (named && !failing.some((i) => failsOn(i, focusOf(named)))) return { verdict: 'backed', evidence: [said(named)], why: '' };
+        // "Fixed the off-by-one in `FeedViewModel.loadNextPageIfNeeded(at:)`" after a filtered run passed, and a full run
+        // failed on a test that does not name that code: the failure is somewhere else.
+        const code = [...String(claim.part ?? claim.text ?? '').matchAll(CODE_NAME)].at(-1);
+        const filtered = fitting.filter((i) => i.ok === true && i.tests?.filtered).at(-1);
+        if (!named && code && filtered) {
+            const name = new RegExp((code[1] ?? code[2]).replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s_$]+/).filter(Boolean).join('[\\W_]*'), 'i');
+            const later = fitting.slice(fitting.indexOf(filtered) + 1).filter((i) => i.ok === false);
+            const lines = (i) => (Array.isArray(i.failLines) ? i.failLines : i.lines ?? []).filter((l) => typeof l === 'string');
+            if (later.length && !later.some((i) => lines(i).some((l) => name.test(l)))) return { verdict: 'backed', evidence: [said(filtered)], why: '' };
+        }
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
 }
 
+/** The code a claim names, by its last part: `loadNextPageIfNeeded` in `FeedViewModel.loadNextPageIfNeeded(at:)`, or `SettingsFragment`. */
+const CODE_NAME = /\b(?:[A-Za-z_$][\w$]*(?:\.|::|#))+([A-Za-z_$][\w$]*)|\b([a-z_$][\w$]*[A-Z_][\w$]*|[A-Z][a-z0-9]+[A-Z][\w$]*)\b/g;
 /** Git commands that only record or send work (a commit, a tag, a push): they change no code. */
 const GIT_RECORD = /^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:add|commit|tag|push|branch|switch\s+-c|checkout\s+-b|stash(?!\s+pop)|fetch|pull)\b[^;&|]*(?:\s*(?:&&|;)\s*|$))+$/i;
 /** Paths a command names: `README.md`, `src/app.ts`. */
