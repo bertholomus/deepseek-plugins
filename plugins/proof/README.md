@@ -546,7 +546,7 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (113 checks, about two minutes a build) starts DSH from
+The real-DSH test (132 checks, about three minutes a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH,
 each in a throwaway home, with Session Watch and Proof and a scripted model
 (`test/e2e/fake-model.mjs`) that plays both the agent and the check model
@@ -572,12 +572,23 @@ check in the hour waits and says until when, and switching checks off ends
 it. It restarts DSH in the middle of a check (it settles at once: "DSH
 restarted while it ran …"), runs with Session Watch off, starts with a
 wrong setting (named with its range, and fixed by saving a good value)
-and with a number in quotes in the profile (named with the value),
-checks Proof's file modes, loads it with `enabled: false`, and then shows
-that a session made and one used meanwhile are listed again once it is
-back on. It drives the page and Proof's settings in Plugins in a browser,
-light and dark, wide and narrow: the header, the sessions, the ledger and
-its filter, What the turn ran, the checks in time order with their times
-in one column, the exports to Markdown, CSV, JSON and the clipboard (a
-copy logged as a copy), and Proof switched off and on in Plugins, its
-entry and flags gone and back. Pictures go to `.e2e/shots/proof/<build>/`.
+and with a number in quotes in the profile (named with the value, saved
+without the quotes in one press on the page, and still right after a
+restart), checks Proof's file modes, loads it with `enabled: false`, and
+then shows that a session made and one used meanwhile are listed again
+once it is back on. Last, it reads replies of the kinds the round-3
+corpora hold: an accurate "only 1 passed" claims nothing, while "All 3
+tests pass." after the same run is contradicted with the run's count; a
+fix after only a passing run and a CI claim after a local run are flagged
+with their reasons, each named on the card by its own clause; figures no
+output printed are flagged, naming them. The sessions list puts the one
+flagged last first, timed by that flag, and the ledger lists the newest
+turn first and a reply's claims in order. It drives the page and Proof's
+settings in Plugins in a browser, light and dark, wide and narrow: the
+header, the sessions, the ledger and its filter, What the turn ran, the
+checks in time order with their times in one column, the exports to
+Markdown, CSV, JSON and the clipboard (a copy logged as a copy), and Proof
+switched off and on in Plugins, its entry and flags gone and back; an
+export is named for the local day, the check bar wraps a long claim at
+1000 px, and a check switched off before it starts ends as *stopped*, not
+in the error colour. Pictures go to `.e2e/shots/proof/<build>/`.
