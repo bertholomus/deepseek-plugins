@@ -171,3 +171,40 @@ what the window believed at its last queue poll (focus / visibility /
 permission). Open the page in the test window after a hidden-window run and
 the page says which world we are in. The banner question is now a user
 action, not a race.
+
+## Final verdict (v3, 2026-10-19 9:14-9:27 AM PDT) — the plugin is correct; Electron's post is swallowed
+
+v3 (window visible-but-unfocused then hidden, no other clients, region burst
+auto-armed on the item appearing):
+- "Icon proof v3 ended without a handback" queued 09:20:48, **acked at the
+  renderer's 09:20:54 poll** (poll-state timeline proves the acking renderer
+  is the app: 15 s grid, then exactly 60 s — Chromium intensive throttling —
+  continuously, permission `granted`, focus false, visibility honest).
+- The show path ran (not-watching), the constructor did not throw, and **no
+  error string was recorded** — so Electron's `onshow` fired: the shim claims
+  the notification was displayed.
+- The 50 region frames covering the ack show **no banner** (the only region
+  change, 09:21:49, is an incoming phone call, not ours). The macOS
+  Notification Center db after every run: **zero records ever for
+  `com.deepseek.dsh`** (the app both DSH instances run in), while
+  `ai.deepseek.dsh.desktop` (the DSH Desktop shell) has 8 records tonight —
+  its own updater's. Script Editor has 100 (the old plugin's osascript
+  fallbacks).
+
+**Conclusion for the release checklist:** the notifications plugin now does
+everything a DSH window can do — serve the queue, hold while no window can
+show, take-and-display with the DSH app's own icon — and the display layer
+below it is broken in this app build: Electron's HTML5 Notification in the
+DeepSeek Harness app reports `granted`, constructs, fires `show`, and macOS
+never receives the post. The same machine delivers notifications fine from
+the DSH Desktop shell bundle. **Must-fix-follow-up (DSH/Electron side, not
+the plugin): make DSH's own desktopRuntime rows actually serve (they do not
+on 0.2.1-rc.2 — `desktop:false`) so the shell's working notification path
+carries DSH's icon, or fix the harness app's Electron notification delivery.
+Albert's call.**
+
+Proof artifacts: the ack-window region frame (`v3-ack-window-no-banner.jpg`,
+no banner, 09:20:54-09:21:03), the leveldb poll-state timeline
+(`focus false / visibility honest / permission granted`), and the NC db reads
+in this file. The banner+Notification-Center shots the brief asked for are
+impossible on this build for ANY DSH window until the follow-up lands.
