@@ -109,12 +109,26 @@ the Lead merges each block from the thread's handback and marks verified only on
   0.2.1-rc.2 so the shell's working path carries DSH's icon; (b) plugin-side last-resort osascript when the
   show path records "not displayed" (visible again, wrong icon, strictly better than silence); (c) ship as-is
   with the documented behavior. NOT the plugin's defect in any case.
-- ALBERT'S DECISION (2026-10-19, via Decisions): "I'm in no rush to release so work on it so it's good" —
-  no ship/hold tradeoff; make notifications actually work (DSH icon, banner, hidden and visible) on
-  0.2.1-rc.2. Open work: why desktopRuntime doesn't serve (t1's lane), then the working path end to end.
-  The release of the OTHER six plugins is not blocked by this; notifications ships only when it's good.
-- Verdict: **in progress (making it good per Albert)** — the plugin is correct end to end; the remaining
-  work is the desktopRuntime/working-path investigation, owned by t1.
+- ROOT CAUSE (t1, c2c67a9 — all measured): three independent breaks, and NO further plugin change is needed.
+  [1] STYLE: both DeepSeek bundles have the macOS notification style effectively OFF (ncprefs flags
+  0x1080200e, missing the banner bits FaceTime/MobileSMS carry) — proof: the shell bundle's 8 delivered
+  records are ALL presented=0 (never displayed) while Script Editor's are 95/100 presented=1. Until the
+  toggles flip, NO code path can banner for either bundle — even the shell's own updater notifications
+  don't display. [2] The current live DSH is the BARE HARNESS (pid 87589, GUI 63532): dsh-plugin-desktop is
+  MODULE_NOT_FOUND from DeepSeek Harness.app (4 MB release manifest asar), so the desktop-shell row cannot
+  load, no desktopRuntime — desktop:false is CORRECT there and the swallowed renderer post is expected.
+  The live DSH must run via DSH Desktop.app (the wrapper resolves dsh-plugin-desktop 2.0.15 from its lib).
+  [3] The wrapper path already delivers: the 8 records under ai.deepseek.dsh.desktop are DSH's own
+  (updater + Background Job Completed) — the plugin's desktopSend calls exactly that runtime, and the
+  plugin covers handbacks (the event class the old desktop-notifications row lacked).
+- NET: Albert flips the two notification-style toggles (System Settings → Notifications → DeepSeek Harness
+  + DSH Desktop → Banners) and runs the live DSH from DSH Desktop.app → handbacks deliver through the
+  wrapper bundle and banner with the DSH icon, zero further plugin change. t1 verifies via the NC db
+  presented flag (read-only) the moment that's done. The glass-notifications test instance is a bare
+  harness and can never banner — it proves queue/renderer logic only; 26/26 tests + the v3 instrumentation
+  stay as the regression net.
+- Verdict: **ready (plugin correct and complete)** — the remaining two steps are Albert's system actions;
+  after them t1 confirms presented=1 and this block closes.
 - Side finding: the live config was edited/restarted several times tonight (sha 63e0c347→6c668ddc→a3e1575c→
   ed7059d9→09f9b998, pid 18756→87589) — all live-side, none from the release threads.
 
