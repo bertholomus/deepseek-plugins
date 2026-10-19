@@ -151,3 +151,23 @@ Experiment v2 removes the confound: rig closed, window hidden, one fire, 5 s
 probes, then the app window's own Plugins → Notifications page (its
 partition's diagnostic) and an NC db re-read. The ack timing also dates the
 throttle (~15 s grid = full speed; ~60 s+ = Chromium throttling).
+
+## Run v2 (2026-10-19 07:11-07:21 PDT) — confound removed, one mystery left
+
+With the rig closed and the window hidden 5+ hours (Hidden=true verified via
+lsappinfo): "Icon proof v2" handback queued 07:18:58; the hidden window's
+renderer **acked it between +40 s and +70 s** — hidden-window timers are
+alive (about-one-minute worst case, as documented). The region burst missed
+the drain (the owner gateway stalled the coordinating turn 7 min, past the
+burst end). Two decisive reads after the ack:
+- NC db: still **zero** records for `com.deepseek.dsh` — nothing reached macOS.
+- Instance localStorage leveldb: **no** "denied in this window" and **no**
+  "no show event" string — the show path neither threw nor timed out… or the
+  show path never ran because the hidden window *claims* to be watched.
+
+Commit 44eb6f8 settles it in one click: the plugin's page now has **Send a
+test notification** (same show path, gesture-legal permission ask) and shows
+what the window believed at its last queue poll (focus / visibility /
+permission). Open the page in the test window after a hidden-window run and
+the page says which world we are in. The banner question is now a user
+action, not a race.
