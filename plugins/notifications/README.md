@@ -2,46 +2,63 @@
 
 System notifications for DSH when its window is hidden or unfocused. A plugin
 (the coordinator first) asks for one; this plugin sends it through the first
-sender around — DSH's own desktop sender in the Desktop app, a browser
-window's own notifications in the `web` profile, or a command-line sender
-when no window is watching. Nothing shows while the window is focused: if
-you're looking at DSH, you don't need a toast over it.
+sender around — DSH's own desktop sender in the Desktop app where DSH
+provides it, otherwise a DSH window's own notifications (the Desktop app's
+carry its icon), or a command-line sender where one exists. Nothing shows
+while the window is focused: if you're looking at DSH, you don't need a toast
+over it.
 
 ## How it works
 
-DSH's Desktop app already has the whole mechanism: its own notifications
-plugin and its launcher send attention through `desktopRuntime.notifyAttention`,
-which sends nothing while the window is focused, flashes the taskbar on
-Windows, badges the dock on macOS and Linux, and brings the window up when a
-notification is clicked. The plugin uses exactly that path in the Desktop app
-— it adds nothing to DSH's own flow.
+The Desktop app's own plugin and launcher send attention through
+`desktopRuntime.notifyAttention` — it sends nothing while the window is
+focused, flashes the taskbar on Windows, badges the dock, and brings the
+window up when a notification is clicked. Where DSH provides that service
+the plugin uses it and adds nothing to DSH's own flow.
 
-Everywhere else it picks the smallest sender that works:
+Everywhere else the sender is a DSH window itself: the host queues the
+notification and the window's browser half shows it through the Web
+Notifications API, which macOS and Windows attribute to the app the window
+belongs to — DeepSeek Harness. On the Desktop host the queue is used even
+while the window is hidden or minimised (its renderer still exists; its
+timers are throttled, so a hidden window may take up to about a minute to
+poll, and the queue flushes the moment the window is focused again).
+Elsewhere the queue is only used while a tab has polled recently:
 
 | Where | Sender | Notes |
 | --- | --- | --- |
-| Desktop app (macOS, Windows, Linux) | DSH's own `desktopRuntime` | the app's own notifications; also skipped while the window is focused |
-| `web` profile, tab open | Web Notifications API, in the plugin's browser half | permission asked once, from a click; the queue is polled every 15 s |
-| No window watching | a command: `osascript` (macOS), `notify-send` (Linux), a PowerShell toast (Windows) | fire and forget; a missing command is logged, never thrown |
+| Desktop app, DSH provides `desktopRuntime` | DSH's own `desktopRuntime` | the app's own notifications; also skipped while the window is focused |
+| Desktop app, no `desktopRuntime` (0.2.1-rc.2) | the Desktop window's Web Notifications | queued while hidden or minimised; flushed on focus; carries DSH's icon |
+| `web` profile, tab open | the same browser half, in the tab | permission asked once, from a click; polled every 15 s |
+| No window watching, Linux | a command: `notify-send` | fire and forget, with the whale as `--icon` |
+| No window watching, Windows | a command: a PowerShell toast | fire and forget, with the whale as its logo |
+| No window watching, macOS | nothing | see below |
+
+**Why macOS has no command line.** macOS's only command-line sender,
+`osascript`, cannot set a per-notification icon: its notifications show
+Script Editor's icon, which is exactly what this plugin must never do. So on
+macOS a notification with no window around is not sent at all rather than
+sent with the wrong app's icon. The Desktop app's window is the sender, and
+it exists hidden, minimised and in the background.
 
 The browser half stands down by itself when the host answers that the Desktop
 app sends natively, so nothing ever sends twice.
 
 **The icon.** The plugin's icon is the DeepSeek whale (`icon.svg`, with a
-256 px `icon.png` beside it). `notify-send` shows it on Linux (`--icon`), and
-a Windows toast carries the PNG as its logo; macOS's `osascript` cannot set a
-per-notification icon, so there the notification shows the posting app's own
-— DSH's, when the Desktop app is the one sending.
+256 px `icon.png` beside it). `notify-send` shows it on Linux (`--icon`) and
+a Windows toast carries the PNG as its logo. In a DSH window the Web
+Notifications API posts as the window's own app — DSH's icon in the Desktop
+app, the browser's in the `web` profile.
 
 **Proven and guessed.** Proven by reading DSH's source: the desktop path is
 the app's own (`lib/notifications.js`, `host-process-entry.js` — a plugin
 injects `desktopRuntime` the same way DSH's own notifications plugin does).
-**Proven on this machine:** the macOS `osascript` command and the
-`desktopRuntime` call shape. **Untested (guess):** the Windows PowerShell
-toast and its logo image, `notify-send` on Linux and its `--icon`, the
-browser profile end to end in a real browser, and the Web Notification
-click-to-focus. None of it has run on Windows or Linux, and the web profile
-was not driven in a real browser.
+**Proven on this machine:** the `desktopRuntime` call shape, and — on
+0.2.1-rc.2 — the Desktop window's Web Notification banner (see
+`review/notifications-release.md`). **Untested (guess):** the Windows
+PowerShell toast and its logo image, `notify-send` on Linux and its
+`--icon`, and the browser profile end to end in a real browser. None of it
+has run on Windows or Linux.
 
 ## For other plugins
 
@@ -85,17 +102,22 @@ browser has allowed.
 - **A click brings DSH's window up; it does not open the chat.** DSH's own
   desktop sender does that, and DSH offers plugins no way to open a session
   (no deep link a plugin may use).
-- **The Desktop app with its window closed** (destroyed, not hidden) sends
-  nothing: DSH's own sender returns early then. Hidden and unfocused windows
-  do send.
-- **A hidden browser tab** may delay a notification: browsers throttle
-  timers in hidden tabs to about once a minute. The notification is not
-  lost — the queue keeps it until a poll takes it, and items older than five
-  minutes are dropped rather than shown late.
-- **The browser profile only runs while a tab is open.** A closed tab stops
-  the browser sender; the next news goes to the command-line sender instead.
+- **A hidden or minimised window may delay a notification by up to about a
+  minute.** A hidden window's timers are throttled to roughly once a minute,
+  so the queue's poll lands late; the queue flushes the moment the window is
+  focused again, and items older than five minutes are dropped rather than
+  shown late.
+- **The Desktop app with its window closed** (destroyed, not hidden) has no
+  renderer to show one: the items wait in the queue for a window that comes
+  back within five minutes, then age out. On macOS nothing replaces them.
+- **A closed browser tab** stops the browser sender; when no tab has polled
+  for 90 s the queue is no longer used, and on macOS no command sender
+  follows — the news is not sent rather than sent with Script Editor's icon.
 - **The command-line senders are best effort.** A machine without
   `notify-send` gets a logged failure and no notification.
+- **Permission is asked once, from where an ask can work.** The Desktop
+  app's window grants its own ask; a browser needs the Allow button on the
+  plugin's page, and items wait in the queue until it is answered.
 - The plugin sends no notifications itself while it is off, and it leaves
   nothing behind: no marks, no style tag, no queue.
 
