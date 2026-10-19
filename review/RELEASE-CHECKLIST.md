@@ -41,8 +41,19 @@ the Lead merges each block from the thread's handback and marks verified only on
 - Tests/screenshots: pending. Verdict: **not yet**.
 
 ## Calendar
-- 0.2.1: host verified clean live; client re-check in progress (thread t3). Glass skin: in progress (DESIGN.md gaps).
-- Scrub: in progress (3 files with real calendar names/events). Tests/screenshots: pending. Verdict: **not yet**.
+- 0.2.1: **verified** — tokens/parts checked on 0.2.1-rc.2 AND 0.2.0-rc.2 (thread); commits 5b0aa26 + 63b0daf on the
+  remote (the DNS-outage "local" pushes flushed once the network returned).
+- Glass skin: **verified** — all DESIGN.md "Where things stand" Calendar gaps closed: DSH Toast/MenuSurface,
+  Modal+Menu un-restyled, DSH tokens deepened, chat cards opaque, --ds-font-family-code, --cal-chip-ring gone,
+  reduced-transparency near-opaque (thread's handback; grounds/recipe match section 3).
+- Scrub: **verified** — no private strings in plugins/calendar (Lead grep: frankennas/ascent/100.108/192.168.1.49/
+  albertlee/bertholomus@/tank all clean); its fixtures were already synthetic.
+- Tests: Lead-run — plugins/calendar/test 178/178, root suite 550/550. Thread reports 217/217 on its own run
+  and e2e 60/60 (not re-run by the Lead).
+- Evidence: review/glass-v1/calendar/ — 71 shots (counted).
+- Instance: fingerprint before/after identical (pid 18756, patch 63e0c347ea6e); doctor 0 errors; logs clean
+  except the known "Desktop update connection timed out" artifact; destroyed after handback.
+- Verdict: **ready**.
 
 ## Categories
 - 0.2.1: **verified** (t4: tokens/primitives checked against the 0.2.1 ASAR; --dsh-color-bg-hover replaced).
