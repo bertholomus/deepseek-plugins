@@ -45,8 +45,14 @@ the Lead merges each block from the thread's handback and marks verified only on
 - Scrub: in progress (3 files with real calendar names/events). Tests/screenshots: pending. Verdict: **not yet**.
 
 ## Categories
-- 0.2.1: in progress (thread t4). Glass skin: in progress (DESIGN.md gaps: .dshc-pg ground, --dsh-color-bg-hover,
-  drop-line z-index, chevron wp-still). Scrub: in progress (albertlee paths in smoke.mjs). Verdict: **not yet**.
+- 0.2.1: **verified** (t4: tokens/primitives checked against the 0.2.1 ASAR; --dsh-color-bg-hover replaced).
+- Glass skin: **verified** — page is one glass card at tint+.2, drop line z-index 30, wp-still motion, rule-6
+  text deepening, sidebar ground removed (commits 82e34ed + d9a37f9, pushed).
+- Scrub: **verified** — smoke.mjs scrubbed + hermetic; no personal strings in plugins/categories (Lead grep).
+- Tests: root suite 550/550 incl. categories (Lead-run); thread reports 33/33 plugin suite.
+- Evidence: review/glass-v1/categories/ — six states (light/dark × wp-on/off × pic), pushed.
+- Instance: fingerprint before/after identical (pid 18756, patch 63e0c347ea6e); destroyed after handback.
+- Verdict: **ready**.
 
 ## Coordinator
 - 0.2.1: in progress (thread t5). Glass skin: in progress (DESIGN.md gaps: wp-still, header :has(), try/catch,
