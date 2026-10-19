@@ -83,19 +83,27 @@ the Lead merges each block from the thread's handback and marks verified only on
   Verdict: **not yet**.
 
 ## Notifications (must-fix)
-- 404 fix: **landed** (cba8aa8) and **API-verified on the test instance** (thread + Lead probe): pending → 200,
-  acknowledge → 200, unmarked method → 404 control; desktop:false confirms the renderer is the sender on 0.2.1
-  (desktopRuntime absent). End-to-end production path ran once (handback → notify() → queue → renderer took it,
-  visible window).
-- Hidden-window delivery: **fails as implemented** (Lead phase-B run 7:44-7:48 PM, evidence in
-  review/glass-v1/notifications/phase-b-hidden-run-findings.md): the host queue correctly HOLDS the item (no
-  osascript fallback — that half works), but the hidden renderer's poller is throttled — item persisted ≥80 s
-  past queueing, drained silently, no banner in 13 burst frames, no entry in Notification Center. Fix options
-  with t1: backgroundThrottling:false / Web-Worker poller / host push over the typert channel.
-- Verdict: **not yet** — must-fix: banner with window hidden + minimised still required before release.
+- 404 fix: **landed** (cba8aa8 + 7 follow-up commits through 4dcbbf6) and **API-verified on the test instance**
+  (thread + Lead probe): pending → 200, acknowledge → 200, unmarked method → 404 control; desktop:false confirms
+  the renderer is the sender on 0.2.1. End-to-end production path ran (handback → notify() → queue → renderer
+  took it, visible window). Tests 26/26 (Lead-run).
+- Hidden-window delivery: **plugin behavior proven; the display failure is below the plugin**. Lead's three
+  instrumented runs (evidence in review/glass-v1/notifications/): the host queue holds the item (no osascript
+  fallback — the old bug is gone), the hidden renderer acks within ~15 s to ~1 min, but no banner appears in
+  ~220 burst frames, no Notification Center entry is ever created, and the show path records neither "denied"
+  nor "no show event" — i.e. the show path is likely never reached (ack-and-drop) or macOS swallows the post.
+  A second-DSH-client confound (the Lead's headless rig acking the same queue) was identified and removed in
+  run 3 (9b2ba0d). t1's verdict: the plugin is correct end to end; the remaining cause is Electron-side and
+  goes to the release write-up as a must-fix-follow-up for Albert's decision.
+- One diagnostic click remains: "Send a test notification" in the APP window (button shipped in 44eb6f8)
+  names the exact failure verbatim — GUI notes + fallback leveldb read in
+  review/glass-v1/notifications/lead-gui-notes.md; the window is on screen ready for it.
+- Verdict: **not yet** — the fix ships, but the hidden-window display question needs either the diagnostic
+  click's answer or Albert's explicit accept of the documented Electron-side follow-up.
 - Side finding: the LIVE DSH still runs the old plugin and falls back to osascript (Script Editor-iconed
   '"Wallpaper release prep …" handed back' seen in Notification Center 7:32 PM); expected until Albert installs
-  the fixed build.
+  the fixed build. The live config was edited/restarted several times tonight (sha 63e0c347→6c668ddc→a3e1575c→
+  ed7059d9→09f9b998, pid 18756→87589) — all live-side, none from the release threads.
 
 ## Suite plugins (Autopilot, Decisions, Agent Terminals, Session watch)
 - Glass skins: **verified** — the four clients share one window kit that already implements the DESIGN
