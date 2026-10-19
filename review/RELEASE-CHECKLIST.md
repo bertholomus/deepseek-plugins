@@ -34,11 +34,22 @@ the Lead merges each block from the thread's handback and marks verified only on
   and drop or re-shoot screenshots. Left untouched — builders'/Albert's files.
 
 ## Wallpaper (+ dsh-context skin)
-- 0.2.1: in progress (thread t2) — Automation tasks page (@deepseek-ai/dsh-client-ui-schedule, `.abd_5a_calendar`)
-  paints an opaque ground; light-mode contrast low on Plugins/Models/Tank + sidebar tiles.
-- Glass skin: in progress. Scrub: in progress (generic for public; no personal default headline).
-- dsh-context skin: in progress (dsh-context 0.72.0 on 0.2.1-rc.2; upstream notes → review/upstream-dsh-context.md).
-- Tests/screenshots: pending. Verdict: **not yet**.
+- 0.2.1: **verified** (t2 handback, Lead-checked): word-of-class anchors (no hashes), the 0.2.1 Automation tasks
+  page now glassed (@deepseek-ai/dsh-client-ui-schedule), data-phase open-chat fix, dockkit Start-page remap
+  (53712d5) — commits 7745469 + 53712d5 + 9e91e51 + 303e099, all on the remote.
+- Light contrast: **verified** — labels deepened via overrideTokens per DESIGN.md section 3 (Plugins/Models/Tank +
+  sidebar tiles); thread reports dark unchanged.
+- Generic scrub: **verified** — no personal strings in plugins/wallpaper (Lead grep: albertlee/frankennas//tank/
+  bertholomus@ clean); the personal default headline is gone (no hits anywhere in the plugin).
+- dsh-context skin: **verified** as an optional in-Wallpaper skin keyed on dsh-context's own elements; checked
+  against installed 0.72.0 (read-only); upstream draft at review/upstream-dsh-context.md, NOT posted.
+- Tests: root suite 550/550 (Lead-run; includes the naming scan). Wallpaper has no unit-test dir of its own —
+  its checks are the naming scan + node --check + the visual matrix.
+- Evidence: review/glass-v1/wallpaper/ — 26 files (light/dark × wp-on/off per page, wide+narrow open-chat,
+  dock-open); notes review/wallpaper-release.md.
+- Instance: fingerprint before/after identical (pid 18756 — see progress log; the later live-side sha change is
+  recorded separately and not attributable to this run); destroyed after captures.
+- Verdict: **ready**.
 
 ## Calendar
 - 0.2.1: **verified** — tokens/parts checked on 0.2.1-rc.2 AND 0.2.0-rc.2 (thread); commits 5b0aa26 + 63b0daf on the
