@@ -87,5 +87,25 @@ another thread, not from this one.
 
 ## DSH Test run
 
-See the run log appended to `review/RELEASE-PROGRESS.md` and the shots in
-`review/glass-v1/notifications/`.
+Named instance `glass-notifications` (0.2.1-rc.2-era app, pid changes per boot; the Lead
+holds the fingerprints). Evidence so far, all from the gateway API with the instance's own
+sign-in cookie:
+
+- `POST /api/dsh-plugin-notifications/pending` → **HTTP 200**
+  `{ok:true,value:{desktop:false,items:[]}}` — before the fix this endpoint answered
+  **404 "not found"** (that is the regression). `acknowledge` → 200; an unmarked method
+  (`nonexistent`) → 404 "not found" (the control, the exact old behavior).
+- `desktop:false` in every answer — **confirms `desktopRuntime` is not served on this
+  build**, so the renderer is the sender in the Desktop app (brief root cause 2).
+- `dsh-test doctor`: `Import check: 0 error(s)`, `Isolation check: ok`; rows
+  `notifications` + `coordinator` addressed to the instance home.
+- Real coordinator handback end to end: a "Icon proof" thread spawned through the
+  coordinator's Remote, ran on GLM-5.3-Flash-EXL3, handed back (`coordinator.log`:
+  `news …/t1 handback done seq=1`, `handback …/t1 status=done chars=5 delivered`) →
+  `notifications.notify()` → host queue → **the DSH Test window's renderer took it**
+  (`pending()` empty again on the next read). The queue→renderer path is proven live;
+  phase B (banner + Notification Center shots with the window hidden, then minimised)
+  is the Lead's desktop capture, landing in this folder.
+
+Runbooks used (kept for re-runs): `lead-runbook.sh` (phase A) and `phase-b.sh`
+(hidden + minimised shots; spawns one more "Icon proof" thread per run).
