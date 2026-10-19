@@ -134,3 +134,20 @@ Runbooks used (kept for re-runs): `lead-runbook.sh` (phase A) and `phase-b.sh`
   settings page: a denied take is recorded, and a constructed notification
   that gets no `show` event within 5 s is recorded too; a successful display
   clears the line. Next run's settings page names the cause verbatim.
+
+## Run3 addendum (2026-10-19 ~01:00): a second DSH client was acking
+
+Run3 (hidden, diagnostics client live): item acked ~15 s after queueing, no
+banner in 96 frames, no NC entry, and **neither diagnostic in the instance's
+localStorage** — because the acking renderer was not the app. Any open
+browser tab or the Lead's headless rig is also a DSH client polling the same
+queue: headless Chrome reports `denied`, so my code takes-and-drops, no
+banner, no NC record — and its diagnostics land in the *rig's* localStorage,
+not the instance's partition the Lead scanned. NC db re-read after all runs:
+still zero records for `com.deepseek.dsh` — no notification was ever posted
+to macOS by the harness app.
+
+Experiment v2 removes the confound: rig closed, window hidden, one fire, 5 s
+probes, then the app window's own Plugins → Notifications page (its
+partition's diagnostic) and an NC db re-read. The ack timing also dates the
+throttle (~15 s grid = full speed; ~60 s+ = Chromium throttling).
