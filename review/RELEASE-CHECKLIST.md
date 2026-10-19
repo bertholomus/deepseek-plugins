@@ -72,14 +72,19 @@ the Lead merges each block from the thread's handback and marks verified only on
   Verdict: **not yet**.
 
 ## Notifications (must-fix)
-- Icon root cause confirmed (Lead, repo): lib/remote.js binds with bindTypertRemote but never marks
-  pending/acknowledge as Remote methods → POST /api/dsh-plugin-notifications/pending = 404 → browserAlive()
-  always false → every notification falls to osascript → Script Editor icon. Calendar's markRemote
-  (lib/remote.js:300) is the pattern.
-- Fix in progress (thread t1): markRemote + host/client 404 tests, then renderer queue/throttle (desktop host =
-  Electron, DSH_CLIENT_VERSION; flush on focus/visibility; permission asked once; osascript last resort/dropped).
-- Proof required: DSH Test 0.2.1-rc.2, hidden + minimised, handback notification, banner + Notification Center
-  shots with DSH icon. Verdict: **not yet** (must-fix before release).
+- 404 fix: **landed** (cba8aa8) and **API-verified on the test instance** (thread + Lead probe): pending → 200,
+  acknowledge → 200, unmarked method → 404 control; desktop:false confirms the renderer is the sender on 0.2.1
+  (desktopRuntime absent). End-to-end production path ran once (handback → notify() → queue → renderer took it,
+  visible window).
+- Hidden-window delivery: **fails as implemented** (Lead phase-B run 7:44-7:48 PM, evidence in
+  review/glass-v1/notifications/phase-b-hidden-run-findings.md): the host queue correctly HOLDS the item (no
+  osascript fallback — that half works), but the hidden renderer's poller is throttled — item persisted ≥80 s
+  past queueing, drained silently, no banner in 13 burst frames, no entry in Notification Center. Fix options
+  with t1: backgroundThrottling:false / Web-Worker poller / host push over the typert channel.
+- Verdict: **not yet** — must-fix: banner with window hidden + minimised still required before release.
+- Side finding: the LIVE DSH still runs the old plugin and falls back to osascript (Script Editor-iconed
+  '"Wallpaper release prep …" handed back' seen in Notification Center 7:32 PM); expected until Albert installs
+  the fixed build.
 
 ## Suite plugins (Autopilot, Decisions, Agent Terminals, Session watch)
 - In progress (thread t6): per-plugin glass skin per DESIGN.md + 0.2.1-rc.2 re-check, one commit each.
