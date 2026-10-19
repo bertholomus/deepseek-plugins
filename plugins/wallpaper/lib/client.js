@@ -367,8 +367,10 @@ body.wp-on [data-slot="main.conversation"]>div:is([data-phase="active"],[data-ph
 body.wp-on header[class*="_header"]{background:transparent!important;border:0!important;box-shadow:none!important}
 body.wp-on [data-slot="main.conversation"]>div:is([data-phase="active"],[data-phase="settling"]) header[class*="_header"]{background-image:linear-gradient(var(--wp-w08),var(--wp-w08))!important;background-size:calc(100% - 32px) 1px!important;background-position:center bottom!important;background-repeat:no-repeat!important}
 /* right dock card, only while open. The dock panel is the direct child of DSH's rightbar.session outlet in
-   both DSH versions; the collapsed state comes from the frame's own attribute. */
-body.wp-on [data-slot="rightbar.session"]>[class*="_panel"]:not([class*="_panelBody"]){background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap) var(--wp-gap) var(--wp-gap) 0;height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - var(--wp-gap))!important;box-sizing:border-box;overflow:hidden}
+   both DSH versions; the collapsed state comes from the frame's own attribute. Content inside the dock that
+   paints its own ground (dockkit's empty-tab Start page, panes) reads the remapped card tokens as faint
+   fills, so the glass stays whole. */
+body.wp-on [data-slot="rightbar.session"]>[class*="_panel"]:not([class*="_panelBody"]){background:var(--wp-glass)!important;backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:var(--wp-hair)!important;border-radius:18px;margin:var(--wp-gap) var(--wp-gap) var(--wp-gap) 0;height:calc(100% - 2 * var(--wp-gap))!important;width:calc(100% - var(--wp-gap))!important;box-sizing:border-box;overflow:hidden;--dsw-alias-bg-base:var(--wp-w04);--dsw-alias-bg-layer-1:var(--wp-w06);--dsw-alias-bg-layer-2:var(--wp-w08);--dsw-alias-bg-layer-3:var(--wp-w10)}
 body.wp-on [data-rightbar-collapsed="true"] [data-slot="rightbar.session"]>[class*="_panel"]{border:0!important;background:transparent!important;margin:0!important;backdrop-filter:none!important}
 /* composer: frosted, with a focus ring. DSH marks its composer card with data-composer-card; the hero's
    workspace chip carries the same mark plus its own trigger class and keeps DSH's look. */

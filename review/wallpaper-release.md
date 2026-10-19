@@ -1,8 +1,10 @@
 # Wallpaper release prep — thread notes (release/glass-v1)
 
-Owner: thread t2 (Wallpaper + dsh-context skin). Commit 7745469 on release/glass-v1.
+Owner: thread t2 (Wallpaper + dsh-context skin). Commits 7745469 + the dock-remap/verification
+commit on release/glass-v1.
 Verified locally: `node --check` on client/impl/index, `node plugins/wallpaper/lib/impl.test.mjs` (all
-checks pass), scrub-string grep clean. DSH-Test verification: **blocked** — see the last section.
+checks pass), `npm test` (550 repo tests, 0 fail), scrub-string grep clean, plus the DSH-Test
+verification in section 6.
 
 ## 1. 0.2.1-rc.2 re-check (Desktop app.asar, read-only) + npm 0.2.0-rc.2 / 0.2.1-rc.1 cross-check
 
@@ -104,23 +106,57 @@ fade 1, footArea 1, panelList/panelRow 1, open chat 1, chat header 1, dock panel
 excluded as intended), the mounted `_page` in main 1, collapsed-state 0. Script kept in
 /tmp/wp-verify (not committed); re-run against the live window when the instance blocker clears.
 
-## 6. Blocked: DSH-Test verification
+## 6. DSH-Test verification (glass-wp instance, 0.2.1-rc.2 web UI, done 2:00–3:00 PM PDT)
 
-Every `dsh-test` command dies with `spawnSync /bin/ps EPERM` (the harness needs the process table).
-Any setuid binary fails from this session's bash even under approved danger-full-access
-(`/bin/ps`, `/usr/bin/sudo` → "Operation not permitted"; non-setuid binaries and escalated file
-writes work). Coordinator informed with exact command + error; options with Albert. Until it clears:
-no glass-wp instance, no light/dark × on/off screenshots into review/glass-v1/wallpaper/, no real
-window measurement, no fingerprint lines in RELEASE-PROGRESS.md (the file must only carry real runs).
+The instance was brought up and loaded by the Lead session (thread sessions cannot exec setuid
+binaries, so `dsh-test` itself cannot run here — see the blocker note at the end). All captures are
+in `review/glass-v1/wallpaper/`: light and dark, Wallpaper on and off, per page (hero, open chat,
+Plugins, Automation tasks, Calendar, Categories, Context Insights), plus wide (1920×1080) and
+narrow (1100×760) open-chat shots and the dock-open state.
+
+Verified live, not just on the replica:
+
+- `body.wp-on` applies; switching the plugin off from DSH's own Plugins page removes every trace
+  (the off shots show DSH's stock look, and its own hero headline shows because the default
+  headline is now empty).
+- Token reads through `getComputedStyle(body)`: light secondary
+  `color-mix(in srgb, #61666b 80%, #0f1115)` (= #51555a) and tertiary 75% mix (= #64686e), Wallpaper's
+  `--wp-meta` #51555A; dark passes DSH's own #cfd3d6/#adb2b8 through and keeps `--wp-meta` #A9AEA8.
+- The busy-wallpaper light-mode shots: sidebar tiles, DSH's Plugins page and the Automation tasks
+  page (glass card + remapped tokens) all read; the dark shots unchanged from the previously-fine
+  state.
+- Dock: `data-sidebar-right-open` panel computes to rgba(250,250,246,.55) (the light glass) and the
+  collapsed dock computes to transparent. First dock capture caught a real finding: dockkit's
+  empty-tab Start page painted its own opaque `--dsw-alias-bg-base` over the glass. Fixed by adding
+  the card-token remap to the dock panel rule (bg-base/bg-layer-1..3 → faint fills inside the dock);
+  re-captured — the Start page and its items are now faint fills on glass, and no opaque white/black
+  element remains inside the dock.
+- The open-chat captures show the composer card with its focus ring, DSH's header tabs on the card,
+  and the workspace chip un-skinned in the hero.
+
+dsh-context note: the scratch copy needed its `zod` dependency present for the host half to load
+(copied zod 4.6.5 from Albert's profile into `.scratch-t2/dsh-context/node_modules`);
+after that the bundle hot-loaded and the Context Insights page + sidebar row appeared, with the skin
+applying to the page. A third-party plugin's deps are its own business — recorded here so the
+release checklist knows the skin was verified against a real 0.72.0 load.
+
+## 7. Blocked earlier, resolved: dsh-test in thread sessions
+
+Thread sessions cannot exec setuid binaries (`/bin/ps`, `/usr/bin/sudo` → EPERM even under approved
+danger-full-access; non-setuid binaries and escalated file writes work), and `dsh-test` needs
+`/bin/ps` for its pid-scoped process table. The Lead session ran the instance lifecycle instead
+(up/load/restart/url, and logs + fingerprint + destroy at the end). Filesystem note for Albert, not
+a request: /bin/ps carrying the macOS setuid bit is stock; the harness denial is the sanctioned path.
 
 ## Open issues for the checklist
 
-1. DSH-Test verification pending (blocker above) — DESIGN.md's "Before you push" last two boxes are
-   NOT ticked yet.
+1. Only DSH 0.2.1-rc.2 (Desktop) was screenshotted; the npm 0.2.0-rc.2/0.2.1-rc.1 builds are covered
+   by the DOM-replica selector check, not live windows (no npm app installs on this machine).
 2. `[data-slot="main"] [class$="_page"]` also glasses the Plugins page — that decides DESIGN.md's
    open question "DSH's own pages under Wallpaper" for that page. If Albert wants it on the wall,
    narrow the anchor to `[data-testid="task-manager-page"]`.
-3. Dockkit's `emptyTabHost` paints `--dsw-alias-bg-base` (a pane open with zero tabs); not skinned —
-   did not occur in the live screenshots, and it is the same class of fix if it ever shows.
+3. Models and Tank pages were not reproducible in DSH Test (Albert's own plugins, not loadable
+   here); their secondary text is covered by the token deepening, their primary text on a busy wall
+   remains DESIGN.md's open question.
 4. `overrideTokens` needs the theme service: if `ctx.get("theme")` is missing it warns and leaves
    DSH's labels alone (no hard failure).
