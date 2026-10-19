@@ -1,7 +1,8 @@
 # Wallpaper release prep — thread notes (release/glass-v1)
 
-Owner: thread t2 (Wallpaper + dsh-context skin). Commits 7745469 + the dock-remap/verification
-commit on release/glass-v1.
+Owner: thread t2 (Wallpaper + dsh-context skin). Commits 7745469 (re-check + labels + scrub),
+2469076 (notes), 53712d5 (dock remap + verification), 9e91e51 (screenshot evidence) on
+release/glass-v1, all pushed.
 Verified locally: `node --check` on client/impl/index, `node plugins/wallpaper/lib/impl.test.mjs` (all
 checks pass), `npm test` (550 repo tests, 0 fail), scrub-string grep clean, plus the DSH-Test
 verification in section 6.
