@@ -34,3 +34,4 @@ The live pid and patch sha256 must be identical before and after every run.
 2026-10-18 10:20 PM PDT   "pid": 87589,
 2026-10-18 10:22 PM PDT lead: live cordis.patch.yml sha changed a FOURTH time tonight, now 09f9b998b1d9 (pid 87589 unchanged, hot reload); live-side iteration continues, test runs unaffected.
 2026-10-19 1:45 AM PDT notifications(t1) glass-notifications phase-B hidden run 3 (12:56-1:03 AM): item acked +40-50s, NO banner in 96 frames, NO NC entry, NO show-error in leveldb — evidence saved (hidden-run2-frame-1{4,5,6}, center-after-hidden-run2, notif-settings-top); t1 owns the interpretation
+2026-10-19 10:15 AM PDT notifications(t1) glass-notifications destroyed after final handback (289c00c); run3/v3 evidence committed; live pid 87589 + sha 09f9b998 unchanged through all t1 runs

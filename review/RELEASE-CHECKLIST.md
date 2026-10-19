@@ -95,14 +95,23 @@ the Lead merges each block from the thread's handback and marks verified only on
   A second-DSH-client confound (the Lead's headless rig acking the same queue) was identified and removed in
   run 3 (9b2ba0d). t1's verdict: the plugin is correct end to end; the remaining cause is Electron-side and
   goes to the release write-up as a must-fix-follow-up for Albert's decision.
-- One diagnostic click remains: "Send a test notification" in the APP window (button shipped in 44eb6f8)
-  names the exact failure verbatim — GUI notes + fallback leveldb read in
-  review/glass-v1/notifications/lead-gui-notes.md; the window is on screen ready for it.
-- Verdict: **not yet** — the fix ships, but the hidden-window display question needs either the diagnostic
-  click's answer or Albert's explicit accept of the documented Electron-side follow-up.
-- Side finding: the LIVE DSH still runs the old plugin and falls back to osascript (Script Editor-iconed
-  '"Wallpaper release prep …" handed back' seen in Notification Center 7:32 PM); expected until Albert installs
-  the fixed build. The live config was edited/restarted several times tonight (sha 63e0c347→6c668ddc→a3e1575c→
+- Final verdict (t1, v3 instrumented run, 289c00c): **the plugin is correct end to end; the blocker is the
+  harness app's Electron notification post, which never reaches macOS**. The app renderer acks in ~15 s
+  (poll-state timeline: 15 s grid = Chromium's 60 s throttling; focus false, visibility honest, permission
+  granted), the show path runs, the constructor doesn't throw, onshow fires — Electron claims displayed —
+  while ~70 auto-armed region frames over the ack show no banner and macOS's NC database has ZERO records
+  ever for com.deepseek.dsh (the DSH Desktop shell's own bundle ai.deepseek.dsh.desktop has 8 working
+  records; Script Editor's 100 are the old osascript fallbacks). A second-DSH-client confound (the Lead's
+  headless rig acking the same queue) was identified and removed in run 3 (9b2ba0d). The banner/NC shots the
+  brief wanted cannot exist on 0.2.1-rc.2 for any DSH window.
+- Consequence Albert must weigh: on this build the fix changes wrong-icon-but-visible (old osascript) into
+  queued-then-silently-dropped (new path). Options: (a) hold until `desktopRuntime` actually serves on
+  0.2.1-rc.2 so the shell's working path carries DSH's icon; (b) plugin-side last-resort osascript when the
+  show path records "not displayed" (visible again, wrong icon, strictly better than silence); (c) ship as-is
+  with the documented behavior. NOT the plugin's defect in any case.
+- Verdict: **ready (plugin correct end to end)** — the Electron-side follow-up is DSH's; ship/hold/fallback
+  is Albert's call.
+- Side finding: the live config was edited/restarted several times tonight (sha 63e0c347→6c668ddc→a3e1575c→
   ed7059d9→09f9b998, pid 18756→87589) — all live-side, none from the release threads.
 
 ## Suite plugins (Autopilot, Decisions, Agent Terminals, Session watch)
