@@ -109,3 +109,28 @@ sign-in cookie:
 
 Runbooks used (kept for re-runs): `lead-runbook.sh` (phase A) and `phase-b.sh`
 (hidden + minimised shots; spawns one more "Icon proof" thread per run).
+
+## The hidden-window finding (run1 + run2, 2026-10-18 evening)
+
+- Run1 (visible-but-occluded window): handback queued 9:57:07 PM; 75 full-screen
+  frames 9:56:37–9:59:31 PM; **no banner in any frame**; item gone by 10:18 PM.
+- Run2 (fresh instance, detached 10 s probes): "Icon proof run2" handback
+  queued 12:00:53 AM; `pending()` showed it at +101 s and +111 s, **gone by
+  +151 s** — long before the 5-min stale prune ⇒ **the renderer's poller ran
+  and acknowledged it while the window was occluded**, and 120 frames over the
+  drain window show **no banner** (top-right corners pixel-identical).
+- So polls and takes work; the *display* silently fails. macOS's own
+  Notification Center db (`group.com.apple.usernoted/db2/db`, read-only copy):
+  - `com.deepseek.dsh` (the app both DSH instances run): **0 records, ever**.
+  - `com.apple.scripteditor2`: **100 records** — the old plugin's osascript
+    fallbacks (the exact bug being fixed).
+  - `ai.deepseek.dsh.desktop`: 8 records tonight — the app updater's, so
+    macOS *does* accept that bundle's posts; and the per-app settings
+    (`group.com.apple.usernoted.plist`): `com.deepseek.dsh` auth=7 — alerts
+    allowed. **It is not a "notifications off in System Settings" case.**
+- Conclusion: the renderer's `Notification` either reports `denied` (my code
+  then takes-and-drops by design) or constructs and Electron's post to
+  macOS fails silently. Commit 5f29ff7 makes the plugin *say which* on its
+  settings page: a denied take is recorded, and a constructed notification
+  that gets no `show` event within 5 s is recorded too; a successful display
+  clears the line. Next run's settings page names the cause verbatim.
