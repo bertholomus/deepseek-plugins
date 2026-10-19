@@ -109,8 +109,12 @@ the Lead merges each block from the thread's handback and marks verified only on
   0.2.1-rc.2 so the shell's working path carries DSH's icon; (b) plugin-side last-resort osascript when the
   show path records "not displayed" (visible again, wrong icon, strictly better than silence); (c) ship as-is
   with the documented behavior. NOT the plugin's defect in any case.
-- Verdict: **ready (plugin correct end to end)** — the Electron-side follow-up is DSH's; ship/hold/fallback
-  is Albert's call.
+- ALBERT'S DECISION (2026-10-19, via Decisions): "I'm in no rush to release so work on it so it's good" —
+  no ship/hold tradeoff; make notifications actually work (DSH icon, banner, hidden and visible) on
+  0.2.1-rc.2. Open work: why desktopRuntime doesn't serve (t1's lane), then the working path end to end.
+  The release of the OTHER six plugins is not blocked by this; notifications ships only when it's good.
+- Verdict: **in progress (making it good per Albert)** — the plugin is correct end to end; the remaining
+  work is the desktopRuntime/working-path investigation, owned by t1.
 - Side finding: the live config was edited/restarted several times tonight (sha 63e0c347→6c668ddc→a3e1575c→
   ed7059d9→09f9b998, pid 18756→87589) — all live-side, none from the release threads.
 
