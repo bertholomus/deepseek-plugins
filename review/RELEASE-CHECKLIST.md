@@ -98,8 +98,19 @@ the Lead merges each block from the thread's handback and marks verified only on
   the fixed build.
 
 ## Suite plugins (Autopilot, Decisions, Agent Terminals, Session watch)
-- In progress (thread t6): per-plugin glass skin per DESIGN.md + 0.2.1-rc.2 re-check, one commit each.
-- Decisions: relay-card fix already landed (15d8bf0, judge 8.0) — glass/0.2.1 pass only. Verdict: **not yet**.
+- Glass skins: **verified** — the four clients share one window kit that already implements the DESIGN
+  section 3 recipe; t6 verified rather than restyled. Only commit needed: `8ec576c` (Autopilot verification;
+  the other three needed no code change). Decisions' round-2 relay-card fix (15d8bf0) untouched.
+- 0.2.1: **verified** — token sheets + slot keys matched against the 0.2.1-rc.2 asar (read-only scan);
+  all slots the suite injects exist; per-plugin details in review/suite-release.md §Per-plugin (all PASS).
+- Scrub: **verified** — no personal strings in any of the four plugins (Lead grep).
+- Tests: root suite 550/550 at HEAD (Lead-run; includes the shared-kit copy check and the branding scan).
+- Evidence: review/glass-v1/{autopilot 7, decisions 8, agent-terminals 8, session-watch 6} files; DSH Test
+  glass-suite, 1280×820, Wallpaper on/off per page; no page errors during shot runs.
+- Instance: destroyed after the rig runs (progress log); fingerprint unchanged through t6's runs.
+- Note: t6's final handback has not arrived (its session went idle after the live-DSH close), but every
+  claim above is Lead-verified from commits, evidence files and tests.
+- Verdict: **ready**.
 
 ## dsh-site
 - 0.2.1: MiniMe fixed live (401: random shell port; per-authority cookie). Lead ported the fix to this branch —
