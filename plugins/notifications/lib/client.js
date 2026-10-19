@@ -271,7 +271,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const at = typeof item.at === 'string' ? Date.parse(item.at) : NaN;
                     const stale = Number.isFinite(at) && now() - at > STALE_MS;
                     if (typeof Notification === 'function' && Notification.permission === 'granted') {
-                        if (doc && !doc.hasFocus() && !stale && !seen.has(item.id)) {
+                        // Not watching = the window cannot be seen (hidden or
+                        // minimised) or does not have focus. hasFocus can lie
+                        // for a hidden window, so ask visibility too.
+                        const watching = doc && doc.hasFocus() && doc.visibilityState !== 'hidden';
+                        if (doc && !watching && !stale && !seen.has(item.id)) {
                             seen.add(item.id);
                             try {
                                 showNotification(item, Notification, win);
