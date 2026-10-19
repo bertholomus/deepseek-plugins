@@ -142,11 +142,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         };
 
         /** The plugin page's switches, written through DSH's settings form on Save. */
-        function SettingsPage({ form }) {
+        function SettingsPage({ form, lastError = lastShowError }) {
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const disabled = !snapshot.writable || snapshot.saving;
             const on = (name) => snapshot[name]?.text === 'on';
             const toggle = (name) => (next) => form.actions.edit(name, next ? 'on' : 'off');
+            const showFailed = lastError();
             return h('div', { className: 'dshn-page', 'data-notifications-settings': true },
                 h(ui.SettingsForm, { labels: LABELS, state: snapshot, onSave: form.actions.save, onDiscard: form.actions.discard },
                     h('section', { className: 'dshn-section', 'data-notifications-master': '' },
@@ -162,7 +163,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 h('div', { className: 'dshn-hint' }, event.hint)),
                             h(ui.Switch, { checked: on(event.field), label: event.title, disabled, onChange: toggle(event.field) })))),
                     h('p', { className: 'dshn-note' }, TEXT.note)),
-                h(PermissionRow));
+                h(PermissionRow),
+                showFailed ? h('p', { className: 'dshn-note', role: 'status', 'data-notifications-show-error': '' }, `The last notification this window tried to show failed: ${showFailed}`) : null);
         }
 
         /** The plugin page on DSH's Plugins page, served while the plugin runs. */
@@ -197,6 +199,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         : { ok: false, error: { code: 'notifications/unreadable', message: 'the plugin sent an answer this window cannot read' } };
                 },
             };
+        }
+
+        /** Where a failed show is kept for the settings page (a failure looks like a failure). */
+        const SHOW_ERROR_KEY = `${BUNDLE}/last-show-error`;
+
+        function recordShowError(message) {
+            try { localStorage?.setItem(SHOW_ERROR_KEY, String(message).slice(0, 300)); } catch { /* storage may refuse */ }
+        }
+
+        function lastShowError() {
+            try { return localStorage?.getItem(SHOW_ERROR_KEY) ?? ''; } catch { return ''; }
+        }
+
+        function clearShowError() {
+            try { localStorage?.removeItem(SHOW_ERROR_KEY); } catch { /* storage may refuse */ }
         }
 
         /** Show one notification, and bring the window up when it is clicked. */
@@ -279,8 +296,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             seen.add(item.id);
                             try {
                                 showNotification(item, Notification, win);
+                                clearShowError();
                                 shown += 1;
-                            } catch { /* a browser that refuses one notification still takes the rest */ }
+                            } catch (error) {
+                                recordShowError(error?.message ?? error);
+                            }
                         }
                         took.push(item.id);
                     } else if (typeof Notification === 'function' && Notification.permission === 'denied') {
@@ -340,7 +360,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the parts are built on.
         module.exports.internals = {
-            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, isRecord, applyPoller, applySettingsForm,
+            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, recordShowError, lastShowError, clearShowError, isRecord, applyPoller, applySettingsForm,
         };
         return module.exports;
     },
