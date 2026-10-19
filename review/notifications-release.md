@@ -208,3 +208,44 @@ no banner, 09:20:54-09:21:03), the leveldb poll-state timeline
 (`focus false / visibility honest / permission granted`), and the NC db reads
 in this file. The banner+Notification-Center shots the brief asked for are
 impossible on this build for ANY DSH window until the follow-up lands.
+
+## Why nothing banners (2026-10-19, ~10:30 AM PDT) — three measured facts
+
+1. **The macOS notification STYLE for both DeepSeek bundles is effectively
+   off.** ncprefs (`group.com.apple.usernoted.plist`): `com.deepseek.dsh` and
+   `ai.deepseek.dsh.desktop` both auth=7 (alerts allowed) but flags
+   0x1080200e — missing the banner bits that FaceTime/MobileSMS carry. Empirical
+   anchor: the shell bundle's 8 delivered records are ALL presented=0 (never
+   displayed), while Script Editor's are 95/100 presented=1 (displayed; Script
+   Editor has no ncprefs entry = defaults = banners). **Fix: Albert flips
+   System Settings → Notifications → DeepSeek Harness (and DSH Desktop) →
+   Banners. Until then no code path can show a banner for either bundle — the
+   shell's own updater notifications don't display either.**
+2. **The bare harness app cannot load the desktop plugin at all.**
+   `ELECTRON_RUN_AS_NODE` resolve test: `dsh-plugin-desktop` is
+   MODULE_NOT_FOUND from DeepSeek Harness.app's resources, and its asar
+   contains no such package (only a 4 MB `dsh/desktop-runtime.json` release
+   manifest). The DSH Desktop wrapper resolves it (lib/index.js, v2.0.15).
+   So on the current live DSH — which is the bare harness (pid 87589, its
+   helper serves the 63532 web GUI) — the `desktop-shell` row fails, no
+   `desktopRuntime` is provided, `desktop:false` is CORRECT, and the renderer
+   path is the only sender… whose posts the harness bundle silently swallows
+   (v3). **Fix: run the live DSH via DSH Desktop.app (the wrapper), which is
+   the supported desktop surface.**
+3. **When the wrapper's DSH runs, DSH's own sender already works.** The 8
+   records under ai.deepseek.dsh.desktop are DSH's own notifications
+   (updater + "Background Job Completed") — delivered through the wrapper
+   bundle on 2026-10-18 21:26-21:32. My plugin's `desktopSend` calls exactly
+   that runtime (`notifyAttention({title, body})`), and my plugin covers
+   handbacks — the event class the old desktop-notifications row lacks (its
+   config: turn completion/failure, job completion/failure only), which is
+   why handbacks fell to osascript and showed Script Editor.
+
+**Net for Albert:** flip the two style toggles, run the live DSH from DSH
+Desktop.app — handback notifications then deliver through the wrapper bundle
+and display with the DSH icon, no further plugin change. The bare-harness
+mode needs a DSH-core fix (bundle the desktop plugin or repair its Electron
+UN delivery) and is documented above; my renderer path is its only sender
+there and is equally dead until then. The glass-notifications test instance
+(a bare harness) can therefore never show banners; it proves queue and
+renderer logic only.
