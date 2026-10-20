@@ -109,24 +109,19 @@ the Lead merges each block from the thread's handback and marks verified only on
   0.2.1-rc.2 so the shell's working path carries DSH's icon; (b) plugin-side last-resort osascript when the
   show path records "not displayed" (visible again, wrong icon, strictly better than silence); (c) ship as-is
   with the documented behavior. NOT the plugin's defect in any case.
-- ROOT CAUSE (t1, c2c67a9 — all measured): three independent breaks, and NO further plugin change is needed.
-  [1] STYLE: both DeepSeek bundles have the macOS notification style effectively OFF (ncprefs flags
-  0x1080200e, missing the banner bits FaceTime/MobileSMS carry) — proof: the shell bundle's 8 delivered
-  records are ALL presented=0 (never displayed) while Script Editor's are 95/100 presented=1. Until the
-  toggles flip, NO code path can banner for either bundle — even the shell's own updater notifications
-  don't display. [2] The current live DSH is the BARE HARNESS (pid 87589, GUI 63532): dsh-plugin-desktop is
-  MODULE_NOT_FOUND from DeepSeek Harness.app (4 MB release manifest asar), so the desktop-shell row cannot
-  load, no desktopRuntime — desktop:false is CORRECT there and the swallowed renderer post is expected.
-  The live DSH must run via DSH Desktop.app (the wrapper resolves dsh-plugin-desktop 2.0.15 from its lib).
-  [3] The wrapper path already delivers: the 8 records under ai.deepseek.dsh.desktop are DSH's own
-  (updater + Background Job Completed) — the plugin's desktopSend calls exactly that runtime, and the
-  plugin covers handbacks (the event class the old desktop-notifications row lacked).
-- NET: Albert flips the two notification-style toggles (System Settings → Notifications → DeepSeek Harness
-  + DSH Desktop → Banners) and runs the live DSH from DSH Desktop.app → handbacks deliver through the
-  wrapper bundle and banner with the DSH icon, zero further plugin change. t1 verifies via the NC db
-  presented flag (read-only) the moment that's done. The glass-notifications test instance is a bare
-  harness and can never banner — it proves queue/renderer logic only; 26/26 tests + the v3 instrumentation
-  stay as the regression net.
+- FINAL ROOT CAUSE (t1, corrected f0b5681 — supersedes the earlier three-break reading): **ONE break — the
+  macOS notification STYLE for both DeepSeek bundles never displays** (presented=0 on every record: 22
+  DSH Desktop shell + 1 harness; Script Editor 95/100 displayed). The v3 notification DID deliver (NC
+  record 10371 for com.deepseek.dsh, 09:20:54 — t1's earlier db copies predated usernoted's ~1-2 h
+  delayed flush, so "no record ⇒ no delivery" was inferred twice; corrected). The harness post works,
+  no wrapper relaunch is needed, and the banner/NC shots the brief wanted follow from any handback
+  once the style is on.
+- NET: Albert flips ONE style toggle (System Settings → Notifications → DeepSeek Harness → Banners;
+  DSH Desktop while there) → handbacks deliver and banner with the DSH icon through the plugin's own
+  path, zero further plugin change. t1's close-out-check.sh re-runs everything; when it shows
+  presented=1 for a DeepSeek bundle, this block closes and the banner+NC shots follow from any
+  handback (live or a fresh glass-notifications instance). 26/26 tests + the v3 instrumentation stay
+  as the regression net.
 - Verdict: **ready (plugin correct and complete)** — the remaining two steps are Albert's system actions;
   after them t1 confirms presented=1 and this block closes.
 - Side finding: the live config was edited/restarted several times tonight (sha 63e0c347→6c668ddc→a3e1575c→
