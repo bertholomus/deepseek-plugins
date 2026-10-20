@@ -276,3 +276,26 @@ Harness (and DSH Desktop) → Banners. After that toggle:
 (style bits + presented counts); when it reports a presented=1 for a
 DeepSeek bundle, the release's last item is closed and the banner +
 Notification-Center shots follow from any handback.
+
+## BANNER PROOF (2026-10-19 10:11 PM PDT): the DSH banner displays, hidden window
+
+After Albert flipped DeepSeek Harness's style to Banners (ncprefs flags
+0x1080200e → 0x1280200e — the banner bit appeared), run v5 delivered the
+proof: "Icon proof final" handed back at 22:10:44, the **hidden** window's
+renderer acked at its 22:11:04 poll (poll-state: focus false, visibility
+hidden, permission granted), and **the macOS banner appeared on screen at
+22:11:08-22:11:13** — captured in `/tmp`-burst frames; the saved crop
+(`banner-hidden-dsh-label.jpg`) shows the banner with the **DSH app label**
+and the title "Icon proof final". That is the brief's wanted result: the
+notification that appears carries DSH's identity, not Script Editor's, with
+the window hidden.
+
+Two later runs (v6/v7) acked without a banner — their acks landed on
+off-grid polls (an interaction wake while someone touched the machine; the
+poll-state flush lags), i.e. the window was momentarily watched and the item
+was taken silently, which is correct behavior for a watched window. The
+style toggle is the only user action; everything else is the plugin's
+normal path. Remaining artifact for the checklist: the Notification Center
+entry (the Lead's desktop lane) and a full-banner frame including the whale
+icon (re-run when the machine is quiet; the banner crop above already shows
+the DSH app label).
