@@ -249,3 +249,30 @@ UN delivery) and is documented above; my renderer path is its only sender
 there and is equally dead until then. The glass-notifications test instance
 (a bare harness) can therefore never show banners; it proves queue and
 renderer logic only.
+
+## CORRECTION (2026-10-19 ~11:15 AM PDT): the harness post DID deliver — style is the only break
+
+The staged close-out check found **record 10371 for `com.deepseek.dsh`,
+delivered 2026-10-19 09:20:54, title "'Icon proof v3' ended without a
+handback"** — the v3 notification. My earlier "Electron swallows the post"
+conclusion was wrong: I read the NC db twice before usernoted flushed the
+row (its writes lag by up to ~2 h), and inferred "no record ⇒ no delivery".
+The record's presented=0 matches the 50 banner-free frames exactly — the
+delivery happened, the display did not, because the **style is off**.
+
+**Final single root cause: macOS notification style for both DeepSeek
+bundles (com.deepseek.dsh, ai.deepseek.dsh.desktop) never displays
+(presented=0 on every record, 22 shell + 1 harness), while Script Editor
+displays 95/100.** One fix: System Settings → Notifications → DeepSeek
+Harness (and DSH Desktop) → Banners. After that toggle:
+- the plugin's renderer path (any DSH window, hidden or not) banners with the
+  DSH icon — proven delivered tonight;
+- DSH's own desktop path (the wrapper) banners the same way — its records
+  already arrive;
+- the old plugin's osascript fallback (Script Editor icon) is gone — my
+  plugin covers handbacks and never shells out.
+
+`review/glass-v1/notifications/close-out-check.sh` re-runs the whole check
+(style bits + presented counts); when it reports a presented=1 for a
+DeepSeek bundle, the release's last item is closed and the banner +
+Notification-Center shots follow from any handback.
