@@ -217,13 +217,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             try { localStorage?.removeItem(SHOW_ERROR_KEY); } catch { /* storage may refuse */ }
         }
 
-        /** Show one notification, and bring the window up when it is clicked. */
+        /** Show one notification, and bring the window up when it is clicked. A
+         * show the system never displays (no `show` event within 5 s) is
+         * recorded too, so the settings page can name it instead of the
+         * notification vanishing without a trace. */
         function showNotification(item, Notification = globalThis.Notification, win = globalThis.window) {
             const notification = new Notification(item.title, { body: item.body, tag: `${BUNDLE}:${item.id}` });
+            let displayed = false;
+            notification.onshow = () => {
+                displayed = true;
+            };
             notification.onclick = () => {
                 try { win?.focus?.(); } catch { /* the window may be gone */ }
                 notification.close();
             };
+            const shown_timer = setTimeout(() => {
+                if (displayed) clearShowError();
+                else recordShowError('the system did not display it (no show event 5 s after it was sent)');
+            }, 5000);
+            shown_timer.unref?.();
             return notification;
         }
 
@@ -305,6 +317,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         }
                         took.push(item.id);
                     } else if (typeof Notification === 'function' && Notification.permission === 'denied') {
+                        recordShowError('notifications are denied in this window, so the item was dropped');
                         seen.add(item.id);
                         took.push(item.id);
                     }
