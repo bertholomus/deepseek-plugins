@@ -28,7 +28,7 @@ if (clientMetas.length !== 1) throw new Error(`the browser half loaded ${clientM
 /** @returns the plugin's own test helpers, from a fresh factory run. */
 const clientInternals = (requireImpl = () => ({})) => clientMetas[0].factory(requireImpl).internals;
 
-const CONFIG = { enabled: true, notifyHandback: true, notifyFinished: true, notifyApproval: true, notifyFailed: true, notifyStopped: true };
+const CONFIG = { enabled: true, notifyHandback: true, notifyFinished: true, notifyApproval: true, notifyFailed: true, notifyStopped: true, notifyFleet: true };
 
 /** A fake cordis context: provide records, inject runs only with every service, like DSH's. */
 function fakeCtx(services = {}) {
@@ -228,6 +228,21 @@ test('notifications: the coordinator\'s one line for a news item', () => {
 
 test('notifications: every news kind is gated by a settings field', () => {
     for (const [kind, field] of Object.entries(EVENT_FIELDS)) assert.match(field, /^notify/);
+    // each field is a setting (on by default) and a switch on the settings page
+    const defaults = plugin.Config({});
+    const { FIELDS } = clientInternals();
+    for (const field of Object.values(EVENT_FIELDS)) { assert.equal(defaults[field], true, field); assert.ok(FIELDS.includes(field), field); }
+});
+
+test('notifications: Fleet findings have their own switch', () => {
+    const sent = [];
+    const send = () => { sent.push('cli'); return true; };
+    const noFleet = new Notifier({ settings: () => ({ ...CONFIG, notifyFleet: false }), send });
+    assert.equal(noFleet.notify({ title: 'A3 is running hot', body: '87 °C', kind: 'fleet' }), 'off');
+    assert.equal(noFleet.notify({ title: 'T', kind: 'handback' }), 'cli');
+    const fleetOnly = new Notifier({ settings: () => ({ ...CONFIG, notifyHandback: false }), send });
+    assert.equal(fleetOnly.notify({ title: 'A3 is running hot', body: '87 °C', kind: 'fleet' }), 'cli');
+    assert.deepEqual(sent, ['cli', 'cli']);
 });
 
 test('notifications: the browser half loads in the module format DSH serves, without throwing', () => {
@@ -246,7 +261,7 @@ test('notifications: the browser half loads in the module format DSH serves, wit
                 },
             }
     ));
-    assert.deepEqual(internals.FIELDS, ['enabled', 'notifyHandback', 'notifyFinished', 'notifyApproval', 'notifyFailed', 'notifyStopped']);
+    assert.deepEqual(internals.FIELDS, ['enabled', 'notifyHandback', 'notifyFinished', 'notifyApproval', 'notifyFailed', 'notifyStopped', 'notifyFleet']);
     assert.deepEqual(internals.boolSpec('enabled').parse('on'), { kind: 'set', value: true });
     assert.deepEqual(internals.boolSpec('enabled').parse('off'), { kind: 'set', value: false });
     assert.equal(internals.boolSpec('enabled').parse('maybe'), undefined);

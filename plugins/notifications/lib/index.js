@@ -41,6 +41,8 @@ export const Config = z.object({
     notifyFailed: z.boolean().default(true),
     /** A thread that was stopped after the plugin nudged it once. */
     notifyStopped: z.boolean().default(true),
+    /** Fleet: a finding on an Ascent that starts, gets worse or clears (running hot, low memory, a GPU error). */
+    notifyFleet: z.boolean().default(true),
 });
 
 export function apply(ctx, config) {

@@ -31,6 +31,7 @@ export const EVENT_FIELDS = {
     approval: 'notifyApproval',
     failed: 'notifyFailed',
     stopped: 'notifyStopped',
+    fleet: 'notifyFleet',
 };
 
 export class Notifier {

@@ -45,6 +45,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             { field: 'notifyApproval', title: 'Waiting for approval', hint: 'A thread waits on a permission prompt.' },
             { field: 'notifyFailed', title: 'Failed after a nudge', hint: 'A thread failed again after the plugin nudged it once.' },
             { field: 'notifyStopped', title: 'Stopped after a nudge', hint: 'A thread was stopped again after the plugin nudged it once.' },
+            { field: 'notifyFleet', title: 'Fleet findings', hint: 'An Ascent starts running hot, runs low on memory, logs a GPU error or stops answering, and when that clears.' },
         ];
 
         const TEXT = {

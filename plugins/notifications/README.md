@@ -67,11 +67,18 @@ without a handback, one waiting for your approval, and one that failed or was
 stopped again after the plugin's nudge. Its words for these are in its
 `lib/index.js`; the kinds gate here, one switch each.
 
+Fleet calls it with `kind: 'fleet'` when a finding on an Ascent starts, gets
+worse or clears: running hot, low on memory, a GPU error or an out-of-memory
+kill in the kernel log, a fabric link down, an Ascent that stops answering.
+Fleet waits for a finding to hold before it opens and for a quiet spell before
+it reports it cleared, so one finding is one notification when it starts and
+one when it clears.
+
 ## Settings
 
 On DSH's Plugins page, under Notifications: a master switch, and one switch
 per event (handbacks; ended without a handback; waiting for approval; failed
-after a nudge; stopped after a nudge). A save lands in the profile's
+after a nudge; stopped after a nudge; Fleet findings). A save lands in the profile's
 `cordis.patch.yml` and the plugin restarts with it — a restart costs a
 notifier nothing, so its config is ordinary config, not live.
 
