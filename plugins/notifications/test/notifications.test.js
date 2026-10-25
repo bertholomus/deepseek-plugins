@@ -53,10 +53,10 @@ test('notifications: one line', () => {
 
 test('notifications: the platform command and its quoting', () => {
     assert.deepEqual(cliCommand('darwin', { title: 'He said "hi"', body: 'a\\b' }),
-        { command: 'osascript', args: ['-e', 'display notification "a\\\\b" with title "He said \\"hi\\""'] });
+        { command: 'osascript', args: ['-e', 'tell application id "com.deepseek.dsh" to display notification "a\\\\b" with title "He said \\"hi\\""'] });
     // macOS's osascript has no icon of its own: given one, it is ignored.
     assert.deepEqual(cliCommand('darwin', { title: 'T', body: 'B' }, { path: '/i/whale.png' }),
-        { command: 'osascript', args: ['-e', 'display notification "B" with title "T"'] });
+        { command: 'osascript', args: ['-e', 'tell application id "com.deepseek.dsh" to display notification "B" with title "T"'] });
     assert.deepEqual(cliCommand('linux', { title: 'T', body: 'B' }),
         { command: 'notify-send', args: ['--app-name=DSH', 'T', 'B'] });
     assert.deepEqual(cliCommand('linux', { title: 'T', body: 'B' }, { path: '/i/whale.svg' }),

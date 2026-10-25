@@ -74,7 +74,9 @@ const toastFileUrl = (path) => `file:///${encodeURI(String(path).replace(/\\/g, 
  */
 export function cliCommand(platform, { title, body }, icon) {
     if (platform === 'darwin') {
-        return { command: 'osascript', args: ['-e', `display notification ${appleLiteral(body)} with title ${appleLiteral(title)}`] };
+        // Sent as the DSH app (bundle com.deepseek.dsh) so the banner wears
+        // its icon, not Script Editor's; plain osascript is the sender then.
+        return { command: 'osascript', args: ['-e', `tell application id "com.deepseek.dsh" to display notification ${appleLiteral(body)} with title ${appleLiteral(title)}`] };
     }
     if (platform === 'linux') {
         const args = ['--app-name=DSH'];
