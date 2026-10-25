@@ -60,6 +60,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             permAsk: 'Allow',
             permNone: 'This window has no notification API, so it cannot show them.',
             desktopRow: 'The Desktop app sends its own notifications.',
+            testTitle: 'A test notification',
+            testHint: 'Send one now from this window: it shows whether this window\'s notifications reach the screen, and names any failure.',
+            testSend: 'Send a test notification',
         };
 
         const CSS = [
@@ -142,13 +145,44 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             saving: 'Saving…',
         };
 
+        /**
+         * Send one test notification from a user click (so a permission ask is
+         * allowed too) and name the outcome on the page: sent, failed with the
+         * reason, or — after the show-event grace — that the system never
+         * displayed it. This is how anyone answers "does this window's
+         * notifications work" without the host's help.
+         */
+        function useTestSend() {
+            const [line, setLine] = React.useState('');
+            const send = () => {
+                try {
+                    showNotification({ id: -1, title: 'Notifications test', body: 'If this banner is on screen, DSH\'s notifications work in this window.' });
+                    setLine('Sent — it should be on screen now.');
+                } catch (error) {
+                    const reason = String(error?.message ?? error);
+                    recordShowError(reason);
+                    setLine(`Failed: ${reason}`);
+                    return;
+                }
+                setTimeout(() => {
+                    const failure = lastError();
+                    setLine(failure ? `Not displayed: ${failure}` : 'Shown (the system reported displaying it).');
+                }, 6000);
+            };
+            return [line, send];
+        }
+
         /** The plugin page's switches, written through DSH's settings form on Save. */
-        function SettingsPage({ form, lastError = lastShowError }) {
+        function SettingsPage({ form, lastError = lastShowError, pollState = lastPollState }) {
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const disabled = !snapshot.writable || snapshot.saving;
             const on = (name) => snapshot[name]?.text === 'on';
             const toggle = (name) => (next) => form.actions.edit(name, next ? 'on' : 'off');
             const showFailed = lastError();
+            const poll = pollState();
+            const pollLine = poll ? `At its last queue poll (${new Date(poll.at).toLocaleTimeString()}): focus ${String(poll.focus)}, page ${String(poll.visibility)}, permission ${String(poll.permission)}.`
+                : '';
+            const [testLine, sendTest] = useTestSend();
             return h('div', { className: 'dshn-page', 'data-notifications-settings': true },
                 h(ui.SettingsForm, { labels: LABELS, state: snapshot, onSave: form.actions.save, onDiscard: form.actions.discard },
                     h('section', { className: 'dshn-section', 'data-notifications-master': '' },
@@ -165,6 +199,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             h(ui.Switch, { checked: on(event.field), label: event.title, disabled, onChange: toggle(event.field) })))),
                     h('p', { className: 'dshn-note' }, TEXT.note)),
                 h(PermissionRow),
+                h('section', { className: 'dshn-section', 'data-notifications-test': '' },
+                    h('div', { className: 'dshn-row' },
+                        h('div', { className: 'dshn-row-text' },
+                            h('div', { className: 'dshn-title' }, TEXT.testTitle),
+                            h('div', { className: 'dshn-hint' }, TEXT.testHint)),
+                        h('button', { className: 'dshn-link', type: 'button', onClick: sendTest }, TEXT.testSend)),
+                    testLine ? h('p', { className: 'dshn-note', role: 'status', 'data-notifications-test-result': '' }, testLine) : null,
+                    pollLine ? h('p', { className: 'dshn-note', 'data-notifications-poll-state': '' }, pollLine) : null),
                 showFailed ? h('p', { className: 'dshn-note', role: 'status', 'data-notifications-show-error': '' }, `The last notification this window tried to show failed: ${showFailed}`) : null);
         }
 
@@ -204,6 +246,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** Where a failed show is kept for the settings page (a failure looks like a failure). */
         const SHOW_ERROR_KEY = `${BUNDLE}/last-show-error`;
+
+        /** What the window believed at its last queue poll (focus, visibility,
+         * permission) — the settings page shows it, so a window that lies
+         * about being watched while hidden is caught on the page. */
+        const POLL_STATE_KEY = `${BUNDLE}/last-poll-state`;
+
+        function recordPollState(Notification = globalThis.Notification, doc = typeof document === 'undefined' ? undefined : document) {
+            try {
+                localStorage?.setItem(POLL_STATE_KEY, JSON.stringify({
+                    at: new Date().toISOString(),
+                    focus: doc ? doc.hasFocus() : null,
+                    visibility: doc ? doc.visibilityState : null,
+                    permission: typeof Notification === 'function' ? Notification.permission : null,
+                }));
+            } catch { /* storage may refuse */ }
+        }
+
+        function lastPollState() {
+            try { return JSON.parse(localStorage?.getItem(POLL_STATE_KEY) ?? 'null'); } catch { return null; }
+        }
 
         function recordShowError(message) {
             try { localStorage?.setItem(SHOW_ERROR_KEY, String(message).slice(0, 300)); } catch { /* storage may refuse */ }
@@ -293,6 +355,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     return 0;
                 }
                 const items = Array.isArray(result.value.items) ? result.value.items.filter(isRecord) : [];
+                recordPollState(Notification, doc);
                 if (items.length === 0) return 0;
                 let shown = 0;
                 const took = [];
@@ -374,7 +437,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the parts are built on.
         module.exports.internals = {
-            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, recordShowError, lastShowError, clearShowError, isRecord, applyPoller, applySettingsForm,
+            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, recordShowError, lastShowError, clearShowError, recordPollState, lastPollState, isRecord, applyPoller, applySettingsForm,
         };
         return module.exports;
     },
