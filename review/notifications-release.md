@@ -1,0 +1,91 @@
+# Notifications — release prep notes (glass-v1)
+
+Thread: t1 "Notifications icon fix (must-fix before release)" · 2026-10-18 (PDT)
+
+## The bug
+
+Albert: the macOS notification shows "the script icon" — Script Editor's —
+instead of DSH's. Verified causes (all re-checked here, not taken on faith):
+
+1. **The browser half could never poll — HTTP 404.**
+   `lib/remote.js` bound the service with `bindTypertRemote` but never marked
+   `pending`/`acknowledge` as Remote methods. The gateway serves
+   `/api/<namespace>/<method>` only for prototype-carrying markers
+   (`REMOTE_METHOD_DESCRIPTOR`, version 1 — read via `remoteMethods()` in
+   `@deepseek-ai/dsh-typert-protocol/lib/index.js`), so both calls answered
+   "not found". With no successful poll, `browserAlive()` was always false
+   and `notify()` fell through to the CLI sender — on macOS, `osascript`,
+   whose notifications macOS attributes to Script Editor.
+   The calendar plugin does the marking (`plugins/calendar/lib/remote.js`,
+   `markRemote` at its end); notifications was missing it.
+2. **The macOS CLI sender cannot carry an icon.** `cliCommand('darwin')`
+   built `osascript display notification …`, and `osascript` has no
+   per-notification icon — the posting app is always Script Editor.
+3. **`desktopRuntime` is not served on this build.** Correction to the brief:
+   the Desktop app is unpacked at
+   `/Applications/DSH Desktop.app/Contents/Resources/app/` (no `app.asar`
+   exists), and `dsh-plugin-desktop` 2.0.15 **is** there, `notifyAttention`
+   included (`lib/profile-channel-admission-*.js`). Whether its
+   `desktop-shell`/`desktop-notifications` rows actually load on 0.2.1-rc.2
+   is checked on the test instance (see below); the observed bug proves the
+   service does not reach the plugin either way, and the fix does not depend
+   on it — the renderer is now the sender whenever the host has none.
+   `DSH_CLIENT_VERSION` is **not** an env var of the host process (it is a
+   build-inlined constant in the client bundle; the Desktop shell never
+   exports it). The host-side desktop detection uses
+   `process.versions.electron` (the app's own pattern,
+   `windows-pwsh-sandbox.js`), with `DSH_CLIENT_VERSION` as a secondary
+   signal.
+
+## The fix (commit cba8aa8 + follow-ups on release/glass-v1)
+
+- `lib/remote.js`: `markRemote(NotificationsRemote, ['pending', 'acknowledge'])`,
+  the calendar's exact pattern. The gateway can now name both methods.
+- `lib/notifier.js`: new `desktopHost` option — on a Desktop host the queue
+  is used even with no recent poll (the window's renderer exists hidden,
+  minimised, backgrounded; its timers are throttled, so polls can lag about
+  a minute). `pending()` sheds items past `QUEUE_STALE_MS`.
+- `lib/backends.js`: macOS has no CLI sender — `cliCommand('darwin')` →
+  null. Linux (`notify-send` + whale) and Windows (PowerShell toast + whale
+  PNG) unchanged.
+- `lib/index.js`: `desktopHost` detected from `process.versions.electron` /
+  `DSH_CLIENT_VERSION`; one startup log line for the test instance.
+- `lib/client.js`: a failing poll (the old 404) is a warned retry, not a
+  stop; items are only taken when they can be shown or are worthless —
+  with permission still `default` they wait in the queue, so they show once
+  the ask is answered; `denied` items are taken (dropped); the Desktop
+  renderer asks once without a gesture (Electron allows it), a browser asks
+  via the settings page's Allow button; flush on focus/visibility already
+  existed and is kept. Words updated to match the new macOS behavior.
+- README rewritten to the same story.
+
+## Glass / DESIGN.md pass (audit; no visual change was needed)
+
+The plugin draws only inside DSH's Plugins page (`plugins.bundle.config`),
+so per DESIGN.md §3 it owns no ground and uses DSH's tokens — it already
+did. Checked against this build's token sheet
+(`dsh-client-ui-theme/lib/client.js`): `--dsw-alias-label-primary/-secondary`,
+`--dsw-alias-link`, `--dsw-alias-state-business-primary`,
+`--dsw-focus-ring-color`, `--dsw-font-s-14/-xs-13` all exist. Link colour is
+deepened per §4 (`color-mix … 85%, label-primary`); the focus ring is §9's
+exact recipe; `body.wp-still` + `prefers-reduced-motion` cover pseudo-
+elements; no `:root`/`html`/`body`, no `:has()`, no DSH hashes, no
+generated-class selectors. Slot key `dsh-plugin-notifications` matches
+agent-terminals/autopilot. Icon is 36×36 whale SVG; `locale/en.json` meta
+carries title + one sentence.
+
+## Tests
+
+`node --test plugins/notifications/test/notifications.test.js` → 26/26,
+including: the gateway can name its methods (404 regression), a desktop
+host queues past the poll TTL, staleness shedding, the 404 retry path, the
+permission wait, and the once-only ask. `node --check` on all lib files.
+
+Note for the Lead: the repo-wide suite's only failure is the branding scan
+tripping on `review/history-scrub.md` — an untracked scratch file from
+another thread, not from this one.
+
+## DSH Test run
+
+See the run log appended to `review/RELEASE-PROGRESS.md` and the shots in
+`review/glass-v1/notifications/`.

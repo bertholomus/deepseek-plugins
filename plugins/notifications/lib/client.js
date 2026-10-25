@@ -51,13 +51,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const TEXT = {
             summary: 'System notifications when DSH\'s window is hidden or unfocused.',
             enabled: 'Send system notifications',
-            enabledHint: 'When DSH\'s window is hidden or unfocused: plugin news, through the Desktop app\'s own notifications, a browser window\'s, or a command when no window is around.',
+            enabledHint: 'When DSH\'s window is hidden or unfocused: shown by the window that is around — the Desktop app\'s carry DSH\'s own icon. A terminal DSH sends none on macOS.',
             note: 'A click brings DSH\'s window up; it does not open the chat, because DSH offers plugins no way to open one.',
             permTitle: 'This browser',
             permGranted: 'System notifications are on in this browser.',
             permDenied: 'Blocked for this site in this browser\'s settings. Allow them there to hear news in the browser profile.',
             permDefault: 'Browser notifications need your OK once.',
             permAsk: 'Allow',
+            permNone: 'This window has no notification API, so it cannot show them.',
             desktopRow: 'The Desktop app sends its own notifications.',
         };
 
@@ -109,7 +110,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const permissionLine = (kind) => (kind === 'granted' ? TEXT.permGranted
             : kind === 'denied' ? TEXT.permDenied
             : kind === 'desktop' ? TEXT.desktopRow
-            : kind === 'none' ? TEXT.desktopRow
+            : kind === 'none' ? TEXT.permNone
             : TEXT.permDefault);
 
         /** The permission row: state in words, and the one-time ask as a button. */
