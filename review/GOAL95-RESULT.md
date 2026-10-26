@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 2:12 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 2:16 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -18,7 +18,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Decisions | 9.0 (GOAL95 round 1 = round 5) | ad79740 | goal95/decisions | NOT YET | a question with a dot before its "?" shows only the words after the last dot (`askIn` in `shared/host/words.js`) |
 | Discord | not judged yet | c09a9aa | goal95/discord (dsh-plugin-discord) | NOT YET | builder working |
 | DNA Studio | 8.0 (round 1) | cdac02e | goal95/dna-studio (local copy, no remote) | NOT YET | a chat never shows the pictures it made; saving the plugin's settings during a page job marks the job cut off, and Rerun then runs it twice |
-| dsh-site | 8.0 (round 1) | 56fa8e9 | goal95/dsh-site (dsh-plugin-dsh-site) | NOT YET | findings in the local scorecard; round 2 building |
+| dsh-site | 8.0 (round 1) | 56fa8e9 | goal95/dsh-site (dsh-plugin-dsh-site) | NOT YET | round 2 at af7f673 being judged (last round) |
 | Fleet | not judged yet (card flip 4e24735 ready in DSH Test) | 70be782 | goal95/fleet (redesign repo) | NOT YET | builder working |
 | Focus | being judged (round 1) | 3859b8d | goal95/focus | NOT YET | judge working |
 | Hermes Bridge | being judged (round 1) | 717b595 | goal95/hermes-bridge (dsh-plugin-hermes-bridge) | NOT YET | judge working |
