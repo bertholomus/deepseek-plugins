@@ -1296,16 +1296,19 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return next.at <= Date.now() + 5000 ? `${what} now` : `${what} at ${at}`;
         }
 
-        /** The quiet time in words, as the log says it: seconds under two minutes, so 90 seconds stays 90 seconds. */
+        /** The quiet time in words, as the log says it: 90 seconds stays 90 seconds, and 90 minutes 1 hour 30 minutes. */
         function quietText(seconds) {
             const n = Math.max(0, Math.round(Number(seconds)));
             if (!Number.isFinite(n)) return '';
             const unit = (value, word) => `${value} ${word}${value === 1 ? '' : 's'}`;
             if (n < 120) return unit(n, 'second');
             if (n < 600 && n % 60 !== 0) return `${unit(Math.floor(n / 60), 'minute')} ${unit(n % 60, 'second')}`;
-            if (n < 5400) return unit(Math.round(n / 60), 'minute');
-            if (n < 129600) return unit(Math.round(n / 3600), 'hour');
-            return unit(Math.round(n / 86400), 'day');
+            const m = Math.round(n / 60);
+            if (m < 90) return unit(m, 'minute');
+            if (m < 600 && m % 60 !== 0) return `${unit(Math.floor(m / 60), 'hour')} ${unit(m % 60, 'minute')}`;
+            const hours = Math.round(m / 60);
+            if (hours < 36) return unit(hours, 'hour');
+            return unit(Math.round(hours / 24), 'day');
         }
 
         function SessionRow({ s, busy, act, onOpen, failure }) {

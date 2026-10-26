@@ -891,7 +891,7 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     assert.match(textIn(head), /Watching 4 sessions · 3 notes this hour; the limit is 20 · a session with open work gets a note after 10 minutes of quiet/);
     // The quiet time reads as the log says it: 90 seconds is not "2 minutes".
     const quiet = (idleSeconds) => /gets a note after (.+) of quiet/.exec(textIn(HeaderCard({ data: { ...base, settings: { ...base.settings, idleSeconds } }, busy: false, act })))[1];
-    assert.deepEqual([90, 119, 150, 300, 600, 7200].map(quiet), ['90 seconds', '119 seconds', '2 minutes 30 seconds', '5 minutes', '10 minutes', '2 hours']);
+    assert.deepEqual([90, 119, 150, 300, 600, 5400, 7200, 86400].map(quiet), ['90 seconds', '119 seconds', '2 minutes 30 seconds', '5 minutes', '10 minutes', '1 hour 30 minutes', '2 hours', '24 hours']);
     // The Ask first line names Decisions only when DSH says it runs (the page never calls it to find out).
     assert.match(textIn(HeaderCard({ data: { ...base, defaultRule: 'ask' }, busy: false, act, decisions: true })), /on this page and in Decisions/);
     assert.doesNotMatch(textIn(HeaderCard({ data: { ...base, defaultRule: 'ask' }, busy: false, act, decisions: false })), /Decisions/);

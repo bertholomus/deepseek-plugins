@@ -280,6 +280,12 @@ export function spanWords(ms) {
     }
     const m = Math.round(s / 60);
     if (m < 90) return `${m} minute${m === 1 ? '' : 's'}`;
+    // Hours and minutes up to ten hours, so 90 minutes never reads as 2 hours.
+    if (m < 600 && m % 60 !== 0) {
+        const whole = Math.floor(m / 60);
+        const rest = m % 60;
+        return `${whole} hour${whole === 1 ? '' : 's'} ${rest} minute${rest === 1 ? '' : 's'}`;
+    }
     const h = Math.round(m / 60);
     if (h < 36) return `${h} hour${h === 1 ? '' : 's'}`;
     const d = Math.round(h / 24);
