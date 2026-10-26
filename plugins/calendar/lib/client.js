@@ -542,6 +542,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-root[data-side-open] .dshcal-scrim{display:block}',
             '.dshcal-root[data-side-folded][data-side-open] .dshcal-side{display:flex;position:absolute;z-index:20;top:12px;bottom:12px;left:12px;width:min(280px,calc(100% - 24px));background:var(--dsw-specific-menu);-webkit-backdrop-filter:var(--dsw-menu-backdrop-filter);backdrop-filter:var(--dsw-menu-backdrop-filter);box-shadow:var(--dsw-elevation-prominent)}',
             '@container dshcal (max-width: 799px){.dshcal-head .dshcal-head-new{display:inline-flex}}',
+            // Below 1100px the header's New event is its + alone (its name in its tooltip and for screen readers), so the
+            // search, the views and it stay on one row instead of wrapping it onto a row of its own.
+            '@container dshcal (max-width: 1099px){.dshcal-head-new>.dshcal-hide-narrow{display:none}.dshcal-head-new{width:30px;padding:0}}',
+            // Above 560px the tools keep to one row (the search gives way first): beside the title when they fit, else
+            // on the row under it, never a row of their own each.
+            '@container dshcal (min-width: 561px){.dshcal-head-tools{flex-wrap:nowrap}}',
             '@container dshcal (max-width: 560px){'
                 + '.dshcal-root{padding:8px;gap:8px}'
                 + '.dshcal-head{padding:8px}'
