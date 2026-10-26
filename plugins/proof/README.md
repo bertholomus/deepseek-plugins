@@ -574,7 +574,10 @@ writes into a session it judges.
   deploy that went through, not by the site being up a minute later. A
   health check in the turn covers that.
 - Long outputs are kept by their head (4,000 characters) and tail (12,000),
-  where runners print their summaries.
+  where runners print their summaries. Before they are read, runs that say
+  nothing are made short (more than two blank lines, one character over
+  and over past 64, numbers past 64 digits), so reading a tool's output
+  takes milliseconds whatever it printed.
 - Check threads stay in DSH's session list as ordinary sessions, titled
   **Proof check · …**. DSH can archive a session, but an archived thread
   cannot be opened in the window any more, and DSH offers plugins no way to

@@ -807,6 +807,18 @@ const GIT_OPTS = /\bgit((?:\s+(?:-C|-c)\s+(?:"[^"]*"|'[^']*'|\S+)|\s+--(?:git-di
 export const plainGit = (command) => String(command ?? '').replace(GIT_OPTS, 'git');
 
 /**
+ * An output with its long runs made short: blank lines, one character over and over (a rule of "=", padding, a
+ * progress bar's updates), long numbers and long blank runs. They say nothing, and every reading stays quick on
+ * whatever a tool prints (16 KB of blank lines took seconds before).
+ */
+export const compact = (text) => (text.length < 64 ? text : text
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n(?:[ \t]*\n){2,}/g, '\n\n')
+    .replace(/([^\n])\1{63,}/g, (m, c) => c.repeat(64))
+    .replace(/\d{65,}/g, (m) => m.slice(0, 64))
+    .replace(/[ \t]{65,}/g, (m) => m.slice(0, 64)));
+
+/**
  * One tool call and its result as an evidence item:
  * `{ tool, kind, ok, exit?, cmd?, change?, code?, targets?, shipped?, status?, health?, tests?, hash?, metric?, series?, nums?, text }`.
  * `kind` is test, build, lint, ci, deploy, probe, hash, run, change, read or other;
@@ -815,7 +827,7 @@ export const plainGit = (command) => String(command ?? '').replace(GIT_OPTS, 'gi
 export function itemOf({ name, args, text, isError = false }) {
     const tool = String(name ?? '');
     if (tool === '' || BOOKKEEPING_TOOL.test(tool)) return undefined;
-    const out = typeof text === 'string' ? text : '';
+    const out = typeof text === 'string' ? compact(text) : '';
     const shell = SHELL_TOOL.test(tool);
     const asRun = shell ? commandOf(args) : '';
     const command = plainGit(asRun);

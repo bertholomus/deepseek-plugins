@@ -46,8 +46,8 @@ const CLOSE = '⟩';
 /** Markdown's marks around words, so "**All tests pass**" reads as the words; inline code is marked. */
 function plain(line) {
     return line
-        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        .replace(/!\[[^\][\n]*\]\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)/g, '')
+        .replace(/\[([^\][\n]+)\]\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)/g, '$1')
         .replace(/`([^`]*)`/g, `${OPEN}$1${CLOSE}`)
         .replace(/(\*\*|__)(.*?)\1/g, '$2')
         .replace(/(^|[\s(])[*_]([^*_\n]+)[*_](?=[\s).,;:!?]|$)/g, '$1$2')
@@ -133,7 +133,8 @@ function markedWithPlans(text) {
     let fenced = false;
     let header;
     let planned = false;
-    const lines = text.split(/\r?\n/);
+    // One character over and over says nothing past 64 ("====…", "[[[[…"), and keeps each reading quick.
+    const lines = text.replace(/([^\n])\1{63,}/g, (m, c) => c.repeat(64)).split(/\r?\n/);
     for (let at = 0; at < lines.length; at += 1) {
         let raw = lines[at];
         if (/^\s{0,3}(```|~~~)/.test(raw)) {

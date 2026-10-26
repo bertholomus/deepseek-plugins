@@ -1023,3 +1023,21 @@ test('judge: a loop of node test runs prints one summary a round, and a round th
     const clean = bash('for i in 1 2 3; do node --test; done', ['# tests 3\n# pass 3\n# fail 0', '# tests 3\n# pass 3\n# fail 0', '# tests 3\n# pass 3\n# fail 0'].join('\n'));
     assert.equal(judge(only('Fixed the flaky coupon test; it passes reliably now.'), [edit('coupon.test.mjs'), clean]).verdict, 'backed');
 });
+
+test('evidence and claims: a long run of one thing reads in time linear in its length', () => {
+    // 16 KB is what the projection keeps of an output; each took seconds before (blank lines, CRLF, digits).
+    const outputs = ['\n', '\r\n', '\r', ' \n', '1', '0', ' ', '\t', '='].map((u) => u.repeat(Math.ceil(16000 / u.length)).slice(0, 16000) + 'x');
+    for (const text of outputs) {
+        const start = performance.now();
+        itemOf({ name: 'bash', args: { command: 'npm test' }, text });
+        assert.ok(performance.now() - start < 1500, JSON.stringify(text.slice(0, 4)));
+    }
+    for (const u of ['[', '[a](', '1', '=']) {
+        const start = performance.now();
+        claimsIn(u.repeat(20000 / u.length));
+        assert.ok(performance.now() - start < 1500, u);
+    }
+    // What the runs say is kept: a summary after blank lines and a rule of "=".
+    assert.deepEqual(itemOf({ name: 'bash', args: { command: 'pytest' }, text: `${'\n'.repeat(500)}${'='.repeat(300)} 4 passed in 0.12s ${'='.repeat(300)}\r\n` }).tests, { passed: 4, failed: 0 });
+    assert.equal(claimsIn('Fixed the parser in [parse.js](src/parse.js#L4); see [the docs](https://en.wikipedia.org/wiki/Foo_(bar)).')[0].text, 'Fixed the parser in parse.js; see the docs.');
+});
