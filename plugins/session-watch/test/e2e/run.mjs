@@ -488,6 +488,11 @@ try {
             const kept = await focused();
             check('by keyboard, a chosen state whose last session leaves it stays at 0, says so, and keeps the focus',
                 listedRunning.startsWith('Slow view ') && left === true && kept === 'true:running 0', `${listedRunning} | ${left} | ${kept}`);
+            // The focus ring on the state at 0, and its line, light and dark.
+            await shot(page, shots, 'watching-at-0-focus-light', watching);
+            await setDark(page, true);
+            await shot(page, shots, 'watching-at-0-focus-dark', watching);
+            await setDark(page, false);
             await page.keyboard.press('Enter');
             const firstChip = (await watching.locator('[aria-label="Sessions by state"] button').first().innerText()).replace(/\s+/g, ' ').trim();
             const moved = await focused();
