@@ -21,6 +21,7 @@
  * @module dsh-plugin-dsh-site
  */
 import z from '@deepseek-ai/schemastery';
+import { createHash } from 'node:crypto';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -120,6 +121,7 @@ export function apply(ctx, config) {
                         if (!found) return next();
                         state.origin = `http://127.0.0.1:${port}`;
                         state.discovered = true;
+                        auth.cookie = null;
                         log(`discovered shell at ${state.origin}`);
                         cb(state.origin);
                     });
@@ -133,7 +135,11 @@ export function apply(ctx, config) {
     function ensureCookie(cb) {
         if (!config.injectAuthCookie) return cb();
         if (auth.cookie && Date.now() - auth.at < 30000) return cb();
-        const query = "select name, value from cookies where host_key='127.0.0.1' limit 1;";
+        // DSH >= 0.2.1 starts its shell on a random port, and the jar keeps one cookie per authority
+        // (`dsh-auth-` + base64url(sha256(authority))). Take the one for the shell we proxy to.
+        const authority = (() => { try { return new URL(state.origin).host; } catch { return ''; } })();
+        const wanted = 'dsh-auth-' + createHash('sha256').update(authority).digest('base64url');
+        const query = `select name, value from cookies where host_key='127.0.0.1' and name='${wanted.replace(/[^A-Za-z0-9_-]/g, '')}' limit 1;`;
         try {
             execFile('sqlite3', [expand(config.cookieJar ?? DEFAULT_COOKIE_JAR), query], { timeout: 5000 }, (err, stdout) => {
                 if (err) {

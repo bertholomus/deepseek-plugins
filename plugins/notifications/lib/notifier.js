@@ -4,10 +4,14 @@
  * that is around (see backends.js):
  *
  * 1. DSH's own desktopRuntime when this is the Desktop app.
- * 2. The plugin's browser half, when a DSH window has polled recently
- *    (the `web` profile served to a browser).
- * 3. The platform's command line, when no window is watching — a terminal
- *    DSH, or a browser tab that is closed.
+ * 2. The plugin's browser half: the queue for a DSH window that has polled
+ *    recently (the `web` profile served to a browser), or — on a Desktop
+ *    host — always, since its window exists even hidden or minimised and
+ *    macOS attributes the Web Notifications API's posts to the app itself.
+ * 3. The platform's command line, when no window is watching (a terminal
+ *    DSH, or a closed browser tab). macOS has no such sender: osascript
+ *    would show Script Editor's icon, never DSH's, so macOS sends nothing
+ *    rather than the wrong app's notification.
  *
  * The queue for the browser half is small and short-lived: ids so a window
  * shows each item once, `at` so a window that comes back late drops stale
@@ -31,6 +35,7 @@ export const EVENT_FIELDS = {
     approval: 'notifyApproval',
     failed: 'notifyFailed',
     stopped: 'notifyStopped',
+    fleet: 'notifyFleet',
 };
 
 export class Notifier {
@@ -39,14 +44,20 @@ export class Notifier {
      * @param {() => object} [options.settings] - the plugin's live config.
      * @param {object} [options.logger] - a cordis logger for send failures.
      * @param {NodeJS.Platform} [options.platform] - the platform's CLI sender.
+     * @param {boolean} [options.desktopHost] - this host is the Desktop app
+     *   (Electron), so its window's browser half exists even while the window
+     *   is hidden or minimised: keep the queue for it regardless of the poll
+     *   TTL, because a hidden window's timers are throttled and may skip
+     *   polls for minutes.
      * @param {(notification: {title: string, body: string}) => boolean} [options.send] -
      *   the CLI sender; defaults to cliSend on this machine.
      * @param {() => number} [options.now] - the clock, for tests.
      */
-    constructor({ settings = () => ({}), logger = { warn() {}, info() {} }, platform = process.platform, send, now = Date.now } = {}) {
+    constructor({ settings = () => ({}), logger = { warn() {}, info() {} }, platform = process.platform, desktopHost = false, send, now = Date.now } = {}) {
         this.settings = settings;
         this.logger = logger;
         this.platform = platform;
+        this.desktopHost = Boolean(desktopHost);
         this.send = send ?? ((notification) => cliSend(platform, notification, {
             icon: iconFor(platform),
             onError: (error) => this.logger.warn?.('notifications: %s', String(error?.message ?? error)),
@@ -69,7 +80,14 @@ export class Notifier {
 
     /** What a browser window should take: whether the Desktop app already sends natively, and the queue. */
     pending() {
+        this.pruneQueue();
         return { desktop: this.desktop !== undefined, items: this.queue.slice() };
+    }
+
+    /** Drop queued items no window would still show (the browser half drops them by `at`). */
+    pruneQueue() {
+        const cutoff = this.now() - QUEUE_STALE_MS;
+        this.queue = this.queue.filter((item) => Date.parse(item.at) > cutoff);
     }
 
     /** The window took (showed or dropped) these queued items. */
@@ -97,7 +115,11 @@ export class Notifier {
             desktopSend(this.desktop, item);
             return 'desktop';
         }
-        if (this.browserAlive()) {
+        // On the Desktop host the window's browser half is the DSH-icon sender,
+        // and its window exists even hidden or minimised, so the queue is for
+        // it whatever the polls are doing. Elsewhere (a browser profile) the
+        // queue is only worth filling while a tab has polled recently.
+        if (this.desktopHost || this.browserAlive()) {
             this.queue.push({ id: ++this.seq, title: item.title, body: item.body, at: new Date(this.now()).toISOString() });
             if (this.queue.length > MAX_QUEUED) this.queue.splice(0, this.queue.length - MAX_QUEUED);
             return 'browser';

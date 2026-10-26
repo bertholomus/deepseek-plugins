@@ -45,19 +45,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             { field: 'notifyApproval', title: 'Waiting for approval', hint: 'A thread waits on a permission prompt.' },
             { field: 'notifyFailed', title: 'Failed after a nudge', hint: 'A thread failed again after the plugin nudged it once.' },
             { field: 'notifyStopped', title: 'Stopped after a nudge', hint: 'A thread was stopped again after the plugin nudged it once.' },
+            { field: 'notifyFleet', title: 'Fleet findings', hint: 'An Ascent starts running hot, runs low on memory, logs a GPU error or stops answering, and when that clears.' },
         ];
 
         const TEXT = {
             summary: 'System notifications when DSH\'s window is hidden or unfocused.',
             enabled: 'Send system notifications',
-            enabledHint: 'When DSH\'s window is hidden or unfocused: plugin news, through the Desktop app\'s own notifications, a browser window\'s, or a command when no window is around.',
+            enabledHint: 'When DSH\'s window is hidden or unfocused: shown by the window that is around — the Desktop app\'s carry DSH\'s own icon. A terminal DSH sends none on macOS.',
             note: 'A click brings DSH\'s window up; it does not open the chat, because DSH offers plugins no way to open one.',
             permTitle: 'This browser',
             permGranted: 'System notifications are on in this browser.',
             permDenied: 'Blocked for this site in this browser\'s settings. Allow them there to hear news in the browser profile.',
             permDefault: 'Browser notifications need your OK once.',
             permAsk: 'Allow',
+            permNone: 'This window has no notification API, so it cannot show them.',
             desktopRow: 'The Desktop app sends its own notifications.',
+            testTitle: 'A test notification',
+            testHint: 'Send one now from this window: it shows whether this window\'s notifications reach the screen, and names any failure.',
+            testSend: 'Send a test notification',
         };
 
         const CSS = [
@@ -108,7 +113,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const permissionLine = (kind) => (kind === 'granted' ? TEXT.permGranted
             : kind === 'denied' ? TEXT.permDenied
             : kind === 'desktop' ? TEXT.desktopRow
-            : kind === 'none' ? TEXT.desktopRow
+            : kind === 'none' ? TEXT.permNone
             : TEXT.permDefault);
 
         /** The permission row: state in words, and the one-time ask as a button. */
@@ -140,12 +145,44 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             saving: 'Saving…',
         };
 
+        /**
+         * Send one test notification from a user click (so a permission ask is
+         * allowed too) and name the outcome on the page: sent, failed with the
+         * reason, or — after the show-event grace — that the system never
+         * displayed it. This is how anyone answers "does this window's
+         * notifications work" without the host's help.
+         */
+        function useTestSend() {
+            const [line, setLine] = React.useState('');
+            const send = () => {
+                try {
+                    showNotification({ id: -1, title: 'Notifications test', body: 'If this banner is on screen, DSH\'s notifications work in this window.' });
+                    setLine('Sent — it should be on screen now.');
+                } catch (error) {
+                    const reason = String(error?.message ?? error);
+                    recordShowError(reason);
+                    setLine(`Failed: ${reason}`);
+                    return;
+                }
+                setTimeout(() => {
+                    const failure = lastError();
+                    setLine(failure ? `Not displayed: ${failure}` : 'Shown (the system reported displaying it).');
+                }, 6000);
+            };
+            return [line, send];
+        }
+
         /** The plugin page's switches, written through DSH's settings form on Save. */
-        function SettingsPage({ form }) {
+        function SettingsPage({ form, lastError = lastShowError, pollState = lastPollState }) {
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const disabled = !snapshot.writable || snapshot.saving;
             const on = (name) => snapshot[name]?.text === 'on';
             const toggle = (name) => (next) => form.actions.edit(name, next ? 'on' : 'off');
+            const showFailed = lastError();
+            const poll = pollState();
+            const pollLine = poll ? `At its last queue poll (${new Date(poll.at).toLocaleTimeString()}): focus ${String(poll.focus)}, page ${String(poll.visibility)}, permission ${String(poll.permission)}.`
+                : '';
+            const [testLine, sendTest] = useTestSend();
             return h('div', { className: 'dshn-page', 'data-notifications-settings': true },
                 h(ui.SettingsForm, { labels: LABELS, state: snapshot, onSave: form.actions.save, onDiscard: form.actions.discard },
                     h('section', { className: 'dshn-section', 'data-notifications-master': '' },
@@ -161,7 +198,16 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 h('div', { className: 'dshn-hint' }, event.hint)),
                             h(ui.Switch, { checked: on(event.field), label: event.title, disabled, onChange: toggle(event.field) })))),
                     h('p', { className: 'dshn-note' }, TEXT.note)),
-                h(PermissionRow));
+                h(PermissionRow),
+                h('section', { className: 'dshn-section', 'data-notifications-test': '' },
+                    h('div', { className: 'dshn-row' },
+                        h('div', { className: 'dshn-row-text' },
+                            h('div', { className: 'dshn-title' }, TEXT.testTitle),
+                            h('div', { className: 'dshn-hint' }, TEXT.testHint)),
+                        h('button', { className: 'dshn-link', type: 'button', onClick: sendTest }, TEXT.testSend)),
+                    testLine ? h('p', { className: 'dshn-note', role: 'status', 'data-notifications-test-result': '' }, testLine) : null,
+                    pollLine ? h('p', { className: 'dshn-note', 'data-notifications-poll-state': '' }, pollLine) : null),
+                showFailed ? h('p', { className: 'dshn-note', role: 'status', 'data-notifications-show-error': '' }, `The last notification this window tried to show failed: ${showFailed}`) : null);
         }
 
         /** The plugin page on DSH's Plugins page, served while the plugin runs. */
@@ -198,55 +244,153 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
         }
 
-        /** Show one notification, and bring the window up when it is clicked. */
+        /** Where a failed show is kept for the settings page (a failure looks like a failure). */
+        const SHOW_ERROR_KEY = `${BUNDLE}/last-show-error`;
+
+        /** What the window believed at its last queue poll (focus, visibility,
+         * permission) — the settings page shows it, so a window that lies
+         * about being watched while hidden is caught on the page. */
+        const POLL_STATE_KEY = `${BUNDLE}/last-poll-state`;
+
+        function recordPollState(Notification = globalThis.Notification, doc = typeof document === 'undefined' ? undefined : document) {
+            try {
+                localStorage?.setItem(POLL_STATE_KEY, JSON.stringify({
+                    at: new Date().toISOString(),
+                    focus: doc ? doc.hasFocus() : null,
+                    visibility: doc ? doc.visibilityState : null,
+                    permission: typeof Notification === 'function' ? Notification.permission : null,
+                }));
+            } catch { /* storage may refuse */ }
+        }
+
+        function lastPollState() {
+            try { return JSON.parse(localStorage?.getItem(POLL_STATE_KEY) ?? 'null'); } catch { return null; }
+        }
+
+        function recordShowError(message) {
+            try { localStorage?.setItem(SHOW_ERROR_KEY, String(message).slice(0, 300)); } catch { /* storage may refuse */ }
+        }
+
+        function lastShowError() {
+            try { return localStorage?.getItem(SHOW_ERROR_KEY) ?? ''; } catch { return ''; }
+        }
+
+        function clearShowError() {
+            try { localStorage?.removeItem(SHOW_ERROR_KEY); } catch { /* storage may refuse */ }
+        }
+
+        /** Show one notification, and bring the window up when it is clicked. A
+         * show the system never displays (no `show` event within 5 s) is
+         * recorded too, so the settings page can name it instead of the
+         * notification vanishing without a trace. */
         function showNotification(item, Notification = globalThis.Notification, win = globalThis.window) {
             const notification = new Notification(item.title, { body: item.body, tag: `${BUNDLE}:${item.id}` });
+            let displayed = false;
+            notification.onshow = () => {
+                displayed = true;
+            };
             notification.onclick = () => {
                 try { win?.focus?.(); } catch { /* the window may be gone */ }
                 notification.close();
             };
+            const shown_timer = setTimeout(() => {
+                if (displayed) clearShowError();
+                else recordShowError('the system did not display it (no show event 5 s after it was sent)');
+            }, 5000);
+            shown_timer.unref?.();
             return notification;
+        }
+
+        /**
+         * Ask once where an ask can work without a click: the Desktop app's
+         * window (Electron) grants it; a browser needs the settings page's
+         * Allow button, because its prompt is refused without a user gesture.
+         */
+        function ensurePermissionOnce(Notification = globalThis.Notification, nav = (typeof navigator === 'undefined' ? undefined : navigator)) {
+            if (typeof Notification !== 'function' || Notification.permission !== 'default') return;
+            if (!nav?.userAgent?.includes('Electron')) return;
+            try {
+                void Notification.requestPermission?.();
+            } catch { /* the ask is best-effort; the settings page can ask again */ }
         }
 
         /**
          * The sender for the `web` profile: poll the queue, show what is new
          * while the window is unfocused, and take the rest (a focused window
          * is watching already). When the answer says the Desktop app sends
-         * natively, stand down entirely.
+         * natively, stand down entirely. The queue is only taken where it can
+         * be shown or is worthless: with permission still 'default' the items
+         * wait in the host's queue, so they show once the ask is answered.
          */
-        function applyPoller(scope, link, { now = Date.now, Notification = globalThis.Notification, win = typeof window === 'undefined' ? undefined : window, doc = typeof document === 'undefined' ? undefined : document } = {}) {
+        function applyPoller(scope, link, { now = Date.now, Notification = globalThis.Notification, win = typeof window === 'undefined' ? undefined : window, doc = typeof document === 'undefined' ? undefined : document, warn = (message) => console?.warn?.(message) } = {}) {
             const seen = new Set();
-            const state = { stopped: false, desktopHandled: false };
+            const state = { stopped: false, desktopHandled: false, transportFailed: false };
             const stop = () => {
                 state.stopped = true;
             };
+            const transportTrouble = (detail) => {
+                if (!state.transportFailed) {
+                    state.transportFailed = true;
+                    warn(`dsh-plugin-notifications: the queue is unreachable right now (${detail}); retrying`);
+                }
+            };
             const read = async () => {
                 if (state.stopped) return 0;
-                const result = await link.call('pending', {});
-                if (state.stopped || !isRecord(result) || result.ok !== true || !isRecord(result.value)) return 0;
+                let result;
+                try {
+                    result = await link.call('pending', {});
+                } catch (error) {
+                    transportTrouble(String(error?.message ?? error));
+                    return 0;
+                }
+                if (state.stopped) return 0;
+                if (!isRecord(result) || result.ok !== true || !isRecord(result.value)) {
+                    transportTrouble(isRecord(result) && isRecord(result.error) ? String(result.error.code ?? result.error.message ?? 'refused') : 'unreadable answer');
+                    return 0;
+                }
+                state.transportFailed = false;
                 if (result.value.desktop === true) {
                     state.desktopHandled = true;
                     stop();
                     return 0;
                 }
                 const items = Array.isArray(result.value.items) ? result.value.items.filter(isRecord) : [];
+                recordPollState(Notification, doc);
                 if (items.length === 0) return 0;
                 let shown = 0;
+                const took = [];
                 for (const item of items) {
-                    if (typeof item.id !== 'number' || seen.has(item.id)) continue;
-                    seen.add(item.id);
+                    if (typeof item.id !== 'number') continue;
                     const at = typeof item.at === 'string' ? Date.parse(item.at) : NaN;
-                    if (Number.isFinite(at) && now() - at > STALE_MS) continue;
-                    if (typeof Notification === 'function' && Notification.permission === 'granted' && doc && !doc.hasFocus()) {
-                        try {
-                            showNotification(item, Notification, win);
-                            shown += 1;
-                        } catch { /* a browser that refuses one notification still takes the rest */ }
+                    const stale = Number.isFinite(at) && now() - at > STALE_MS;
+                    if (typeof Notification === 'function' && Notification.permission === 'granted') {
+                        // Not watching = the window cannot be seen (hidden or
+                        // minimised) or does not have focus. hasFocus can lie
+                        // for a hidden window, so ask visibility too.
+                        const watching = doc && doc.hasFocus() && doc.visibilityState !== 'hidden';
+                        if (doc && !watching && !stale && !seen.has(item.id)) {
+                            seen.add(item.id);
+                            try {
+                                showNotification(item, Notification, win);
+                                clearShowError();
+                                shown += 1;
+                            } catch (error) {
+                                recordShowError(error?.message ?? error);
+                            }
+                        }
+                        took.push(item.id);
+                    } else if (typeof Notification === 'function' && Notification.permission === 'denied') {
+                        recordShowError('notifications are denied in this window, so the item was dropped');
+                        seen.add(item.id);
+                        took.push(item.id);
                     }
+                    // permission 'default': take nothing, so the items wait
+                    // in the queue and show once the ask is answered.
                 }
-                void link.call('acknowledge', { ids: items.map((item) => item.id).filter((id) => typeof id === 'number') });
+                if (took.length > 0) void link.call('acknowledge', { ids: took });
                 return shown;
             };
+            ensurePermissionOnce(Notification);
             const timer = setInterval(() => { void read(); }, POLL_MS);
             const wake = () => { void read(); };
             if (doc) {
@@ -293,7 +437,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the parts are built on.
         module.exports.internals = {
-            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, hostLink, showNotification, isRecord, applyPoller, applySettingsForm,
+            FIELDS, EVENTS, TEXT, LABELS, CSS, boolSpec, injectStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, recordShowError, lastShowError, clearShowError, recordPollState, lastPollState, isRecord, applyPoller, applySettingsForm,
         };
         return module.exports;
     },
