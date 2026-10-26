@@ -1554,7 +1554,7 @@ function passedFor(subject, claim, list) {
     if (last.ok === null) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear how the last ${what} ended: ${last.text}.` };
     // "Passes reliably now", "green every time" after a loop of runs in which one round failed.
     if (REPEAT_PASS.test(claim.part ?? words) && last.tests?.failedOnce > 0) {
-        return { verdict: 'contradicted', evidence: [said(last)], why: `It says it passes every time, and one round of the last ${what} failed ${last.tests.failedOnce === 1 ? 'a test' : `${last.tests.failedOnce} tests`}: ${last.text}.` };
+        return { verdict: 'contradicted', evidence: [said(last)], why: `It says it passes every time, and one round of the last ${what} failed ${last.tests.failedOnce === 1 ? 'a test' : `${last.tests.failedOnce} tests`}, though its last round passed: ${last.text}.` };
     }
     if (NO_WARNINGS.test(claim.text ?? words) && (last.warnings ?? 0) > 0) {
         return { verdict: 'contradicted', evidence: [said(last)], why: `It says there are no warnings, and the last ${what} in this turn printed ${last.warnings === 1 ? 'one' : last.warnings}: ${last.text}.` };
@@ -1919,7 +1919,7 @@ function judgeFixed(claim, list, prompt = '') {
     const fitting = fitAll.some((i) => i.kind !== 'ci' && i.kind !== 'deploy') ? fitAll.filter((i) => i.kind !== 'ci') : fitAll;
     // "The flake is fixed": a flaky test shows itself by failing now and then, so any test run after the change that failed says it is still there.
     const flaked = /\bflak(?:e|es|y|iness)\b/i.test(claim.part ?? claim.text ?? '') ? checks.filter((i) => (i.ok === false && (i.kind === 'test' || i.tests)) || i.tests?.failedOnce > 0).at(-1) : undefined;
-    if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: flaked.ok === false ? `A test run after the change still failed: ${flaked.text}.` : `A test run after the change still failed ${flaked.tests.failedOnce === 1 ? 'a test' : `${flaked.tests.failedOnce} tests`} in one of its rounds: ${flaked.text}.` };
+    if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: flaked.ok === false ? `A test run after the change still failed: ${flaked.text}.` : `A test run after the change still failed ${flaked.tests.failedOnce === 1 ? 'a test' : `${flaked.tests.failedOnce} tests`} in one of its rounds, though its last round passed: ${flaked.text}.` };
     // "Fixed the NullReferenceException in `OrderService.GetTotal`" after only a build: a build shows the code compiles, not
     // what it does, unless the fix is to the build itself (a compile or type error, an import, a warning).
     const run = fitting.length ? fitting : checks;
