@@ -507,10 +507,13 @@ tools are another matter. An agent asked to record something can still
 find the vault on disk, read its notes and write one itself with its shell
 or file tools, like any other file. What keeps those tools out of the
 vault is DSH's sandbox: on **Read Only** a session writes no file; on
-**Workspace Write** a write outside the session's workspace (a vault
-outside it, for one) asks you first; on **Full access** nothing asks.
-Keep the vault outside your workspaces, and turn down a write into it you
-did not ask for.
+**Workspace Write** a write outside the session's workspace asks you first,
+except in the temporary folders (`/tmp` and your user's temp folder), which
+DSH lets it write; on **Full access** nothing asks. Keep the vault outside
+your workspaces and the temporary folders, and turn down a write into it
+you did not ask for. (Tried with a vault copy kept under `/tmp`: an agent
+asked to "update the notes" found it on disk and edited its notes without
+asking.)
 
 ## Settings
 
