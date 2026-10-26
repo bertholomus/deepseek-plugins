@@ -833,7 +833,10 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         }
         if (parts[0] !== 'sessions' || parts.length > 4) throw notFound();
         if (parts.length === 1) {
-            if (method === 'GET') return (await sc().list({}, AbortSignal.timeout(READ_MS))).items;
+            if (method === 'GET') {
+                const listed = await withDeadline(Promise.resolve().then(() => sc().list({}, AbortSignal.timeout(readMs))), readMs, () => new BridgeError(504, 'dsh/timeout', `DSH did not list its sessions in ${readMs / 1000} s; try again.`));
+                return listed.items;
+            }
             if (method === 'POST') return createSession(await readBody());
             throw method405('GET, POST');
         }

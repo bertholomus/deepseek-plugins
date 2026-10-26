@@ -706,10 +706,17 @@ test('api: an unknown path names the routes; a wrong method is a 405 with Allow;
 });
 
 test('api: DSH too slow, or failing, is said as such and never stops the bridge', async (t) => {
-    const { sock, dsh } = await bridgeOn(t);
+    const { sock, dsh } = await bridgeOn(t, { readMs: 300 });
     dsh.controller.list = async () => { throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }); };
     const slow = await call(sock, 'GET', '/sessions');
     assert.equal(slow.status, 504);
+    // DSH that never answers the list: the bridge's own deadline answers.
+    dsh.controller.list = () => new Promise(() => {});
+    const t0 = Date.now();
+    const hung = await call(sock, 'GET', '/sessions');
+    assert.equal(hung.status, 504);
+    assert.match(hung.body.error.message, /^DSH did not list its sessions in 0\.3 s; try again\.$/);
+    assert.ok(Date.now() - t0 < 3000);
     dsh.controller.modelCatalog = async () => { throw new Error('catalog exploded'); };
     const failed = await call(sock, 'GET', '/models');
     assert.equal(failed.status, 500);
@@ -717,7 +724,7 @@ test('api: DSH too slow, or failing, is said as such and never stops the bridge'
     dsh.controller.inspect = async () => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); };
     const reading = await call(sock, 'GET', '/sessions/s1');
     assert.equal(reading.status, 504);
-    assert.match(reading.body.error.message, /^DSH did not read session s1 in 20 s; try again\.$/);
+    assert.match(reading.body.error.message, /^DSH did not read session s1 in 0\.3 s; try again\.$/);
     assert.equal((await call(sock, 'GET', '/health')).status, 200);
 });
 

@@ -59,7 +59,7 @@ All requests and replies are JSON. An error comes back as `{"error": {"code", "m
 | `GET /sessions` | | DSH's session list |
 | `POST /sessions` | `{workspacePath` or `workspaceId, title?, provider?, model?, reasoningEffort?, agentPreset?, text?, requestId?}` | `{sessionId, workspace, model?, title?, prompt?, alreadyCreated?}` |
 | `GET /sessions/:id` | | `{sessionId, cwd, title, attached, status, turns, lastSeq, lastAssistant}` |
-| `GET /sessions/:id/events` | `after`, `limit`, `full=1`, `types=a,b`, `wait` | `{lastSeq, more, events, timedOut?}` |
+| `GET /sessions/:id/events` | `after`, `limit`, `full=1`, `types=a,b`, `wait` | `{lastSeq, more, events, timedOut?, stopped?}` |
 | `GET /sessions/:id/requests/:requestId` | `wait` | What became of one prompt (below) |
 | `POST /sessions/:id/prompt` | `{text, mode?: "followup" or "steer", requestId?}` | `{accepted, mode, requestId, chars, alreadySent?, state?, attempt?, resent?}` |
 | `POST /sessions/:id/model` | `{provider, model, reasoningEffort?}` | DSH's reply |
@@ -74,11 +74,11 @@ All requests and replies are JSON. An error comes back as `{"error": {"code", "m
 - `followup` (the default) queues the text for after the running turn; `steer` sends it into the running turn at its next step. With no turn running, either one starts a turn.
 - `cancel` stops the running turn. On a session DSH has not opened since it started, there is no turn to stop: a 409, `session/not-running`.
 - Events: `after` is the last `seq` you have (default -1, the start); `limit` is 1 to 2000 (default 200; more reads as 2000), and `more` says there are more; each text is cut at 4000 characters unless `full=1`; `types` keeps only those event types.
-- Each `user/message` event carries its `source`: `{kind: "user", …}` for the user or this bridge (a bridge prompt carries its request id as `rpcId`), `{kind: "agent-message", senderSessionId}` for a message from another session, and a plugin's own kind for a plugin's note.
+- Each `user/message` event carries its `source`: `{kind: "user", …}` for the user or this bridge (a bridge prompt carries its request id as `rpcId`, and an attempt sent again after a cut-off turn `<requestId>~2`), `{kind: "agent-message", senderSessionId}` for a message from another session, and a plugin's own kind for a plugin's note.
 
 ### What became of a prompt
 
-Every prompt has a request id: yours (`requestId`: 1 to 128 letters, digits or `. _ : -`, starting with a letter or digit), or one the bridge makes (`bridge-<uuid>`). `GET /sessions/:id/requests/:requestId` reads the session's own log and answers `{sessionId, requestId, state, seq?, turn?, target?, end?, reply?}`:
+Every prompt has a request id: yours (`requestId`: 1 to 128 letters, digits or `. _ : -`, starting with a letter or digit), or one the bridge makes (`bridge-<uuid>`). `GET /sessions/:id/requests/:requestId` reads the session's own log and answers `{sessionId, requestId, state, seq?, turn?, target?, end?, reply?, removed?, attempt?}` (and `timedOut`, `stopped` with `wait`):
 
 | `state` | Meaning |
 | --- | --- |
