@@ -55,14 +55,23 @@
  * - A DSH restart in the middle of a job and of an approval prompt: the
  *   agents come back idle (the job said cut off), the messages held for
  *   them go in once and are proven, and no question is left in Decisions.
+ * - An agent started without a message (no conversation yet): Stop, a
+ *   closed tab and a restart bring it back under the same id, never with a
+ *   resume its program would refuse.
+ * - The continue way (a stand-in that resumes its folder's latest
+ *   conversation): typed in, and resumed with --continue after a restart.
  * - A DSH restart: every running agent starts again under the same terminal
  *   id and resumes its conversation; a program that cannot resume is not
- *   started again, and says why; the window's tab shows the resumed agent.
+ *   started again, and says why; the window's tab shows the resumed agent;
+ *   a restart inside a session's first turn leaves that entry settled.
+ * - Two restarts in a row after a job was cut: the cut is logged once.
  * - Typing through DSH's terminal input (`typing: attached`): on DSH 0.2.0
  *   a message goes in and the tab gets its keyboard back; on later builds,
  *   which have no such input for plugins, it says what to set.
- * - A wrong setting: no agent runs, each says why, and the page says which
- *   setting; saving a good one in Plugins brings the agents back.
+ * - A wrong setting (a number in quotes, the wrong type): no agent runs,
+ *   each says why, and the page says which setting and its value; saving a
+ *   good one in Plugins brings the agents back.
+ * - Every quit of DSH ends by itself within its grace, never by a kill.
  * - Session Watch off in the profile, and `enabled: false`: loaded, idle,
  *   and the page says what to do.
  * - Its folder is 700 and its files 600.
@@ -144,6 +153,18 @@ const run = new DshRun({
     },
 });
 run.rows = rowsWith();
+/** Every quit of DSH in this run: how long it took, and whether it had to be killed (the harness kills after 20 s). */
+const quits = [];
+{
+    const stop = run.stop.bind(run);
+    run.stop = async () => {
+        const child = run.child;
+        if (!child || child.exitCode !== null || child.signalCode !== null) return stop();
+        const began = Date.now();
+        await stop();
+        quits.push({ ms: Date.now() - began, killed: child.signalCode === 'SIGKILL' });
+    };
+}
 
 // ── The computer the agents run on: a home folder, the stand-ins, the projects ──
 
@@ -176,7 +197,7 @@ function standIn(name, style) {
     chmodSync(file, 0o755);
     return file;
 }
-const programs = { flags: standIn('standin', 'flags'), events: standIn('standin-events', 'subcommand'), plain: standIn('standin-plain', 'plain') };
+const programs = { flags: standIn('standin', 'flags'), events: standIn('standin-events', 'subcommand'), plain: standIn('standin-plain', 'plain'), cont: standIn('standin-continue', 'flags') };
 // Conversations each kept before: how Agent Terminals finds a CLI on this computer (never by its name).
 const long = Date.now() - 3 * 86400000;
 const seed = (file, line) => {
@@ -189,10 +210,13 @@ seed(join(user, '.standin-events', 'sessions', '2026', '10', '14', 'rollout-2026
 run.env = { HOME: user, ZDOTDIR: user, PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}` };
 
 const ws = {};
-for (const name of ['app', 'swallow', 'events', 'plain', 'missing', 'long']) {
+for (const name of ['app', 'swallow', 'events', 'plain', 'missing', 'long', 'quiet', 'cont']) {
     ws[name] = join(run.root, 'projects', name);
     mkdirSync(ws[name], { recursive: true });
 }
+// A session's first turn names the agent's folder: this one's name keeps the scripted model's reply open (E2E:slow).
+ws.slow = join(run.root, 'projects', 'first-turn E2E:slow');
+mkdirSync(ws.slow, { recursive: true });
 const real = (path) => {
     try { return realpathSync(path); } catch { return path; }
 };
@@ -875,6 +899,65 @@ try {
         check('no errors from the suite in the window', suiteErrors().length === 0, suiteErrors().join('\n'));
     }
 
+    // ── An agent with no message yet, and the continue way ─────────────
+    await step('an agent started without a message: Stop, a closed tab and Start again bring it back under its id, never told to resume what it does not have', async () => {
+        const quiet = await start({ program: 'standin', style: 'flags', folder: ws.quiet, name: 'Quiet agent' });
+        agents.quiet = quiet.agent.key;
+        ids.quiet = quiet.agent.sessionId;
+        const id = quiet.agent.conversationId;
+        const ready = await waitAgent(agents.quiet, (a) => a.status === 'idle' && a.ready, 'the quiet agent to be ready', 30000);
+        check('with no message yet it has no conversation to resume, and says what Start again does', ready.canResume === false
+            && ready.again === 'Start again starts it again (it has no conversation to resume yet).', json({ canResume: ready.canResume, again: ready.again }));
+        await api('stop', { key: agents.quiet });
+        const stopped = await waitAgent(agents.quiet, (a) => a.status === 'stopped', 'the quiet agent to stop', 20000);
+        check('Stop says that Start again starts it again, not that it resumes', stopped.ended?.text === 'You stopped it. Start again starts it again (it has no conversation to resume yet).', json(stopped.ended));
+        const again = await api('startAgain', { key: agents.quiet, fresh: false });
+        const back = await waitAgent(agents.quiet, (a) => a.status === 'idle' && a.ready && a.launches === stopped.launches + 1, 'the quiet agent to come back', 30000);
+        const lines = await screen(agents.quiet);
+        check('Start again starts it under the same id, not with a resume its program would refuse', again.ok && !again.value?.problem && back.conversationId === id
+            && shows(lines, `exec standin --session-id ${id}`) && !shows(lines, '--resume') && !shows(lines, 'No conversation found'), lines);
+        const log = await history((e) => e.agent === agents.quiet && e.kind === 'start');
+        check('What happened says it started again under the same id, and why', log[0]?.text === 'Started Quiet agent again' && log[0]?.state === 'done'
+            && log[0]?.why === 'You started it again under the same id: it had no conversation to resume yet (its program writes one with its first message).', json(log[0]));
+        if (!window?.page) return;
+        const page = await openAgents();
+        await cardOf(page, agents.quiet).getByRole('button', { name: 'Quiet agent', exact: true }).click();
+        const tab = terminalTab(page, 'Quiet agent').first();
+        await tab.waitFor({ state: 'visible', timeout: 20000 });
+        await tab.hover();
+        await tab.locator('[data-dockkit-tab-close]').click();
+        const dialog = page.locator('[role="alertdialog"], [role="dialog"]');
+        await dialog.first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
+        if (await dialog.count()) {
+            const confirm = dialog.first().getByRole('button', { name: /^(Close|Terminate|End|Kill|OK)/i });
+            if (await confirm.count()) await confirm.first().click().catch(() => {});
+        }
+        const closed = await waitAgent(agents.quiet, (a) => a.status === 'stopped', 'the quiet agent to end with its tab', 20000);
+        check('closing its tab ends it, and says that Start again starts it again', closed.ended?.why === 'closed'
+            && closed.ended?.text === 'Its terminal was closed (closing an agent\'s terminal tab ends the agent). Start again starts it again (it has no conversation to resume yet).', json(closed.ended));
+        await openAgents();
+        const card = cardOf(page, agents.quiet);
+        await card.getByRole('button', { name: 'Start again', exact: true }).waitFor({ state: 'visible', timeout: 15000 });
+        check('its card offers Start again and no Start anew: there is nothing to resume yet', (await card.getByRole('button', { name: 'Start anew' }).count()) === 0, await card.innerText());
+        await card.getByRole('button', { name: 'Start again', exact: true }).click();
+        const backAgain = await waitAgent(agents.quiet, (a) => a.status === 'idle' && a.ready && a.launches > back.launches, 'it to come back after its tab closed', 30000);
+        check('Start again after its tab closed: running and idle, under the same id', backAgain.conversationId === id && shows(await screen(agents.quiet), `exec standin --session-id ${id}`), json({ status: backAgain.status, launches: backAgain.launches }));
+        await shot(page, shots, 'no-message-light');
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-no-message');
+    });
+
+    await step('the continue way: its message is typed in, and it says what Start again does', async () => {
+        const cont = await start({ program: 'standin-continue', style: 'continue', folder: ws.cont, name: 'Continue agent', task: 'Hello continue #work=100' });
+        agents.cont = cont.agent.key;
+        const running = await waitAgent(agents.cont, (a) => a.status === 'running' && a.ready, 'the continue agent to run', 30000);
+        const first = await waitDelivery(agents.cont, cont.agent.deliveries[0].id, ['typed'], 'its first message typed in', 30000);
+        await waitFor(async () => (shows(await screen(agents.cont), 'agent: Done: Hello continue') ? true : null), 'it to answer on its screen', 20000, 300);
+        check('it runs and is typed to (no transcript is read, so its message is "typed in"), and Start again resumes its folder\'s latest conversation',
+            running.keepsTranscript === false && running.canResume === true && running.again === 'Start again resumes the latest conversation in its folder.' && /^(Typed|Pasted) in, then Enter\./.test(first.why ?? ''),
+            json({ again: running.again, first }));
+    });
+
     // ── A DSH restart ──────────────────────────────────────────────────
     await step('a wrong setting saved while DSH runs: the agents keep running, read "not followed" with nothing that would act on them, and are picked up where they are', async () => {
         const before = await idleAgent(agents.app);
@@ -916,6 +999,14 @@ try {
     await step('a DSH restart: running agents start again under the same terminal id and resume; one that cannot resume says why', async () => {
         const before = await agentOf(agents.app);
         const plainBefore = await agentOf(agents.plain);
+        const quietBefore = await agentOf(agents.quiet);
+        // A new agent whose session's first turn is still running (its model holds its reply) when DSH quits.
+        const slow = await start({ program: 'standin', style: 'flags', folder: ws.slow, name: 'Slow first turn' });
+        agents.slow = slow.agent.key;
+        ids.slow = slow.agent.sessionId;
+        await waitFor(async () => ((await run.session(ids.slow)).turns.started >= 1 ? true : null), 'its first turn to start', 30000, 300);
+        const sending = await waitFor(async () => (await history((e) => e.agent === agents.slow && e.kind === 'session' && e.state === 'sending'))[0], 'its first turn logged as sending', 15000, 300);
+        const restartedAt = Date.now();
         await run.stop();
         await run.boot('a restart');
         await waitFor(async () => (await api('state')).ok, 'Agent Terminals after the restart', 30000);
@@ -929,6 +1020,27 @@ try {
         const plain = await waitAgent(agents.plain, (a) => a.status === 'stopped', 'the plain agent to be stopped');
         check('a program that cannot resume is not started again, and says why', plainBefore.status === 'running' && plain.ended?.why === 'restart'
             && plain.ended.text === 'DSH restarted, which ended its terminal. This program cannot resume a conversation, so it was not started again: Start again runs it anew.', json(plain.ended));
+        const quiet = await waitAgent(agents.quiet, (a) => a.status === 'idle' && a.ready, 'the quiet agent to be back', 40000);
+        const quietLines = await screen(agents.quiet);
+        check('an agent that never got a message starts again under its id after the restart, not with a resume', quiet.conversationId === quietBefore.conversationId && quiet.terminalId === quietBefore.terminalId
+            && shows(quietLines, `exec standin --session-id ${quietBefore.conversationId}`) && !shows(quietLines, '--resume'), quietLines);
+        const quietLog = await waitFor(async () => (await history((e) => e.agent === agents.quiet && e.kind === 'restart'))[0], 'its restart logged once it holds', 30000, 300);
+        check('What happened says it started again after the restart under the same id, once it held', quietLog.text === 'Started Quiet agent again after DSH restarted' && quietLog.state === 'done'
+            && /It had no conversation to resume yet \(its program writes one with its first message\), so it starts again under the same id/.test(quietLog.why ?? '')
+            && !(await history((e) => e.agent === agents.quiet && e.at >= restartedAt && (e.kind === 'ended' || e.state === 'failed'))).length, json(quietLog));
+        const cont = await waitAgent(agents.cont, (a) => a.status === 'running' && a.ready, 'the continue agent to be back', 40000);
+        const contLines = await screen(agents.cont);
+        check('the continue way starts again with --continue, in the same folder, and resumes its latest conversation', cont.launches >= 1 && shows(contLines, 'exec standin-continue --continue') && shows(contLines, 'Resumed conversation'), contLines);
+        const settled = await waitFor(async () => {
+            const entry = (await history((e) => e.id === sending.id))[0];
+            return entry && entry.state !== 'sending' ? entry : null;
+        }, 'the first turn the restart cut to be settled', 30000, 300);
+        const slowRow = await waitFor(async () => ((await watchRow(ids.slow))?.blank === false ? true : null), 'its session to be listed', 15000, 300).catch(() => false);
+        check('a first turn cut by the restart is settled, not left "sending", and its session is listed all the same', settled.state === 'stopped'
+            && /^Its session's first turn (was cut off|did not finish)$/.test(settled.text) && /The session is listed in the sidebar all the same\.$/.test(settled.reason ?? '') && slowRow === true, json(settled));
+        // A reply still held (if DSH took the cut turn up again) is let go, so no later quit waits on it.
+        model.release();
+        await api('stop', { key: agents.slow });
         const next = await send(agents.app, 'After the restart #work=100');
         await waitDelivery(agents.app, next.id, ['delivered'], 'a message after the restart', 30000);
         check('a message after the restart goes into the same conversation', transcriptUsers(before.transcript).includes('After the restart #work=100'), '');
@@ -1037,6 +1149,16 @@ try {
         const cutIdle = (a) => a.status === 'idle' && a.ready && /was cut off when its program ended/.test(a.detail ?? '');
         await waitAgent(agents.app, cutIdle, 'the approval cut', 40000);
         await waitAgent(agents.long, cutIdle, 'the job cut', 40000);
+        // A second restart before any message: the jobs it finds cut are the same ones, and are not logged again.
+        const secondAt = Date.now();
+        await run.stop();
+        await run.boot('a second restart in a row');
+        await waitFor(async () => (await api('state')).ok, 'Agent Terminals after the second restart', 30000);
+        await waitAgent(agents.app, cutIdle, 'the approval cut, after the second restart', 40000);
+        await waitAgent(agents.long, cutIdle, 'the job cut, after the second restart', 40000);
+        await waitFor(async () => ((await history((e) => e.agent === agents.long && e.kind === 'restart' && e.state === 'done' && e.at >= secondAt)).length >= 1 ? true : null), 'the second restart logged', 30000, 300);
+        const cuts = await history((e) => e.kind === 'cut' && /before a pick-up/.test(e.why ?? ''));
+        check('two restarts in a row: each cut job is logged once', cuts.filter((e) => e.agent === agents.app).length === 1 && cuts.filter((e) => e.agent === agents.long).length === 1, json(cuts.map((e) => [e.agent, e.text, e.why])));
         // A pick-up without a launch: a wrong setting saved, then fixed (as switching off and on in Plugins does).
         run.rows = rowsWith({ at: { proofSeconds: 500 } });
         run.writeProfile(model.port);
@@ -1099,11 +1221,13 @@ try {
     });
 
     // ── A wrong setting ────────────────────────────────────────────────
-    await step('a wrong setting: no agent runs, each says why, and the page says which setting; saving a good one brings them back', async () => {
-        await restartWith(rowsWith({ at: { proofSeconds: 1 } }), 'a wrong setting');
+    await step('a wrong setting (a number in quotes): no agent runs, each says why, and the page says which setting; saving a good one brings them back', async () => {
+        // The wrong type, as a hand edit of the profile makes it: DSH starts Agent Terminals all the same.
+        await restartWith(rowsWith({ at: { proofSeconds: '8' } }), 'a wrong setting');
         await waitFor(async () => (await api('state')).ok, 'Agent Terminals with a wrong setting', 30000);
         const s = await state();
-        check('it starts and says which setting is wrong and what it must be', s.problem?.key === 'proofSeconds' && /Seconds without proof before Enter is pressed again/.test(s.problem?.text ?? '') && /\b2\b.*\b120\b/.test(s.problem?.text ?? ''), json(s.problem));
+        check('it starts and says which setting is wrong, what it must be, and the value it has', s.problem?.key === 'proofSeconds'
+            && s.problem?.text === 'Seconds without proof before Enter is pressed again (proofSeconds) must be a whole number of seconds from 2 to 120 (it is "8")', json(s.problem));
         const app = s.agents.find((a) => a.key === agents.app);
         check('no agent runs, and each says why', app?.status === 'stopped' && app.detail === 'Not running: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up again.', json({ status: app?.status, detail: app?.detail }));
         const refused = await api('start', { input: { program: 'standin', style: 'flags', folder: ws.app } });
@@ -1119,9 +1243,15 @@ try {
         await header.getByRole('button', { name: /settings/i }).first().click();
         const form = page.locator('[data-suite-settings="dsh-plugin-agent-terminals"]');
         await form.waitFor({ state: 'visible', timeout: 20000 });
-        await form.getByLabel('Seconds without proof before Enter is pressed again', { exact: true }).fill('3');
+        // The natural fix: the form shows the value as saved, in its quotes, flagged; typed without them, one Save stores the number.
+        const field = form.getByLabel('Seconds without proof before Enter is pressed again', { exact: true });
+        const flagged = await waitFor(async () => (/It is saved as text, in quotes\. Type a whole number from 2 to 120, without the quotes, then save\./.test(await form.innerText()) ? true : null), 'the form to flag the number in quotes', 10000, 300).catch(() => false);
+        check('the form flags the number saved in quotes as it opens, and says what to type', flagged === true && (await field.inputValue()) === '"8"', `${await field.inputValue()} | ${(await form.innerText()).replace(/\n+/g, ' ').slice(0, 600)}`);
+        await shot(page, shots, 'wrong-type-form-light');
+        await field.fill('8');
         await form.getByRole('button', { name: 'Save' }).click();
         await waitFor(async () => !(await state()).problem, 'the setting to be fixed', 15000, 300);
+        check('typed without its quotes and saved once, it is stored as the number', (await state()).settings.proofSeconds === 8, json((await state()).settings));
         const back = await waitAgent(agents.app, (a) => a.status === 'idle' && a.ready, 'the agent to come back once it is fixed', 40000);
         check('saved: the problem is gone and the agents come back, resuming', back.terminal?.state === 'running' && shows(await screen(agents.app), 'Resumed conversation'), json({ status: back.status }));
     }, async () => {
@@ -1172,12 +1302,37 @@ try {
         const header = page.locator('[data-agent-terminals-header="off"]');
         await header.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await header.innerText()).replace(/\n+/g, ' ');
-        check('the page says it is switched off and how to change it', words.includes('Agent Terminals is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it starts, reads and types nothing. To use it, set enabled to true there and restart DSH.'), words);
+        check('the page says it is switched off and how to change it', words.includes('Agent Terminals is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it starts, reads and types nothing. To use it, set enabled to true there; DSH applies it when you save the file.'), words);
         await shot(page, shots, 'disabled-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');
     });
+
+    await step('enabled set back to true in the profile while DSH runs: DSH applies the file, with no restart, and the agents it ended start again', async () => {
+        const pid = run.child?.pid;
+        run.rows = rowsWith();
+        run.writeProfile(model.port);
+        const back = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && r.value.enabled === true && !r.value.problem ? r.value : null;
+        }, 'Agent Terminals to work again with the saved file', 45000, 500);
+        check('DSH applies the saved file without a restart: Agent Terminals is on again', back.enabled === true && run.child?.pid === pid, json({ enabled: back.enabled, samePid: run.child?.pid === pid }));
+        const line = (await history((e) => e.kind === 'settings'))[0];
+        check('What happened says what the edit of the profile changed, once', line?.text === 'Settings changed in DSH\'s profile: “Agent Terminals on”' && line.why === 'Agent Terminals started again with them.'
+            && (await history((e) => e.kind === 'settings' && e.at >= line.at)).length === 1, json(line));
+        const app = await waitAgent(agents.app, (a) => a.status === 'idle' && a.ready, 'the app agent to start again', 40000);
+        check('the agent DSH ended while Agent Terminals was off starts again and resumes its conversation', shows(await screen(agents.app), `Resumed conversation ${app.conversationId}`), json({ status: app.status, launches: app.launches }));
+        if (window?.page) {
+            await window.page.locator('[data-agent-terminals-header="on"]').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+            await shot(window.page, shots, 'profile-on-again-light');
+        }
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-profile-on-again');
+    });
     check('no errors from the suite in the window', suiteErrors().length === 0, suiteErrors().join('\n'));
+    // Every quit of DSH in this run (restarts with agents running, in a job, in a first turn) ended by itself.
+    console.log(`# DSH quits: ${quits.map((q) => `${(q.ms / 1000).toFixed(1)} s${q.killed ? ' (killed)' : ''}`).join(', ')}`);
+    check('every quit of DSH ended by itself within its grace (20 s), never by a kill', quits.length >= 8 && quits.every((q) => !q.killed && q.ms < 20000), json(quits));
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);
     if (window?.page) await shot(window.page, shots, 'failed').catch(() => {});

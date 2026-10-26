@@ -71,3 +71,45 @@ export function changedWords(paths) {
 export function savedEntry(check, paths) {
     return changedEntry(check, paths, { name: 'Agent Terminals', titles: SETTING_TITLES });
 }
+
+/** A value as JSON keeps it (a wrong type too), to compare with the next start's. */
+function plain(value) {
+    if (value === undefined) return null;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return String(value);
+    }
+}
+
+/**
+ * The settings as they apply now, kept in state.json: at the next start
+ * they tell what an edit of DSH's profile changed in between.
+ */
+export function settingsSnapshot(settings) {
+    return Object.fromEntries(Object.keys(SETTING_TITLES).map((key) => [key, plain(settings?.[key])]));
+}
+
+/** The settings whose values differ from the ones Agent Terminals last ran with (none when it never ran here). */
+export function changedSince(before, now) {
+    if (!before || typeof before !== 'object' || Array.isArray(before)) return [];
+    return Object.keys(SETTING_TITLES).filter((key) => key in before && JSON.stringify(before[key]) !== JSON.stringify(now?.[key]));
+}
+
+/**
+ * At a start: the log entry for the settings an edit of DSH's profile
+ * changed since Agent Terminals last ran (DSH applies the file when it is
+ * saved, starting Agent Terminals again with it, or a DSH that starts reads
+ * it), or undefined when none changed. A save in Plugins is logged by
+ * `savedEntry` as it happens.
+ * @param {import('./shared/settings.js').SettingsCheck} check - run already.
+ * @param {string[]} keys - from `changedSince`.
+ * @param {object} settings - as they apply now.
+ */
+export function profileEntry(check, keys, settings) {
+    if (!keys.length) return undefined;
+    const words = keys.map((key) => `“${SETTING_TITLES[key] ?? key}”`).join(', ');
+    if (!check.ok) return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}; Agent Terminals waits until a wrong one is fixed`, why: `${check.problem.text}.`, state: 'waiting on a setting' };
+    if (settings?.enabled === false) return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}`, why: 'Agent Terminals is switched off there (enabled: false): it starts, reads and types nothing.', state: 'done' };
+    return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}`, why: 'Agent Terminals started again with them.', state: 'done' };
+}

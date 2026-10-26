@@ -19,9 +19,10 @@ that terminal in a tab beside the session. From then on:
 - **It comes back after DSH restarts.** DSH ends every terminal when it
   quits. On the next start each agent that was running starts again in a
   new terminal under the same name, so the window's tab finds it, and
-  resumes its conversation. A job the restart cut off ends there: the
-  agent comes back idle, *What happened* says which job was cut off, and
-  your next message carries on.
+  resumes its conversation (one that has no conversation yet starts again
+  without a resume its program would refuse). A job the restart cut off
+  ends there: the agent comes back idle, *What happened* says which job
+  was cut off, and your next message carries on.
 
 It needs Session Watch, which carries each agent's state to its session's
 row and to Decisions. While Session Watch is off, Agent Terminals stays on
@@ -35,8 +36,8 @@ There are four ways:
 
 | Way | A new conversation | Resumed with | Transcript it reads |
 | --- | --- | --- | --- |
-| `flags` | `--session-id <id>`, with an id Agent Terminals makes | `--resume <id>` | One JSON line per message: `<conversations folder>/projects/<folder>/<id>.jsonl` |
-| `subcommand` | Nothing added | `resume <id>`, before your arguments | One JSON line per event: `<conversations folder>/sessions/<year>/<month>/<day>/rollout-…-<id>.jsonl`; the id is read from the file the program makes |
+| `flags` | `--session-id <id>`, with an id Agent Terminals makes | `--resume <id>`, once its transcript is there; before its first message there is no conversation, so it starts again with `--session-id <id>` | One JSON line per message: `<conversations folder>/projects/<folder>/<id>.jsonl` |
+| `subcommand` | Nothing added | `resume <id>`, before your arguments, once the id is read; before that, a new conversation | One JSON line per event: `<conversations folder>/sessions/<year>/<month>/<day>/rollout-…-<id>.jsonl`; the id is read from the file the program makes |
 | `continue` | Nothing added | `--continue` (the folder's latest conversation) | None |
 | `plain` | Nothing added | Not started again by itself: **Start again** runs it anew | None |
 
@@ -49,6 +50,12 @@ program.
 Without a transcript (`continue`, `plain`) an agent is only *running* or
 *stopped*, a message counts as *typed in*, not proven read, and what it
 asks shows only in its terminal.
+
+Agent Terminals resumes only a conversation it can see: a `flags` program
+writes its transcript with its first message, so one that never got a
+message (or whose transcript is not where Agent Terminals looks) starts
+again under its id, and its card says *Start again starts it again (it
+has no conversation to resume yet)*.
 
 ## What it does
 
@@ -69,7 +76,9 @@ a program that ends at once (a name the shell cannot find, say) is *Could
 not start*, with why and what to do, and its session gets no first turn.
 The form keeps what you wrote, so you can fix it and start again (forget
 the card that could not start), and **Used here before** lists only
-programs that ran. The first turn is noted in *What happened* when it ends.
+programs that ran. The first turn is noted in *What happened* when it ends;
+one that DSH quit on is settled at its next start, from the session's own
+last turn (*cut off*, or how it ended), so none stays *sending*.
 
 **Its state.** From the agent's transcript: *working* while it answers or
 runs a tool, *idle* once its reply settles, *waiting on you* when its last
@@ -104,7 +113,11 @@ program keeps it until it reads it. When an idle agent's transcript does
 not show the message after `proofSeconds`, Enter goes again, up to
 `enterRetries` times; after that the message is *not proven*, with where to
 look. If the transcript shows it later (within a day), it turns
-*delivered*, and *What happened* says so.
+*delivered*, and *What happened* says so. A message that *failed* or is
+*not proven* has **Send again**, which sends its whole text once more as a
+new message (look at its terminal first: a message not proven may still
+be in the program's input box). Control keys in a message (Ctrl-C, Ctrl-D,
+Escape) are left out; tabs and line breaks stay.
 
 **Nothing goes into a prompt.** Just before it types, Agent Terminals reads
 the transcript again: while a tool call or an approval prompt is open, the
@@ -116,11 +129,17 @@ is read after it.
 
 **After a restart.** With `resumeAfterRestart` on, each agent that was
 running starts again in a new terminal with the same id and resumes its
-conversation; *What happened* says so, and why. A `plain` program is not
-started again, since it cannot resume, and its card says so. A start that
-fails after a restart (a setting this DSH cannot do, say) says why on its
-card and is tried again the next time DSH starts; **Start again** tries
-now. Switching Agent Terminals off and on, or saving its settings, leaves
+conversation (or, with none yet, starts again under its id, or anew for a
+`subcommand` program whose id was never read). *What happened* says
+*Started … again after DSH restarted*, and why, once the program holds
+(its screen settles and it still runs); a program that ends at once is
+*Could not start … again after DSH restarted* instead, with what it
+printed last (*It exited with code 1: “…”*), and after a resume that
+failed that way its card offers **Start anew** too. A `plain` program is
+not started again, since it cannot resume, and its card says so. A start
+that fails after a restart (a setting this DSH cannot do, say) says why on
+its card and is tried again the next time DSH starts; **Start again**
+tries now. Switching Agent Terminals off and on, or saving its settings, leaves
 running agents running: it picks them up where they are (a job a restart
 cut off stays cut off), and a message it typed just before still gets its
 proof.
@@ -140,8 +159,9 @@ left open in its transcript by the old program would hold the agent as
 *working* or *waiting on you* for ever. Agent Terminals reads the
 transcript before each start: whatever was open then is over. The agent
 reads *idle*, any question it left in Decisions goes away, held messages
-go in once, and *What happened* says which job was cut off (once) and that
-a message carries on.
+go in once, and *What happened* says which job was cut off and that a
+message carries on: once, however many restarts follow before the next
+message.
 
 **While Agent Terminals is switched off or waits for a setting.** Nobody
 follows the agents then, but they keep running in their terminals. Each
@@ -152,7 +172,8 @@ its agents and when it picked them up again, where they were.
 **Closing its tab ends it.** Closing an agent's terminal tab closes the
 terminal, which ends the program in it. Its card says so, and **Start
 again** brings it back in a new terminal and tab, resuming its
-conversation. **Stop** on the page does the same as closing the tab.
+conversation where it has one. **Stop** on the page does the same as
+closing the tab.
 
 ## The page
 
@@ -168,14 +189,17 @@ conversation. **Stop** on the page does the same as closing the tab.
   when its terminal asks; its last reply; its messages with their states
   and why (the newest four, then **Show all**); a message box; and **Its
   screen now**, what its terminal shows. While it runs: **Open its
-  terminal** and **Stop**. Stopped: **Start again** (resuming its
-  conversation where the program can), **Start anew** (a new conversation)
-  and **Forget**, which asks first (**Forget it** takes it off the list;
-  its session and its own conversation files stay; **Keep it** changes
-  nothing). A line under the list follows your last message: typed in,
-  delivered, or not proven with where to look.
+  terminal** and **Stop**. Stopped: **Start again** (its card says what it
+  does: resume its conversation, start it again under its id, or run it
+  anew), **Start anew** (a new conversation; offered only where there is
+  one to resume) and **Forget**, which asks first (**Forget it** takes it
+  off the list and closes its messages not typed in; its session and its
+  own conversation files stay; **Keep it** changes nothing). A line under
+  the list follows your last message: typed in, delivered, or not proven
+  with where to look.
 - **Start a coding agent**: the programs found on this computer and the
-  ones used here before (one click fills the form), then Program,
+  ones used here before (one click fills the form; each once, with its
+  conversations folder when it is not the default one), then Program,
   Arguments, How it resumes a conversation, Its conversations folder, Where
   it works (a new session in a folder, or the session whose menu you came
   from), Name and First message.
@@ -212,7 +236,10 @@ cause is gone.
 Plugins → Agent Terminals shows the settings you can change while it runs,
 in DSH's own settings form: change them, then **Save**. They apply at once,
 and *What happened* notes each save. The form will not save a value out of
-range and says what fits.
+range and says what fits. An edit of DSH's profile is noted too, once, when
+Agent Terminals starts with it: *Settings changed in DSH's profile: “How
+messages are typed in”*, and why (it started again with them, it is
+switched off there, or which one is wrong).
 
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |
@@ -228,8 +255,12 @@ range and says what fits.
 | `enabled` | `true` | `true` or `false` | Profile | `false` keeps Agent Terminals loaded but idle: it starts, reads and types nothing, and its page says so and how to change it. |
 
 *Profile* settings go in the `agent-terminals` row of the profile's
-`cordis.patch.yml` (see Setup) and apply after a restart. A wrong value
-there never stops Agent Terminals from starting: it starts no agent and
+`cordis.patch.yml` (see Setup). DSH applies the file when you save it:
+Agent Terminals starts again with them, with no restart of DSH, and picks
+up its agents where they are. A wrong value there, of the wrong type too (a number in quotes such as
+`proofSeconds: "8"`, or `yes` for a switch), never stops Agent Terminals
+from starting: every key of its schema takes any value, its own check
+names the setting and the value as the profile has it, and it starts no agent and
 types nothing, agents already running keep running unfollowed and say so,
 and the page says which setting is wrong, what it must be, and where to
 change it. Fixed, it picks the agents up where they are.
@@ -241,7 +272,7 @@ mode 600:
 
 | File | What |
 | --- | --- |
-| `agent-terminals/state.json` | The agents: program, arguments, way of resuming, folder, session, terminal id, conversation id, whether you want it running, why it last ended, and its last 30 messages; and the six programs used most recently. |
+| `agent-terminals/state.json` | The agents: program, arguments, way of resuming, folder, session, terminal id, conversation id, whether you want it running, why it last ended, the job a restart cut last (so it is logged once), and its last 30 messages; the six programs used most recently; and the settings it last ran with (so an edit of DSH's profile is noted once, when it starts with it). |
 | `agent-terminals/events.jsonl` | *What happened*; it keeps the last 400 entries and rewrites itself past 1 MB. |
 
 Agent Terminals only reads a program's own conversation files; it never
@@ -315,6 +346,9 @@ conversations, so you can resume one by hand.
   to close one of its terminal tabs.
 - Proof needs a transcript: for `continue` and `plain` programs, a message
   is typed in, not proven read.
+- A `continue` program resumes its folder's latest conversation, whatever
+  started it; a program of that kind that has none may refuse to start, and
+  its card then shows what it printed.
 - It leans on parts of DSH that are not a plugin interface. The direct way
   of typing uses the terminal controller's own terminals (their owners,
   handle and screen modes), and the page reads DSH's
@@ -333,7 +367,7 @@ node --test test/agent-terminals.test.js test/agent-terminals-client.test.js   #
 node scripts/e2e.mjs agent-terminals                                           # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (129 checks, about 190 seconds a build) starts DSH from
+The real-DSH test (CHECKS checks, about SECONDS seconds a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH, each in a throwaway home with a throwaway
 home folder for its shell, with Session Watch, Decisions, Agent Terminals
 and a stand-in neighbour plugin that draws in the same places. Stand-in
@@ -363,18 +397,43 @@ closing a tab (the agent ends; Start again brings it back), **Start a
 coding agent here**, a setting saved in Plugins that applies at once, and
 a wrong value saved while DSH runs (the agents keep running, read *not
 followed*, offer only **Open its terminal**, and are picked up where they
-are once it is fixed). It restarts DSH (agents resume under the same
-terminal id; a `plain` one says why it was not started again; the window's
-tab shows the resumed agent), restarts it again in the middle of a job and
+are once it is fixed). An agent started without a message is stopped,
+started again, has its tab closed and is started again: each time it comes
+back running and idle under its id, never with a resume its program would
+refuse, and its card offers no **Start anew**. A `continue` stand-in is
+typed to. It restarts DSH (agents resume under the same terminal id; the
+agent without a message starts again under its id, logged once it holds;
+the `continue` one is resumed with `--continue`; a `plain` one says why it
+was not started again; a session's first turn the restart cut is settled,
+not left *sending*, and the session is listed; the window's tab shows the
+resumed agent), restarts it again in the middle of a job and
 of an approval prompt (both agents come back idle, each cut job is logged
 once, the held messages go in once and are proven, no question is left in
 Decisions), restarts it while a message typed during a job and an answer
 whose Enter was swallowed wait for their proof (each is typed in again once
 and proven; Decisions hears the answer delivered), picks agents up after a
-restart cut a job and an approval prompt (a wrong setting saved, then
-fixed: both stay idle, hold nothing and leave nothing in Decisions), types through DSH's terminal input on 0.2.0 and checks the words
-on later builds, sets a wrong value and fixes it in the form (the agents
-come back), switches Session Watch off in the profile, checks `enabled:
-false` and the file modes, and ends every process it started. It reads the
-running DSH's fingerprint before and after and fails if it moved; pictures
-go to `.e2e/shots/agent-terminals/<version>/`.
+restart cut a job and an approval prompt (restarted twice in a row: each
+cut job is logged once; then a wrong setting saved and fixed: both stay
+idle, hold nothing and leave nothing in Decisions), types through DSH's
+terminal input on 0.2.0 and checks the words on later builds, starts DSH
+with a number in quotes in the profile (`proofSeconds: "8"`: named on the
+page with its value, the form flags it as it opens, and typed without its
+quotes one **Save** stores the number and brings the agents back),
+switches Session Watch off in the profile, checks `enabled: false` and the
+file modes, sets `enabled` back to true in the profile while DSH runs (DSH
+applies it with no restart, *What happened* says what the edit changed,
+and the agents it ended start again, resumed),
+and ends every process it started. Every quit of DSH in the
+run must end by itself within its grace (20 s), never by a kill. It reads
+the running DSH's fingerprint before and after and fails if it moved;
+pictures go to `.e2e/shots/agent-terminals/<version>/`.
+
+The unit tests (`test/agent-terminals.test.js`) run the engine over a
+stand-in DSH terminal controller whose shell really starts the stand-in
+agent: among them, an agent without a message through Stop, a closed
+terminal and a restart; a program that fails as it starts again after a
+restart (logged as not started, with what it printed); three restarts in a
+row after a cut job (logged once); the log entries an earlier run left
+open; Forget closing an agent's messages; **Send again**; a wrong type
+for every setting, named with its value; and an edit of DSH's profile,
+said once at the start that has it.

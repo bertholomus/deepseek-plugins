@@ -143,7 +143,7 @@ test('browser half: its words name no other assistant or maker, and say what to 
     assert.doesNotMatch(source.slice(source.indexOf('// </suite-kit>')), OTHER_NAMES);
     // Each empty state and error line ends in what to do.
     assert.match(TEXT.noneText, /Start one below/);
-    assert.match(TEXT.disabled, /set enabled to true there and restart DSH/);
+    assert.match(TEXT.disabled, /set enabled to true there; DSH applies it when you save the file\./);
     assert.match(TEXT.noTerminals, /Restart DSH/);
     assert.match(TEXT.noHistoryText, /show here/);
 });
@@ -428,6 +428,14 @@ test('the page: reads the agents, shows each, and says what an action did, in wo
     assert.match(textIn(problemPage.tree), /\(it is 1\)\.Change it in Agent Terminals' settings in Plugins\./);
     assert.equal(withAttr(problemPage.tree, 'data-agent-terminals-start').length, 0, 'nothing new starts until it is fixed');
     assert.equal(withAttr(problemPage.tree, 'data-agent-terminals-agent').length, 3);
+
+    // A profile-only setting: changed in DSH's profile, which DSH applies when the file is saved (no restart of DSH).
+    state = { ...state, problem: { key: 'typing', text: 'How messages are typed in (typing) must be one of auto, direct, attached (it is "paste")', live: false } };
+    const profilePage = mount(AgentsPage, { agents: views });
+    t.after(() => profilePage.unmount());
+    await settle(5);
+    assert.match(textIn(profilePage.tree), /\(it is "paste"\)\.Change it in Agent Terminals' entry in DSH's profile \(cordis\.patch\.yml\)\. DSH applies the file when you save it\./);
+    assert.doesNotMatch(textIn(profilePage.tree), /restart DSH/);
 });
 
 test('the page: when Agent Terminals is not running it says so and what to do, never old data', async (t) => {

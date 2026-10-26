@@ -14,7 +14,7 @@ import {
 import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
 import { PASTE_END, PASTE_START, Typist, messageKeys, pasteSwitch } from '../plugins/agent-terminals/lib/typist.js';
 import { AgentTerminals, checkLaunch, exitWords, parseData, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
-import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/agent-terminals/lib/config.js';
+import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedSince, changedWords, checkConfig, profileEntry, savedEntry, settingsSnapshot } from '../plugins/agent-terminals/lib/config.js';
 import { detectAgents, keepsProjects, keepsSessions } from '../plugins/agent-terminals/lib/detect.js';
 import { STYLE_CHOICES, pageState } from '../plugins/agent-terminals/lib/page.js';
 import { JsonStore } from '../plugins/agent-terminals/lib/shared/files.js';
@@ -372,6 +372,42 @@ test('config: every key of its schema takes any value, so a wrong type in the pr
         }, `${key} = ${JSON.stringify(value)}`);
     }
     assert.throws(() => checkConfig({ ...DEFAULTS, proofSeconds: '8' }), /^SettingError: Seconds without proof before Enter is pressed again \(proofSeconds\) must be a whole number of seconds from 2 to 120 \(it is "8"\)$/);
+});
+
+test('config: an edit of DSH\'s profile is said once, at the start that has it, with what changed', () => {
+    const run = (settings) => {
+        const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'agent-terminals' });
+        check.run();
+        return check;
+    };
+    const first = settingsSnapshot({ ...DEFAULTS });
+    assert.deepEqual(Object.keys(first).sort(), Object.keys(SETTING_TITLES).sort(), 'every setting is kept');
+    // Never ran here (or an older state.json): nothing to compare, nothing said.
+    assert.deepEqual(changedSince(undefined, first), []);
+    assert.equal(profileEntry(run({ ...DEFAULTS }), changedSince(undefined, first), DEFAULTS), undefined);
+    // The same settings again: nothing said.
+    assert.deepEqual(changedSince(first, settingsSnapshot({ ...DEFAULTS })), []);
+    // typing changed in the profile: said by its title; Agent Terminals started again with it.
+    const typed = { ...DEFAULTS, typing: 'direct' };
+    const keys = changedSince(first, settingsSnapshot(typed));
+    assert.deepEqual(keys, ['typing']);
+    assert.deepEqual(profileEntry(run(typed), keys, typed), { kind: 'settings', text: 'Settings changed in DSH\'s profile: “How messages are typed in”', why: 'Agent Terminals started again with them.', state: 'done' });
+    // Switched off there: said, and what that means.
+    const off = { ...DEFAULTS, enabled: false };
+    assert.equal(profileEntry(run(off), changedSince(first, settingsSnapshot(off)), off).why, 'Agent Terminals is switched off there (enabled: false): it starts, reads and types nothing.');
+    // A wrong type there: named, with the value as the profile has it.
+    const quoted = { ...DEFAULTS, proofSeconds: '8' };
+    const wrong = profileEntry(run(quoted), changedSince(first, settingsSnapshot(quoted)), quoted);
+    assert.equal(wrong.text, 'Settings changed in DSH\'s profile: “Seconds without proof before Enter is pressed again”; Agent Terminals waits until a wrong one is fixed');
+    assert.equal(wrong.why, 'Seconds without proof before Enter is pressed again (proofSeconds) must be a whole number of seconds from 2 to 120 (it is "8").');
+    assert.equal(wrong.state, 'waiting on a setting');
+    // A setting a newer version added is not "changed" against an older snapshot.
+    const { notify: _, ...older } = first;
+    assert.deepEqual(changedSince(older, settingsSnapshot({ ...DEFAULTS, notify: false })), []);
+    // state.json keeps the snapshot (and only setting-like keys).
+    const kept = parseData({ agents: {}, recent: [], settings: { ...first, 'bad key': 1 } }).settings;
+    assert.deepEqual(kept, first);
+    assert.equal(parseData({ agents: {}, recent: [] }).settings, undefined);
 });
 
 test('start form: what is sent is checked in words', () => {

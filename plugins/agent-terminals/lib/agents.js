@@ -104,7 +104,9 @@ export function parseData(value) {
     }
     const recent = (Array.isArray(value?.recent) ? value.recent : []).filter((r) => isRecord(r) && typeof r.program === 'string' && STYLE_IDS.includes(r.style)).slice(0, KEEP_RECENT)
         .map((r) => ({ program: r.program, args: strings(r.args), style: r.style, ...(text(r.data) ? { data: r.data } : {}) }));
-    return { version: 1, agents, recent };
+    // The settings it last ran with (lib/config.js settingsSnapshot): what an edit of DSH's profile changed is said at the next start.
+    const settings = isRecord(value?.settings) ? Object.fromEntries(Object.entries(value.settings).filter(([key]) => /^[A-Za-z]\w{0,39}$/.test(key)).slice(0, 32)) : undefined;
+    return { version: 1, agents, recent, ...(settings ? { settings } : {}) };
 }
 
 export const terminalIdOf = (key, launches) => `agent-${key}-${launches}`;

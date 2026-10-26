@@ -1129,7 +1129,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             entry: 'Coding agents',
             title: 'Coding agents',
             summary: 'Command-line coding agents, each in a terminal tab beside its own DSH session. They start again after DSH restarts, your messages are typed in and proven read, and what each one is doing shows here, on its session\'s row and in Decisions.',
-            disabled: 'Agent Terminals is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it starts, reads and types nothing. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
+            disabled: 'Agent Terminals is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it starts, reads and types nothing. To use it, set enabled to true there; DSH applies it when you save the file. To remove it instead, switch it off in Plugins.',
             noTerminals: 'DSH\'s terminals are not running, so no agent can start or be reached. Restart DSH: agents that were running start again by themselves.',
             agents: 'Agents',
             none: 'No coding agents yet',
@@ -2009,7 +2009,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : data.problem
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-agent-terminals-header': 'problem' } },
-                                    h(kit.SettingsProblem, { name: 'Agent Terminals', packageName: BUNDLE, problem: data.problem })),
+                                    h(kit.SettingsProblem, { name: 'Agent Terminals', packageName: BUNDLE, problem: data.problem, profileApplies: true })),
                                 data.agents.length ? h(AgentsCard, { key: 'agents', data, act, busyKey, said, onOpen, openTerminal, onStart }) : null,
                                 h(HistoryCard, { key: 'history', data, onOpen }),
                             ]

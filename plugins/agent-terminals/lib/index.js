@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { AgentTerminals, parseData } from './agents.js';
-import { LIVE_SETTINGS, checkConfig, savedEntry } from './config.js';
+import { LIVE_SETTINGS, changedSince, checkConfig, profileEntry, savedEntry, settingsSnapshot } from './config.js';
 import { detectAgents } from './detect.js';
 import { AgentTerminalsRemote, SERVICE } from './remote.js';
 import { Typist } from './typist.js';
@@ -88,6 +88,21 @@ export function apply(ctx, config) {
         const store = new JsonStore(join(dir, 'state.json'), { parse: parseData, logger });
         const journal = new Journal(join(dir, 'events.jsonl'), { logger, onChange: bump });
         const home = homedir();
+
+        // The settings it runs with, kept for its next start: DSH applies an edit of its profile when the file is
+        // saved, starting Agent Terminals again with it (or reads it at its own start), so what changed in between
+        // is said here, once; a save in Plugins is said as it happens (`saved` below).
+        const remember = () => {
+            store.data.settings = settingsSnapshot(settings);
+            store.change();
+        };
+        try {
+            const edited = profileEntry(check, changedSince(store.data.settings, settingsSnapshot(settings)), settings);
+            if (edited) journal.add(edited);
+            remember();
+        } catch (error) {
+            logger?.warn?.(`agent-terminals: could not compare its settings with its last start: ${errorText(error)}`);
+        }
 
         // DSH's services, each optional: what is missing is said on the page.
         const services = { terminals: undefined, registry: undefined, sessions: undefined, notifications: undefined };
@@ -195,6 +210,7 @@ export function apply(ctx, config) {
         const saved = (paths) => {
             const entry = savedEntry(check, paths);
             if (entry) journal.add(entry);
+            remember();
             if (working() && services.terminals && !agents.started) {
                 agents.start();
                 if (some()) switched(true, 'Its settings are right again: it picks up every agent where it is.');
