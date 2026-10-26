@@ -1007,3 +1007,19 @@ test('judge: test files are not tests, "all 4 pass" needs a test run, a CI check
     assert.equal(judge(files, [...three, edit('app/views/admin/users/index.html.erb')]).verdict, 'backed');
     assert.equal(judge(only('Published to npm under the latest tag.'), [bash('npm publish --dry-run', '+ @acme/deploy-cli@3.2.0')]).verdict, 'unbacked');
 });
+
+test('judge: a loop of node test runs prints one summary a round, and a round that failed counts', () => {
+    // `for i in 1 2 3; do node --test … | grep …; done`: TAP when piped, the spec reporter on a terminal.
+    for (const mark of ['#', 'ℹ']) {
+        const rounds = [0, 1, 0].map((failed) => `${mark} tests 1\n${mark} pass ${1 - failed}\n${mark} fail ${failed}`).join('\n');
+        assert.deepEqual(testCountsIn(rounds), { passed: 1, failed: 0, total: 1, failedOnce: 1 });
+        const loop = bash('rm -f .round; for i in 1 2 3; do node --test coupon.test.mjs 2>&1 | grep -E "^(ℹ|#) (tests|pass|fail)"; done', rounds);
+        const flake = judge(only('Fixed the flaky coupon test; it passes reliably now.'), [edit('coupon.test.mjs'), loop]);
+        assert.equal(flake.verdict, 'contradicted', mark);
+        assert.match(flake.why, /still failed a test in one of its rounds/);
+    }
+    // One run, or every round passing: no failed round.
+    assert.equal(testCountsIn('# tests 1\n# pass 1\n# fail 0').failedOnce, undefined);
+    const clean = bash('for i in 1 2 3; do node --test; done', ['# tests 3\n# pass 3\n# fail 0', '# tests 3\n# pass 3\n# fail 0', '# tests 3\n# pass 3\n# fail 0'].join('\n'));
+    assert.equal(judge(only('Fixed the flaky coupon test; it passes reliably now.'), [edit('coupon.test.mjs'), clean]).verdict, 'backed');
+});
