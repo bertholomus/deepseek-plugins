@@ -10,7 +10,7 @@ import { request } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-    BridgeError, EVENTS_LIMIT_MAX, MAX_BODY_DEFAULT, SOCKET_PATH_MAX, WAIT_MAX_SECONDS, answers, checkSettings, codeOf,
+    BridgeError, EVENTS_LIMIT_MAX, LOG_MAX_BYTES, MAX_BODY_DEFAULT, MAX_BODY_RANGE, SOCKET_PATH_MAX, WAIT_MAX_SECONDS, answers, checkSettings, codeOf,
     createBridge, expandHome, lastAssistantText, prepareSocket, requestState, sessionSummary, statusFor, summarize,
 } from '../plugins/session-bridge/lib/bridge.js';
 import { OTHER_NAMES } from './helpers/client.mjs';
@@ -716,4 +716,39 @@ test('files: the plugin\'s code parses, its real-DSH test parses, and no file na
     const index = readFileSync(join(PLUGIN_DIR, 'lib', 'index.js'), 'utf8');
     assert.match(index, /from '@deepseek-ai\/dsh-home-paths'/);
     assert.doesNotMatch(index.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, ''), /\.dsh\//, 'no data folder path built by hand');
+});
+
+test('readme: its settings, limits, routes and states are the code\'s', async (t) => {
+    const readme = readFileSync(join(PLUGIN_DIR, 'README.md'), 'utf8');
+    // Every setting the bridge has is in the settings table, and no other.
+    const table = [...readme.matchAll(/^\| `(\w+)` \| [^|]+ \| [^|]+ \| [^|]+ \|$/gm)].map((m) => m[1]);
+    assert.deepEqual(table, ['enabled', 'socketPath', 'logFile', 'maxBodyBytes']);
+    const { problems } = checkSettings(Object.fromEntries(table.map((k) => [k, undefined])), { socketPath: '/s', logFile: '/l' });
+    assert.deepEqual(problems, [], 'each one is a setting of the bridge');
+    // The limits the README gives are the code's.
+    for (const text of [`\`${MAX_BODY_DEFAULT}\``, `${MAX_BODY_RANGE[0]} to ${MAX_BODY_RANGE[1]}`, `at most ${SOCKET_PATH_MAX} bytes`, `Past ${LOG_MAX_BYTES / 1048576} MB`,
+        `(0 to ${WAIT_MAX_SECONDS})`, `\`limit\` is 1 to ${EVENTS_LIMIT_MAX}`, 'at most 500 characters', '1 to 128 letters, digits or `. _ : -`', '20 s to read a session or the list, 60 s to take a prompt']) {
+        assert.ok(readme.includes(text), `the README says ${text}`);
+    }
+    // Every route in its table is one the bridge answers, with that method.
+    const routes = [...readme.matchAll(/^\| `(GET|POST) (\/[^`]*)` \|/gm)].map((m) => [m[1], m[2]]);
+    assert.equal(routes.length, 12);
+    const { sock, dsh } = await bridgeOn(t);
+    const ws = tempDir('sbws');
+    const made = await call(sock, 'POST', '/sessions', { workspacePath: ws });
+    const id = made.body.sessionId;
+    const sent = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'hello', requestId: 'readme-1' })).body;
+    assert.equal(sent.requestId, 'readme-1');
+    for (const [method, path] of routes) {
+        const real = path.replace(':id', id).replace(':requestId', 'readme-1');
+        const body = { '/sessions': { workspacePath: ws }, prompt: { text: 'again' }, model: { provider: 'p', model: 'm' }, rename: { title: 'T' } };
+        const r = await call(sock, method, real, method === 'POST' ? (body[real.split('/').at(-1)] ?? body[real] ?? {}) : undefined);
+        assert.equal(r.status, 200, `${method} ${path}: ${r.text.slice(0, 200)}`);
+    }
+    assert.ok(dsh.calls.some(([kind]) => kind === 'cancel'));
+    // The states it lists are the ones requestState gives, and the status codes the ones the bridge answers with.
+    const states = [...readme.matchAll(/^\| `(\w+)` \| (?!Meaning)/gm)].map((m) => m[1]).filter((s) => !table.includes(s));
+    assert.deepEqual(states, ['waiting', 'queued', 'read', 'answered', 'dropped']);
+    const codes = [...readme.matchAll(/^\| (\d{3}) \|/gm)].map((m) => Number(m[1]));
+    assert.deepEqual(codes, [400, 404, 405, 409, 413, 500, 503, 504]);
 });

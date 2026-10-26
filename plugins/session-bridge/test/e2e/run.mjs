@@ -213,6 +213,10 @@ try {
         check('the followup was read by the next turn and answered', followed.state === 'answered' && followed.turn === 2 && followed.reply?.text === 'After the turn', json(followed));
         const ends = await turnEnds(ids.slow);
         check('the session\'s log: two turns, both completed', ends.length === 2 && ends.every((e) => e.reason?.kind === 'completed'), json(ends));
+        const idleRid = `e2e-idle-${randomUUID().slice(0, 8)}`;
+        await run.bridge('POST', `/sessions/${ids.slow}/prompt`, { text: 'E2E:say Steered while idle', mode: 'steer', requestId: idleRid });
+        const idle = (await call('GET', `/sessions/${ids.slow}/requests/${idleRid}?wait=60`)).body;
+        check('a steer with no turn running starts a turn of its own, and is answered', idle.state === 'answered' && idle.turn === 3 && idle.reply?.text === 'Steered while idle' && (await turnEnds(ids.slow)).length === 3, json(idle));
     });
 
     await step('cancel a running turn; rename; a model; DSH\'s refusals come back in its words', async () => {
