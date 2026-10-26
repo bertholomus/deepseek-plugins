@@ -33,7 +33,10 @@
  * - its files are in the DSH's own home (DSH_HOME), never in the home's own
  *   DSH folder;
  * - switched off (enabled: false), nothing syncs or is written, chats get
- *   no tools, and the window's calls say so in words ('calendar/off').
+ *   no tools, and the window's calls say so in words ('calendar/off');
+ * - then the window (ui.mjs) on the same DSH, in Chromium, its checks counted
+ *   with these: PLAYWRIGHT_MODULE, else the suite's .e2e/tools copy of
+ *   playwright-core; CALENDAR_UI=0 leaves it out.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/calendar/test/e2e/run.mjs
  *
@@ -671,5 +674,44 @@ try {
     if (sockDir !== root) rmSync(sockDir, { recursive: true, force: true });
 }
 
+// 7. The window (ui.mjs) on this same DSH, in Chromium, once this run's own DSH has stopped. CALENDAR_UI=0 leaves it out.
+await windowTest();
+
 console.log(`\n# ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exitCode = 1;
+
+/** Run the window test and count its checks with these; without Playwright it says so and counts nothing. */
+async function windowTest() {
+    if (process.env.CALENDAR_UI === '0') {
+        console.log('# the window test left out (CALENDAR_UI=0)');
+        return;
+    }
+    const shared = resolve(pluginsDir, '..', '.e2e', 'tools', 'node_modules', 'playwright-core', 'index.mjs');
+    const playwright = process.env.PLAYWRIGHT_MODULE || (existsSync(shared) ? shared : '');
+    if (!playwright) {
+        console.log('# the window test skipped: no Playwright here (set PLAYWRIGHT_MODULE to playwright-core\'s index.mjs)');
+        return;
+    }
+    console.log('\n# the window, in this DSH and Chromium (ui.mjs)');
+    const text = await new Promise((done) => {
+        const run = spawn(process.execPath, [join(here, 'ui.mjs')], { env: { ...process.env, PLAYWRIGHT_MODULE: playwright }, stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        run.stdout.on('data', (chunk) => {
+            process.stdout.write(chunk);
+            out += chunk;
+        });
+        run.stderr.on('data', (chunk) => process.stderr.write(chunk));
+        run.on('close', () => done(out));
+        run.on('error', (error) => done(`${out}\n${error.message}`));
+    });
+    const counts = /^(\d+) passed, (\d+) failed\s*$/m.exec(text.trim().split('\n').at(-1) ?? '');
+    if (counts) {
+        passed += Number(counts[1]);
+        failed += Number(counts[2]);
+    } else if (/^skipped/m.test(text)) {
+        console.log('# the window test skipped itself');
+    } else {
+        failed += 1;
+        console.log('not ok - the window test ran to its end');
+    }
+}

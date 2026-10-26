@@ -53,7 +53,7 @@ Before a change that would email anyone, or put the event on, change it on or ta
 
 The **Agenda** tab in DSH's right sidebar, beside chats, lists today and the next days, what's on now and next, with **Join** for a call; an event opens its details beside it, with **Open in Calendar**. In chats, each `calendar_*` call shows as a card: the events it read, one event, free time, or what a change did and who it emailed or reached, with a button to the event on the page, naming everyone it emailed or reached. A call that didn't work says what wasn't done and why; one refused because it would email people says whom, and that you can ask again to send it, or make the change in Calendar.
 
-With the wallpaper plugin's glass on, the page and its cards sit on the wallpaper: they keep no background of their own and follow its public `--wp-blur`, `--wp-tint` and `body.wp-still`. Light and dark follow DSH's theme. In a narrow window the side column folds behind a button, and Week shows three days.
+The page is drawn with DSH's own colours, type and parts, so light and dark follow DSH's theme. With the wallpaper plugin's glass on, the page and its cards sit on the wallpaper: they keep no background of their own and follow its public `--wp-blur`, `--wp-tint` and `body.wp-still`; the side column is glass at the wallpaper's tint and the calendar itself at tint + .2, as DSH's open chat is, with secondary text deepened so it stays readable on glass. Where the system asks for less transparency the glass goes near-opaque, and where it asks for less motion nothing moves. Notes after a change are DSH's own banner at the top of the window, clear of a dialog's buttons; dialogs and menus are DSH's; an event's details open in DSH's menu material; and the cards in chats look like DSH's own cards there. In a narrow window the side column folds behind a button, and Week shows three days.
 
 ## For agents
 
@@ -115,24 +115,32 @@ The plugin needs no config. Its row in `cordis.patch.yml`:
     timeZone: Europe/Berlin
 ```
 
-| Setting | Default | What it does |
-| --- | --- | --- |
-| `enabled` | `true` | Off: the plugin does nothing. |
-| `timeZone` | `''` | Your time zone (IANA, like `Europe/Berlin`); empty uses this computer's. |
-| `syncMinutes` | `15` | How often accounts sync, in minutes (at least 5). |
-| `tools` | `true` | The agents' tools. Off: chats can't see or change your calendars. |
-| `agentChanges` | `preset` | Which chats may change calendars: `preset`, `ask` or `off` (above). |
-| `askBeforeEmails` | `true` | A chat's change that emails someone, or changes a meeting on its guests' Google calendars, asks you first, naming who gets what, and is refused where the chat can't ask (above). |
-| `googleClientId` | `''` | Your Google OAuth client's id (the window can set it too). |
-| `googleClientSecretRef` | `CALENDAR_GOOGLE_CLIENT_SECRET` | The DSH credential that holds that client's secret. |
-| `microsoftClientId` | `''` | Your Microsoft app registration's client id (the window can set it too). |
-| `microsoftTenant` | `common` | The Microsoft tenant: `common`, `organizations`, `consumers` or a tenant id. |
-| `storeFile` | `~/.dsh/calendar/calendar.json` | Accounts, calendars and choices. |
-| `logFile` | `~/.dsh/calendar/calendar.log` | The log; empty turns it off. |
+| Setting | Takes | Default | What it does |
+| --- | --- | --- | --- |
+| `enabled` | `true` or `false` | `true` | Off: nothing syncs, nothing is read or written, chats get no tools, and the Calendar page and the Agenda tab say the calendar is switched off and where. |
+| `timeZone` | a time zone such as `Europe/Berlin`, or empty | `''` | Your time zone; empty uses this computer's. |
+| `syncMinutes` | a whole number from 5 to 1440 | `15` | How often accounts sync, in minutes. |
+| `tools` | `true` or `false` | `true` | The agents' tools. Off: chats can't see or change your calendars. |
+| `agentChanges` | `preset`, `ask` or `off` | `preset` | Which chats may change calendars (above). |
+| `askBeforeEmails` | `true` or `false` | `true` | A chat's change that emails someone, or changes a meeting on its guests' Google calendars, asks you first, naming who gets what, and is refused where the chat can't ask (above). |
+| `googleClientId` | an id ending in `.apps.googleusercontent.com`, or empty | `''` | Your Google OAuth client's id (the window can set it too). |
+| `googleClientSecretRef` | the name of a DSH credential | `CALENDAR_GOOGLE_CLIENT_SECRET` | The DSH credential that holds that client's secret. |
+| `microsoftClientId` | an application (client) id, or empty | `''` | Your Microsoft app registration's client id (the window can set it too). |
+| `microsoftTenant` | `common`, `organizations`, `consumers`, a tenant id or a tenant's domain | `common` | The Microsoft tenant. |
+| `storeFile` | a file path | `calendar/calendar.json` | Accounts, calendars and choices. A relative path is in DSH's data folder (below). |
+| `logFile` | a file path, or empty | `calendar/calendar.log` | The log; empty keeps none. |
+
+A value of the wrong kind (a number in quotes, `yes` for `true`, a time zone that doesn't exist) never stops the plugin. It keeps working with that setting's safe choice, and says which setting is wrong, what it must be and what it does meanwhile, on the Calendar page and in DSH's log (the plugin's own log names the setting only). While `tools` is wrong chats get no calendar tools, while `agentChanges` is wrong every change from a chat asks you first, and while `askBeforeEmails` is wrong it stays on; any other wrong setting takes its default.
+
+### Switching it off, and back
+
+- **Off for a while**: `enabled: false` in its row. Its accounts, events and passwords stay where they are, untouched; `enabled: true` brings it all back as it was, syncing again from where it stopped.
+- **Out of DSH**: undo [Setup](#setup): take `dsh-plugin-calendar` out of the profile's `package.json` (`dependencies` and `dsh.profile.bundles`) and its row out of `cordis.patch.yml`, then restart DSH. Its files stay in DSH's data folder (below), so adding it again later finds them; its passwords and sign-ins stay in DSH's credential store until you remove the accounts (remove them first to clear those too).
+- **Back to an earlier version**: check out that version of this repository and restart DSH. The files stay where they are, and every write keeps the file's previous version beside it as `<file>.bak`.
 
 ## Where things are kept
 
-- `~/.dsh/calendar/` (in `$DSH_HOME` when DSH runs with one), mode 700: `calendar.json` with the accounts, calendars and your choices; `events/<calendar>.json` with each calendar's events (for CalDAV and local calendars, the iCalendar text too) and how far they are synced, written together; and `calendar.log` with ids, kinds and counts, never event text, passwords, tokens or addresses. Each file is mode 600.
+- `calendar/` in DSH's data folder (`$DSH_HOME` when DSH runs with one, else `~/.dsh`), mode 700: `calendar.json` with the accounts, calendars and your choices; `events/<calendar>.json` with each calendar's events (for CalDAV and local calendars, the iCalendar text too) and how far they are synced, written together; and `calendar.log` with ids, kinds and counts, never event text, passwords, tokens or addresses. Each file is mode 600.
 - Every write keeps the file's previous version beside it as `<file>.bak`. A file that is there but can't be read at a start is renamed to `<file>.unreadable-<time>` and kept, never deleted or written over: the plugin starts without it (a calendar on a server is read again from the server), and the window says so. To bring one back, quit DSH and rename it, or its `.bak`, to the file's name.
 - DSH's credential store: one record per account, `calendar/<account id>`, with its password, its sign-in or a subscription's address, and your Google client's secret.
 
@@ -155,18 +163,18 @@ The plugin needs no config. Its row in `cordis.patch.yml`:
 
 ## Tests
 
+From the repository's root:
+
 ```bash
-node --test plugins/calendar/test/*.test.mjs      # store, repeats, zones, CalDAV, Google and Microsoft (stand-ins), guests and email, write rules
+npm test                              # every plugin's unit tests; the calendar's are test/calendar.test.js
+node --test test/calendar.test.js     # the calendar's alone: store, repeats, zones, CalDAV, Google and Microsoft (stand-ins),
+                                      # guests and email, write rules, settings, the window's helpers and its look
 
-# also against a real CalDAV server: a Python virtualenv with radicale installed
-RADICALE_VENV=/path/to/venv node --test plugins/calendar/test/*.test.mjs
-
-# on a real DSH, with a scripted model server (Read Only, Workspace Write and Full access chats)
-npm install --prefix /tmp/dsh @deepseek-ai/dsh
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js RADICALE_VENV=/path/to/venv node plugins/calendar/test/e2e/run.mjs
-
-# the window, in a real DSH and Chromium (SHOTS=/some/folder keeps screenshots)
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.mjs node plugins/calendar/test/e2e/ui.mjs
+# on a real DSH: every DSH under .e2e/ (npm i --prefix .e2e/dsh-<version> @deepseek-ai/dsh@<version>) and the installed app's
+node scripts/e2e.mjs calendar
+node scripts/e2e.mjs calendar --dsh 0.2.1-rc.1     # one of them
 ```
+
+`node scripts/e2e.mjs calendar` runs `test/e2e/run.mjs` on each DSH in a throwaway DSH_HOME, with a scripted model server: the plugin's endpoints and files, a subscribed feed, chats on Read Only, Workspace Write and Full access, DSH's approval prompts, a restart, wrong settings, the plugin switched off, and that nothing lands in the home's own DSH folder. Then, on the same DSH, it runs the window test (`test/e2e/ui.mjs`) in Chromium: the page, its dialogs, drags and keys, Accounts with Google's and Microsoft's sign-ins (stand-ins), the Agenda pane, chat cards, light and dark, a stand-in wallpaper, narrow windows, and the contrast of every piece of text. It needs Playwright: `PLAYWRIGHT_MODULE` (playwright-core's `index.mjs`), else the copy in `.e2e/tools`; without one it says so and leaves the window out, and `CALENDAR_UI=0` leaves it out too. `SHOTS=/some/folder` keeps the window's pictures, `KEEP=1` the throwaway folder. Before and after, it reads the live DSH's fingerprint and fails if that changed. A real CalDAV server joins in when `RADICALE_VENV` names a Python virtualenv with radicale installed.
 
 No test uses a real account: Google and Microsoft are stand-in servers (`test/standins`), and CalDAV runs against answers shaped like iCloud's, Fastmail's and Nextcloud's (`test/fixtures`), a stand-in server and, when it is installed, a real Radicale server.
