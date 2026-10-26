@@ -1106,8 +1106,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
                     const permissions = isObject(result.value.permissions) ? result.value.permissions : null;
                     const problems = Array.isArray(result.value.problems) ? result.value.problems.filter((text) => typeof text === 'string' && text !== '') : [];
+                    const off = result.value.off === true;
                     setValue((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions)
-                        && was.problems.join('\n') === problems.join('\n') ? was : { guarded, permissions, problems }));
+                        && was.problems.join('\n') === problems.join('\n') && was.off === off ? was : { guarded, permissions, problems, off }));
                 };
                 void read();
                 const timer = setInterval(() => {
@@ -1122,6 +1123,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             one: 'A setting to fix',
             many: (n) => `${n} settings to fix`,
             where: 'In your profile\'s cordis.patch.yml, in the row "- id: coordinator". The plugin keeps running meanwhile, as each line says.',
+            off: 'Switched off',
+            offWhy: 'Its row in your profile\'s cordis.patch.yml ("- id: coordinator") says enabled: false, so no chat coordinates and no chat is offered the thread tools. Set it to true, or take the line out, to coordinate again.',
         };
         const ACCESS_NOTE = 'These apply to every coordinating chat that doesn\'t set its own in its Thread settings. Your tools are the ones listed under guardedTools in this plugin\'s config.';
 
@@ -1163,12 +1166,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * logs: what it must be, what it is, and what the plugin uses
          * meanwhile. Nothing while all are right.
          */
-        function SettingProblems({ problems }) {
-            if (!Array.isArray(problems) || problems.length === 0) return null;
-            return h('section', { className: 'dshp-problems', 'data-projects-problems': '', 'aria-labelledby': 'dshp-problems-title' },
-                h('h4', { id: 'dshp-problems-title', className: 'dshp-title dshp-problems-title' }, problems.length === 1 ? PROBLEMS.one : PROBLEMS.many(problems.length)),
-                h('p', { className: 'dshp-hint' }, PROBLEMS.where),
-                h('ul', { className: 'dshp-problems-list' }, ...problems.map((text, i) => h('li', { key: i }, text))));
+        /**
+         * The settings to fix, in words, at the top of the plugin's page; or,
+         * while the plugin is switched off in its settings, that it is and
+         * how to switch it on, with any setting to fix below.
+         */
+        function SettingProblems({ problems, off = false }) {
+            const list = Array.isArray(problems) ? problems : [];
+            if (!off && list.length === 0) return null;
+            return h('section', { className: 'dshp-problems', 'data-projects-problems': '', 'data-projects-off': off ? '' : undefined, 'aria-labelledby': 'dshp-problems-title' },
+                h('h4', { id: 'dshp-problems-title', className: 'dshp-title dshp-problems-title' }, off ? PROBLEMS.off : list.length === 1 ? PROBLEMS.one : PROBLEMS.many(list.length)),
+                h('p', { className: 'dshp-hint' }, off ? PROBLEMS.offWhy : PROBLEMS.where),
+                list.length > 0 ? h('ul', { className: 'dshp-problems-list' }, ...list.map((text, i) => h('li', { key: i }, text))) : null);
         }
 
         function DefaultsForm({ form, catalog, link }) {
@@ -1182,7 +1191,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const labels = snapshot.insertedTwice ? { ...LABELS, readOnly: INSERTED_TWICE } : LABELS;
             const disabled = !state.writable || state.saving;
             return h('div', { 'data-projects-defaults': true },
-                h(SettingProblems, { problems: listed?.problems }),
+                h(SettingProblems, { problems: listed?.problems, off: listed?.off === true }),
                 h('h3', { className: 'dshp-heading' }, 'Default models'),
                 h(ui.SettingsForm, { labels, state, onSave: form.actions.save, onDiscard: form.actions.discard },
                     ...ROUTES.map((route) => h(RouteSection, { key: route.id, route, state, actions: form.actions, catalog: cat, models, disabled })),
@@ -1470,7 +1479,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * another version of the plugin, until the session is next loaded; the
          * session list's rows go by this then, not by their titles.
          */
-        const known = { map: new Map(), version: 0, listeners: new Set() };
+        const known = { map: new Map(), off: false, version: 0, listeners: new Set() };
         const subscribeKnown = (listener) => {
             known.listeners.add(listener);
             return () => { known.listeners.delete(listener); };
@@ -1478,13 +1487,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const knownVersion = () => known.version;
         /** Re-render with the sessions the store knows, once they are read. */
         const useKnown = () => React.useSyncExternalStore(subscribeKnown, knownVersion);
-        function takeKnown(sessions) {
+        /** @param off - the plugin is switched off in its settings (`enabled: false`): no Coordinate anywhere. */
+        function takeKnown(sessions, off = false) {
             const map = new Map();
             for (const [id, s] of Object.entries(isObject(sessions) ? sessions : {})) {
                 if (!isObject(s) || (s.role !== 'coordinator' && s.role !== 'thread')) continue;
                 map.set(id, { role: s.role, ...(typeof s.coordinator === 'string' && s.coordinator !== '' ? { coordinator: s.coordinator } : {}) });
             }
             known.map = map;
+            known.off = off === true;
             known.version += 1;
             for (const listener of [...known.listeners]) listener();
         }
@@ -1953,7 +1964,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const result = await link.call('sessions', {});
                 if (!result.ok || !isObject(result.value?.sessions)) return;
                 knownRead = true;
-                takeKnown(result.value.sessions);
+                takeKnown(result.value.sessions, result.value.off === true);
             }));
             const read = (key, maxAge) => (key === 'list' ? list(maxAge) : describe(key.slice(2), maxAge));
             const tick = () => {
@@ -2921,11 +2932,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * coordinating one the user stopped. A chat the user forked from
          * another is their own, though DSH lists it under its source. Not
          * while DSH is still reading its value, so a coordinating chat never
-         * shows Coordinate for a moment.
+         * shows Coordinate for a moment. Never while the plugin is switched
+         * off in its settings.
          */
         function canCoordinate(state, sessionId) {
             const row = state?.byId?.[sessionId];
-            if (!isObject(row)) return false;
+            if (!isObject(row) || known.off) return false;
             if (row.origin === 'subagent' || row.origin === 'teammate') return false;
             const value = valueIn(state, sessionId);
             if (value) return value.role === 'coordinator' && value.off === true;
@@ -6356,7 +6368,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noticeOf, noticeView, TriggerNotice, ProjectNotice,
             permissionName, permissionShown, permissionIn, toolsText, accessOf, accessSummary, PermissionPicker, ToolsControl, ModelsSummary,
             NewsNotice, newsLine, newsDot, ThreadMark, RowPlace, SettingsMenuItem,
-            CoordinateAction, canCoordinate, stoppedEmpty, ThreadSettings, Section, SettingRow, SETTINGS,
+            CoordinateAction, canCoordinate, stoppedEmpty, SettingProblems, ThreadSettings, Section, SettingRow, SETTINGS,
             StartCoordinating, startState, isNewChat, commandSaid,
         };
         return module.exports;

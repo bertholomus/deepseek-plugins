@@ -1081,6 +1081,63 @@ test('browser half: Coordinate shows in the header of a plain top-level chat tha
     assert.equal(toastOf(stopped()), undefined);
 });
 
+test('browser half: while the plugin is switched off in its settings (enabled: false) no chat offers Coordinate, in its header or on the new-chat screen', async () => {
+    const { client, react } = loadClient({ primitives: { Tooltip: 'Tooltip', Toast: () => null } });
+    const { CoordinateAction, StartCoordinating, canCoordinate, startState, projectFacts, commandSaid } = client.internals;
+    const state = { byId: { p: { id: 'p', title: 'Pricing', cwd: '/w' }, n: { id: 'n', cwd: '/w', blank: true } }, projectionsBySession: {} };
+    let off = true;
+    const calls = [];
+    // The plugin's endpoints as OffRemote answers them, then as the running plugin does.
+    const link = {
+        async call(method) {
+            calls.push(method);
+            await null;
+            return method === 'sessions' ? { ok: true, value: off ? { sessions: {}, off: true } : { sessions: {} } } : { ok: false, error: { code: 'coordinator/refused', message: 'off' } };
+        },
+    };
+    const projects = { facts: projectFacts(link), said: commandSaid(), refresh() {} };
+    const header = mount(react, () => CoordinateAction({ sessionId: 'p', useSessions: (select) => select(state), projects }));
+    const start = mount(react, () => StartCoordinating({
+        sessionId: 'n', useSession: (select) => select(state.byId.n), useSessions: (select) => select(state), useConversation: (select) => select({ activeTargets: new Set() }), projects,
+    }));
+    // What both views' effect does once the window is up: ask the plugin which sessions it knows.
+    await projects.facts.sessions();
+    await projects.facts.sessions();
+    assert.deepEqual(calls, ['sessions'], 'the window asks the plugin once which sessions it knows');
+    assert.equal(canCoordinate(state, 'p'), false);
+    assert.equal(startState(state, 'n'), undefined);
+    assert.equal(header(), null, 'no Coordinate in the header');
+    assert.equal(start(), null, 'no Coordinate switch on the new-chat screen');
+    // Switched on again: the next window that asks offers it.
+    off = false;
+    const again = projectFacts(link);
+    await again.sessions();
+    assert.equal(canCoordinate(state, 'p'), true);
+    assert.equal(startState(state, 'n'), 'off');
+});
+
+test('browser half: the plugin\'s page names each setting to fix, where to fix it, and says when the plugin is switched off', () => {
+    const { client } = loadClient();
+    const { SettingProblems } = client.internals;
+    assert.equal(SettingProblems({ problems: [] }), null, 'nothing to fix: nothing shown');
+    assert.equal(SettingProblems({}), null);
+    const one = SettingProblems({ problems: ['maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.'] });
+    assert.equal(one.props['aria-labelledby'], 'dshp-problems-title');
+    assert.deepEqual(elementsOf(one).filter((e) => e.type === 'h4' || e.type === 'p' || e.type === 'li').map(textIn), [
+        'A setting to fix',
+        'In your profile\'s cordis.patch.yml, in the row "- id: coordinator". The plugin keeps running meanwhile, as each line says.',
+        'maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.',
+    ]);
+    assert.equal(elementsOf(SettingProblems({ problems: ['a', 'b'] })).find((e) => e.type === 'h4').children.join(''), '2 settings to fix');
+    const off = SettingProblems({ problems: [], off: true });
+    assert.equal(off.props['data-projects-off'], '');
+    assert.deepEqual(elementsOf(off).filter((e) => e.type === 'h4' || e.type === 'p' || e.type === 'ul').map(textIn), [
+        'Switched off',
+        'Its row in your profile\'s cordis.patch.yml ("- id: coordinator") says enabled: false, so no chat coordinates and no chat is offered the thread tools. Set it to true, or take the line out, to coordinate again.',
+    ]);
+    assert.equal(elementsOf(SettingProblems({ problems: ['x'], off: true })).filter((e) => e.type === 'li').length, 1, 'switched off, a setting to fix is still listed');
+});
+
 test('browser half: on DSH\'s new-chat screen Coordinate sits in the composer\'s row, and what /coordinate typed there said shows as a banner', async () => {
     const Toast = () => null;
     const { client, react } = loadClient({ primitives: { Tooltip: 'Tooltip', Toast } });
