@@ -137,6 +137,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-sb-head[aria-expanded=true] .dshc-sb-chev{transform:rotate(90deg)}',
             '.dshc-sb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
             '.dshc-sb-dot{flex:none;display:inline-flex;align-items:center}',
+            // The same dot on a folded workspace's own row, in the plugin's seat before DSH's row actions (markWorkspaceDots).
+            '.dshc-ws-dot{flex:none;display:inline-flex;align-items:center}',
             '.dshc-sb-count{flex:none;min-width:16px;font-size:12px;font-weight:400;text-align:right;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
             // A header's ⋯ takes the count's place while the header is pointed at, focused or its menu is open, as DSH's rows show theirs.
             '.dshc-sb-more{flex:none;display:none;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-2px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
@@ -1055,6 +1057,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const SB_DEPTH = 'data-categories-depth';
         /** A workspace's row, which DSH draws as its section's grandchild. */
         const WS_ROW = '[data-row-key^="workspace:"]';
+        /** The plugin's seat for a folded workspace's dot, in that workspace's row (markWorkspaceDots). */
+        const WS_DOT = 'data-categories-ws-dot';
 
         const SIDEBAR = {
             others: 'Other workspaces',
@@ -1083,6 +1087,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             deleteText: (name, n) => `This deletes “${name}”. ${n === 0 ? 'It holds no workspaces.' : n === 1 ? 'Its workspace moves to Other workspaces.' : `Its ${n} workspaces move to Other workspaces.`} No chats or folders are deleted.`,
             deleting: 'Deleting…',
             in: (name) => `in ${name}`,
+            /** A folded workspace's dot in words, read after its row's name (markWorkspaceDots). */
+            dot: (dot) => (dot === 'warning' ? ', a chat is waiting on you' : ', a chat is running'),
             filed: (ws, category) => `${ws} moved to ${category}.`,
             added: (ws, group) => `${ws} added to ${group}.`,
             moved: (name) => `${name} moved.`,
@@ -1158,18 +1164,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return rules.join('\n');
         }
 
-        /** A folded category's dot: waiting on you if one of its chats is, else running if one runs. */
-        function groupDot(group, byId, statuses) {
+        /** A folded workspace's dot: waiting on you if one of its chats is, else running if one runs, else null. */
+        function workspaceDot(ws, statuses) {
             let dot = null;
-            for (const id of group.workspaces) {
-                for (const sessionId of byId.get(id)?.sessionIds ?? EMPTY) {
-                    const status = statuses?.get?.(sessionId);
-                    if (status?.pendingInteraction) return 'warning';
-                    if (status?.running === true) dot = 'ongoing';
-                }
+            for (const sessionId of ws?.sessionIds ?? EMPTY) {
+                const status = statuses?.get?.(sessionId);
+                if (status?.pendingInteraction) return 'warning';
+                if (status?.running === true) dot = 'ongoing';
             }
             return dot;
         }
+
+        /** A folded category's dot: its workspaces' dots taken together, waiting on you before running. */
+        function groupDot(group, byId, statuses) {
+            let dot = null;
+            for (const id of group.workspaces) {
+                const own = workspaceDot(byId.get(id), statuses);
+                if (own === 'warning') return 'warning';
+                dot ??= own;
+            }
+            return dot;
+        }
+
+        /** Two lists of seats (markWorkspaceDots) with the same workspaces, elements and dots in the same order. */
+        const sameSeats = (a, b) => a === b || (a.length === b.length && a.every((seat, i) => seat.id === b[i].id && seat.el === b[i].el && seat.dot === b[i].dot));
 
         /** The folded categories, kept in the window's storage so they stay folded after a restart. */
         const useFolded = () => useStoredSet(FOLDED_KEY);
@@ -1323,22 +1341,57 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
+         * A seat for each folded workspace's dot in its own row of DSH's list,
+         * which has none: the plugin's own element, before DSH's row actions
+         * (the part of the row that holds its buttons), or last. A workspace
+         * that is unfolded, or with nothing running or waiting, has no seat;
+         * DSH's Ungrouped bucket never has one. Only what differs changes;
+         * with no dots (null) every seat goes.
+         * @param dotOf - a workspace's dot by its id (workspaceDot), or null.
+         * @returns the seats in the list's order, each {id, el, dot}, for the dots to be drawn in.
+         */
+        function markWorkspaceDots(tree, dotOf) {
+            const seats = [];
+            for (const row of tree.querySelectorAll(WS_ROW)) {
+                const id = row.getAttribute('data-row-key').slice('workspace:'.length);
+                const dot = dotOf && id !== '' && row.getAttribute('aria-expanded') === 'false' ? dotOf(id) : null;
+                let seat = null;
+                for (const child of row.children) if (child.hasAttribute(WS_DOT)) seat = child;
+                if (dot === null) {
+                    seat?.remove();
+                    continue;
+                }
+                if (seat === null) {
+                    seat = row.ownerDocument.createElement('span');
+                    seat.className = 'dshc-ws-dot';
+                    seat.setAttribute(WS_DOT, '');
+                    row.insertBefore(seat, [...row.children].find((child) => child.querySelector('button') !== null) ?? null);
+                }
+                seats.push({ id, el: seat, dot });
+            }
+            return seats;
+        }
+
+        /**
          * Keep the plugin's parts of DSH's list in step with it: the headers'
-         * places, the marks its CSS goes by, and the workspaces' categories.
-         * DSH redraws rows on its own (a fold, Show more, a session moving
-         * up), so this runs again on every change to the list, before it is
-         * painted, and after every render here. Each pass changes only what
+         * places, the marks its CSS goes by, the workspaces' categories, and
+         * the folded workspaces' dots. DSH redraws rows on its own (a fold,
+         * Show more, a session moving up), so this runs again on every change
+         * to the list, a workspace folding or unfolding among them, before it
+         * is painted, and after every render here. Each pass changes only what
          * differs.
-         * @param read - a ref to {groups}: the latest categories to draw.
+         * @param read - a ref to {groups, dotOf, seated}: the latest categories to draw, a folded workspace's dot by its
+         *   id, and where the dots go (each pass's seats from markWorkspaceDots).
          */
         function useTreeSync(tree, read) {
             const pass = React.useRef(() => {});
             pass.current = () => {
                 if (!tree?.isConnected) return;
-                const groups = read.current.groups;
+                const { groups, dotOf, seated } = read.current;
                 if (groups) placeHeaders(tree, groups);
                 markList(tree, groups);
                 describeWorkspaces(tree, groups);
+                seated?.(markWorkspaceDots(tree, dotOf ?? null));
             };
             React.useLayoutEffect(() => {
                 if (!tree || typeof document === 'undefined') return undefined;
@@ -1350,11 +1403,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 };
                 run();
                 const observer = typeof MutationObserver === 'undefined' ? null : new MutationObserver(run);
-                observer?.observe(tree, { childList: true, subtree: true });
+                observer?.observe(tree, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-expanded'] });
                 return () => {
                     observer?.disconnect();
                     markList(tree, null);
                     describeWorkspaces(tree, null);
+                    markWorkspaceDots(tree, null);
+                    read.current.seated?.(EMPTY);
                 };
             }, [tree]);
             React.useLayoutEffect(() => { pass.current(); });
@@ -1830,7 +1885,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * before their sections, and CSS sets DSH's rows under them
          * (sidebarRules). DSH's rows, its order inside each category, its view
          * options and search are its own as before; In one list and search
-         * show no headers.
+         * show no headers. A folded workspace's row shows the dot a folded
+         * category shows, in a seat of the plugin's own (markWorkspaceDots),
+         * whether or not the categories have loaded.
          */
         function SidebarTree({ useWorkspaces = noWorkspaces, useSessionStatus = noStatuses, plugin }) {
             useFacts(plugin.facts);
@@ -1843,6 +1900,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [dialog, setDialog] = React.useState(null);
             const [toast, setToast] = React.useState(null);
             const [said, setSaid] = React.useState('');
+            // The folded workspaces' dots, each in its seat in the workspace's row (markWorkspaceDots).
+            const [seats, setSeats] = React.useState(EMPTY);
             const categories = plugin.facts.categories();
             const groups = React.useMemo(() => sidebarGroups(categories, items, dragging), [categories, items, dragging]);
             const css = React.useMemo(() => (groups === null ? '' : sidebarRules(groups, folded)), [groups, folded]);
@@ -1880,6 +1939,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const read = React.useRef(null);
             read.current = {
                 groups, folded, titleOf, refuse, dragging: setDragging,
+                dotOf: (id) => workspaceDot(byId.get(id), statuses),
+                seated: (next) => setSeats((prev) => (sameSeats(prev, next) ? prev : next)),
                 file: (ws, group, before) => { void actions.file(ws, group, before); },
                 moveCategory: (id, before) => { void actions.moveCategory(id, before); },
                 /**
@@ -1952,6 +2013,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     onMove: (by) => actions.move(group, by),
                     menu: { workspaces, actions, first: ids.indexOf(group.id) === 0, last: ids.indexOf(group.id) === ids.length - 1 },
                 })), tree) : null,
+                // A folded workspace's dot, as a folded category's, in its seat in the workspace's row; said in words
+                // there too, so a screen reader reads it with the row's name.
+                seats.map((seat) => ReactDOM.createPortal(h(React.Fragment, null,
+                    h('span', { 'aria-hidden': true }, h(ui.StateDot, { state: seat.dot })),
+                    h('span', { className: 'dshc-sr' }, SIDEBAR.dot(seat.dot))), seat.el, seat.id)),
                 // Moves made here, said to screen readers.
                 h('div', { className: 'dshc-sr', role: 'status', 'aria-live': 'polite', 'data-categories-sidebar-said': '' }, said),
                 // A change that didn't go through, in DSH's banner at the top of the window: anchored to the list,
@@ -2131,7 +2197,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP,
             hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
             pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, WorkspaceMenu, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
-            sidebarGroups, sidebarRules, groupDot, sectionWorkspace, sectionAt, placeHeaders, markList, describeWorkspaces, useTreeSync, useCategoryDrags,
+            sidebarGroups, sidebarRules, workspaceDot, groupDot, sameSeats, sectionWorkspace, sectionAt, placeHeaders, markList, describeWorkspaces, markWorkspaceDots, useTreeSync, useCategoryDrags,
             dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree,
             chipLine, categoryHolding, pageOpener, CategoryChip, useChipHost, windowApi,
         };

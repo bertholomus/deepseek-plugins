@@ -998,7 +998,7 @@ test('browser half: Find by name on the Categories page keeps each match where i
 
 test('browser half: DSH\'s session list is grouped by category, foldable, with Other workspaces last', () => {
     const { client } = loadClient();
-    const { sidebarGroups, sidebarRules, groupDot, OTHERS } = client.internals;
+    const { sidebarGroups, sidebarRules, groupDot, workspaceDot, OTHERS } = client.internals;
     const items = ['w2', 'w1', 'w4', 'w3', 'w5'].map((workspaceId) => ({ workspaceId, sessionIds: [] }));
     const categories = [
         { id: 'a', name: 'Alpha', workspaces: [{ id: 'w2' }, { id: 'gone' }] },
@@ -1056,6 +1056,13 @@ test('browser half: DSH\'s session list is grouped by category, foldable, with O
     assert.equal(groupDot(beta, byId, new Map()), null);
     assert.equal(groupDot(beta, byId, new Map([['s3', { running: true }]])), 'ongoing');
     assert.equal(groupDot(beta, byId, new Map([['s3', { running: true }], ['s2', { pendingInteraction: { kind: 'approval' } }]])), 'warning');
+    // A folded workspace's own dot reads the same chats, so a category's is its workspaces' dots taken together.
+    assert.equal(workspaceDot(byId.get('w4'), new Map([['s3', { running: true }]])), 'ongoing');
+    assert.equal(workspaceDot(byId.get('w1'), new Map([['s3', { running: true }]])), null);
+    assert.equal(workspaceDot(byId.get('w1'), new Map([['s1', { running: true }], ['s2', { pendingInteraction: { kind: 'question' } }]])), 'warning');
+    assert.equal(workspaceDot(byId.get('w1'), new Map([['s1', { running: false }]])), null);
+    assert.equal(workspaceDot(undefined, new Map([['s1', { running: true }]])), null);
+    assert.equal(workspaceDot(byId.get('w1'), undefined), null);
 
     // The headers sit in DSH's list just before their category's first section, an empty category's before the
     // next header, DSH's Ungrouped bucket last: the list reads in the order it is drawn. A second pass moves nothing.
@@ -1655,6 +1662,130 @@ test('browser half: the plugin marks DSH\'s list for its rules: the list, each s
     assert.equal(tree.hasAttribute('data-categories-list'), false);
     assert.deepEqual(marks(), tree.children.map(() => null));
     assert.deepEqual(depths(), [null, null, null]);
+});
+
+test('browser half: a folded workspace\'s row shows the dot a folded category shows, in a seat of the plugin\'s own, said in words', () => {
+    // DSH's elements with their tags: a row's buttons are found by theirs, and the seat is made by the row's document.
+    class Tagged extends FakeElement {
+        constructor(tag, attrs = {}, ...children) {
+            super(attrs, ...children);
+            this.tag = tag;
+            this.className = '';
+        }
+        get ownerDocument() { return { createElement: (tag) => new Tagged(tag) }; }
+        insertBefore(child, ref) {
+            child.remove();
+            child.parentElement = this;
+            this.children.splice(ref === null ? this.children.length : this.children.indexOf(ref), 0, child);
+            return child;
+        }
+        querySelector(selector) {
+            if (selector !== 'button') return super.querySelector(selector);
+            for (const child of this.children) {
+                const found = child.tag === 'button' ? child : child.querySelector('button');
+                if (found) return found;
+            }
+            return null;
+        }
+    }
+    // DSH's workspace row: its folder, its chevron, its name, then its actions (the ⋯ in its menu's box, and New
+    // session), in a section that wraps it as DSH's row animation does.
+    const row = (id, expanded) => new Tagged('div', { 'data-row-key': `workspace:${id}`, role: 'treeitem', 'aria-expanded': String(expanded) },
+        new Tagged('span'), new Tagged('span'), new Tagged('span', {}, new Tagged('span')),
+        new Tagged('span', {}, new Tagged('div', {}, new Tagged('button')), new Tagged('button')));
+    const section = (r) => new Tagged('div', {}, new Tagged('span', {}, r), new Tagged('div'));
+    const seatOf = (r) => r.children.find((child) => child.hasAttribute('data-categories-ws-dot')) ?? null;
+    const { client } = loadClient();
+    const { markWorkspaceDots, workspaceDot, sameSeats, SIDEBAR, CSS } = client.internals;
+    // Folded with a chat running; folded with a chat waiting on you; unfolded with a chat running (its chats show
+    // their own dots); folded with nothing running; DSH's Ungrouped bucket.
+    const w1 = row('w1', false);
+    const w2 = row('w2', false);
+    const w3 = row('w3', true);
+    const w4 = row('w4', false);
+    const strays = row('', false);
+    const tree = new Tagged('div', { role: 'tree' }, ...[w1, w2, w3, w4, strays].map(section));
+    const byId = new Map([['w1', { sessionIds: ['s1', 's2'] }], ['w2', { sessionIds: ['s3', 's4'] }], ['w3', { sessionIds: ['s5'] }], ['w4', { sessionIds: ['s6'] }]]);
+    let statuses = new Map([['s2', { running: true }], ['s3', { running: true }], ['s4', { pendingInteraction: { kind: 'approval' } }], ['s5', { running: true }], ['s6', { running: false }]]);
+    const dotOf = (id) => workspaceDot(byId.get(id), statuses);
+    const seats = markWorkspaceDots(tree, dotOf);
+    assert.deepEqual(plain(seats.map((seat) => [seat.id, seat.dot])), [['w1', 'ongoing'], ['w2', 'warning']]);
+    // The seat is the plugin's own element, before DSH's row actions; DSH's own parts stay as they were.
+    assert.equal(seats[0].el, seatOf(w1));
+    assert.equal(seatOf(w1).className, 'dshc-ws-dot');
+    assert.equal(w1.children.length, 5);
+    assert.equal(w1.children.indexOf(seatOf(w1)), 3);
+    assert.equal(w1.children[4].querySelector('button') !== null, true);
+    assert.deepEqual([w3, w4, strays].map(seatOf), [null, null, null]);
+    // A second pass changes nothing: the same seats, no new element.
+    const again = markWorkspaceDots(tree, dotOf);
+    assert.equal(sameSeats(seats, again), true);
+    assert.equal(w1.children.length, 5);
+    // A chat stops waiting: the same seat says running. Every chat done: the seat goes. Unfolded: it goes too.
+    statuses = new Map([['s3', { running: true }], ['s5', { running: true }]]);
+    const later = markWorkspaceDots(tree, dotOf);
+    assert.deepEqual(plain(later.map((seat) => [seat.id, seat.dot])), [['w2', 'ongoing']]);
+    assert.equal(later[0].el, seats[1].el);
+    assert.equal(sameSeats(seats, later), false);
+    assert.equal(seatOf(w1), null);
+    assert.equal(w1.children.length, 4);
+    w2.setAttribute('aria-expanded', 'true');
+    assert.deepEqual(plain(markWorkspaceDots(tree, dotOf)), []);
+    assert.equal(seatOf(w2), null);
+    // Folded again, the seat is back; with no dots (the plugin gone) every seat goes.
+    w2.setAttribute('aria-expanded', 'false');
+    w3.setAttribute('aria-expanded', 'false');
+    assert.deepEqual(plain(markWorkspaceDots(tree, dotOf).map((seat) => seat.id)), ['w2', 'w3']);
+    assert.deepEqual(plain(markWorkspaceDots(tree, null)), []);
+    assert.deepEqual([w1, w2, w3, w4, strays].map(seatOf), [null, null, null, null, null]);
+    // A row with no buttons of DSH's gets the seat last.
+    const bare = new Tagged('div', { 'data-row-key': 'workspace:w9', 'aria-expanded': 'false' }, new Tagged('span'), new Tagged('span'));
+    markWorkspaceDots(new Tagged('div', { role: 'tree' }, section(bare)), () => 'ongoing');
+    assert.equal(bare.children[2]?.getAttribute('data-categories-ws-dot'), '');
+    // Drawn as the folded category's dot is, and said in words with the row's name.
+    assert.match(CSS, /\.dshc-ws-dot\{flex:none;display:inline-flex;align-items:center\}/);
+    assert.equal(SIDEBAR.dot('ongoing'), ', a chat is running');
+    assert.equal(SIDEBAR.dot('warning'), ', a chat is waiting on you');
+
+    // In DSH's list: each pass seats the dots, and the list draws DSH's dot in each seat, with its words, whether or
+    // not the categories have loaded. The pass runs as React runs layout effects, after each draw.
+    tree.isConnected = true;
+    const live = loadClient({ document: { querySelector: () => tree, head: { id: 'head' } } });
+    const layout = [];
+    live.react.useLayoutEffect = (fn) => { layout.push(fn); };
+    let shown;
+    const items = [...byId].map(([workspaceId, ws]) => ({ workspaceId, title: workspaceId, ...ws }));
+    for (const categories of [() => null, () => [{ id: 'a', name: 'Alpha', workspaces: [{ id: 'w1' }] }]]) {
+        shown = new Map([['s1', { running: true }]]);
+        const props = { useWorkspaces: (select) => select({ items, archivedSessionIds: [], pinnedSessionIds: [] }), useSessionStatus: (select) => select(shown), plugin: { facts: factsOf(categories) } };
+        const draw = mount(live.react, () => live.client.internals.SidebarTree(props));
+        const drawn = () => {
+            const out = draw();
+            for (const fn of layout.splice(0)) fn();
+            return out;
+        };
+        const dots = (out) => elementsOf(out).filter((e) => e.type === 'StateDot').map((e) => e.props.state);
+        const words = (out) => elementsOf(out).filter((e) => e.props?.className === 'dshc-sr' && !('data-categories-sidebar-said' in e.props)).map(textIn);
+        drawn();
+        let out = drawn();
+        assert.deepEqual(plain(dots(out)), ['ongoing']);
+        assert.deepEqual(plain(words(out)), [', a chat is running']);
+        assert.notEqual(seatOf(w1), null);
+        // DSH's dot itself is hidden from screen readers; its words are not.
+        const hidden = elementsOf(out).find((e) => e.props?.['aria-hidden'] === true && elementsOf(e.children).some((c) => c.type === 'StateDot'));
+        assert.ok(hidden);
+        // A chat waiting on you in another folded workspace: two dots. All done: none, and no seat is left.
+        shown = new Map([['s1', { running: true }], ['s4', { pendingInteraction: { kind: 'approval' } }]]);
+        drawn();
+        out = drawn();
+        assert.deepEqual(plain(dots(out)), ['ongoing', 'warning']);
+        assert.deepEqual(plain(words(out)), [', a chat is running', ', a chat is waiting on you']);
+        shown = new Map();
+        drawn();
+        out = drawn();
+        assert.deepEqual(plain(dots(out)), []);
+        assert.deepEqual([w1, w2, w3, w4].map(seatOf), [null, null, null, null]);
+    }
 });
 
 test('browser half: the chip marks DSH\'s header actions while it is among them, for the CSS that lets it give way first', () => {
