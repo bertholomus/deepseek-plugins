@@ -384,8 +384,8 @@ What it still misses, by the dev set and the probe sets:
   "How do I restart a quartz node without losing data?".
 - Everyday coding requests that say a note's title in other senses: "ts
   permission bit flags as an enum" and lantern-web's feature flags note;
-  "postgres: total of entries per account per month" and the decision that
-  the ledger stays on Postgres; "tanstack query invalidate the account
+  "postgres: total of entries per account per month" in tide-ledger's
+  folder and three of its notes; "tanstack query invalidate the account
   cache after the save mutation instead of reloading the page" in
   lantern-web's folder and the on-call note.
 
