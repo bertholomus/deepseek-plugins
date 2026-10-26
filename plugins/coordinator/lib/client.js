@@ -77,6 +77,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         // label colour takes them past 5:1 in light and further from the background in dark.
         const ERROR_TEXT = 'color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))';
         const LINK_TEXT = 'color-mix(in srgb,var(--dsw-alias-link,var(--dsw-alias-state-business-primary)) 85%,var(--dsw-alias-label-primary))';
+        /** Every view the plugin draws, by its root: what the motion rules reach (with what DSH draws inside them). */
+        const MOTION_ROOTS = ':is(.dshp-t-hdr,.dshp-t-menu,.dshp-mp,.dshp-mp-menu,.dshp-pp,.dshp-ps,.dshp-page,.dshp-t-pane,.dshp-t-cards,.dshp-t-card,.dshp-nt,.dshp-dock,.dshp-start,.dshp-ch,.dshp-t-chat,.dshp-t-hover,.dshp-t-mark,.dshp-t-tab,.dshp-rn,.dshp-problems)';
         const CSS = [
             // Keyboard focus: DSH's ring on every plugin control. DSH's own buttons (Open, Retry, Save…) get its outline;
             // the plugin's own controls draw it inset below, so a scrolling list can't clip it.
@@ -163,11 +165,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-heading-next{margin-top:20px}',
             // Threads: header menu
             '.dshp-t-hdr{position:relative;display:inline-flex;align-items:center;gap:2px;min-width:0}',
-            // In a chat with a Threads menu, the title crumb may use more of the header than DSH's 220 px; it still
-            // gives way first when the header is narrow. Found by DSH's markup (the title is a span in the hierarchy
-            // nav's last part, the nav right before the header actions that hold the Threads menu), not by its
-            // generated class names.
-            'nav[aria-label]:has(+div [data-projects-threads])>span:last-child>span{max-width:min(560px,40vw)}',
             '.dshp-t-trigger{display:inline-flex;align-items:center;gap:5px;min-width:0;min-height:28px;padding:3px 6px;border:0;border-radius:var(--dsw-radius-sm);background:none;font:inherit;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap;cursor:pointer}',
             '.dshp-t-trigger:hover,.dshp-t-trigger:focus-visible,.dshp-t-trigger[aria-expanded=true]{color:var(--dsw-alias-label-primary)}',
             `.dshp-t-trigger:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover);box-shadow:inset 0 0 0 2px ${RING}}`,
@@ -516,15 +513,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-ps-reach>span:last-child{min-width:0}',
             // A place DSH's own drag may not drop a session (useSessionDragGuard): no line there.
             '[data-projects-refused] [data-row-key^="session:"]::before,[data-projects-refused] [data-row-key^="session:"]::after{display:none!important}',
+            // Motion stops while Wallpaper's motion switch is off (body.wp-still) or the system asks for less motion:
+            // the plugin's own transitions and spinner, and DSH's parts drawn inside its views, pseudo-elements too.
+            `body.wp-still ${MOTION_ROOTS},body.wp-still ${MOTION_ROOTS}::before,body.wp-still ${MOTION_ROOTS}::after,body.wp-still ${MOTION_ROOTS} *,body.wp-still ${MOTION_ROOTS} *::before,body.wp-still ${MOTION_ROOTS} *::after{animation:none!important;transition:none!important}`,
+            `@media (prefers-reduced-motion:reduce){${MOTION_ROOTS},${MOTION_ROOTS}::before,${MOTION_ROOTS}::after,${MOTION_ROOTS} *,${MOTION_ROOTS} *::before,${MOTION_ROOTS} *::after{animation:none!important;transition:none!important}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
-        if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
-            const tag = document.createElement('style');
-            tag.dataset.plugin = BUNDLE;
-            tag.dataset.pluginCss = CSS_ID;
-            tag.textContent = CSS;
-            document.head.appendChild(tag);
+        /** The plugin's one style sheet in <head>, added once; never a throw, which would stop other plugins loading. */
+        function mountStyle() {
+            try {
+                if (typeof document === 'undefined' || document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) !== null) return;
+                const tag = document.createElement('style');
+                tag.dataset.plugin = BUNDLE;
+                tag.dataset.pluginCss = CSS_ID;
+                tag.textContent = CSS;
+                document.head.appendChild(tag);
+            } catch {}
         }
+        /** Take the style sheet away again: switched off, the plugin leaves no rule behind. */
+        function unmountStyle() {
+            try {
+                if (typeof document !== 'undefined') document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`)?.remove?.();
+            } catch {}
+        }
+        mountStyle();
 
         // ── Default models form ────────────────────────────────────────────
 
@@ -1252,25 +1264,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** DSH's Review tab for one turn's changes (dsh-client-ui-deliverables): `<session>/<seq>/<turn>`. */
         const REVIEW_PREFIX = 'dsh-resource://changes-review/session/';
         const IDS = {
-            menu: `${BUNDLE}/threads-menu`,
-            cards: `${BUNDLE}/thread-cards`,
-            mark: `${BUNDLE}/thread-mark`,
-            hover: `${BUNDLE}/thread-hover`,
-            chat: `${BUNDLE}/thread-chat`,
-            pane: `${BUNDLE}/threads-pane`,
-            link: `${BUNDLE}/thread-link`,
-            changes: `${BUNDLE}/thread-changes`,
-            settings: `${BUNDLE}/project-settings`,
-            settingsItem: `${BUNDLE}/project-settings-item`,
-            rename: `${BUNDLE}/rename`,
-            fullItem: `${BUNDLE}/full-view-item`,
-            paused: `${BUNDLE}/paused-bar`,
-            ending: `${BUNDLE}/ending-bar`,
-            place: `${BUNDLE}/row-place`,
-            sessionList: `${BUNDLE}/session-list`,
-            news: `${BUNDLE}/news-notice`,
-            coordinate: `${BUNDLE}/coordinate`,
-            start: `${BUNDLE}/start-coordinating`,
+            menu: `${BUNDLE}:threads-menu`,
+            cards: `${BUNDLE}:thread-cards`,
+            mark: `${BUNDLE}:thread-mark`,
+            hover: `${BUNDLE}:thread-hover`,
+            chat: `${BUNDLE}:thread-chat`,
+            pane: `${BUNDLE}:threads-pane`,
+            link: `${BUNDLE}:thread-link`,
+            changes: `${BUNDLE}:thread-changes`,
+            settings: `${BUNDLE}:project-settings`,
+            settingsItem: `${BUNDLE}:project-settings-item`,
+            rename: `${BUNDLE}:rename`,
+            fullItem: `${BUNDLE}:full-view-item`,
+            paused: `${BUNDLE}:paused-bar`,
+            ending: `${BUNDLE}:ending-bar`,
+            place: `${BUNDLE}:row-place`,
+            sessionList: `${BUNDLE}:session-list`,
+            news: `${BUNDLE}:news-notice`,
+            coordinate: `${BUNDLE}:coordinate`,
+            start: `${BUNDLE}:start-coordinating`,
         };
         /** The conversation inside a thread's sidebar chat; its tab body declares it. */
         const CONVERSATION_SLOT = 'projects.thread.conversation';
@@ -6296,6 +6308,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const inject = ['slots'];
 
         function apply(ctx) {
+            // The style sheet goes with the plugin: back when it is switched on again, gone when it is off.
+            ctx.effect(() => {
+                mountStyle();
+                return unmountStyle;
+            }, 'coordinator: style sheet');
             const dialog = settingsDialog();
             const renames = renameFlow();
             // DSH's services the parts share, once DSH provides them: one model catalog and one link to the plugin.

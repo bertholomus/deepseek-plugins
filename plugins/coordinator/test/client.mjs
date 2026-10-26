@@ -259,39 +259,39 @@ test('browser half: threads add a header menu and Coordinate (in the composer\'s
     };
     client.apply(ctx);
     assert.deepEqual(registered.map((r) => [r.name, r.id ?? r.key ?? null, r.order ?? null]), [
-        ['shell.overlay', 'dsh-plugin-coordinator/project-settings', null],
-        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/project-settings-item', 250],
-        ['shell.overlay', 'dsh-plugin-coordinator/rename', null],
-        ['conversation.session.header.actions', 'dsh-plugin-coordinator/threads-menu', -25],
-        ['conversation.session.header.actions', 'dsh-plugin-coordinator/coordinate', -24],
-        ['conversation.input.left', 'dsh-plugin-coordinator/start-coordinating', 30],
-        ['conversation.chat.turnTail', 'dsh-plugin-coordinator/thread-cards', 30],
+        ['shell.overlay', 'dsh-plugin-coordinator:project-settings', null],
+        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator:project-settings-item', 250],
+        ['shell.overlay', 'dsh-plugin-coordinator:rename', null],
+        ['conversation.session.header.actions', 'dsh-plugin-coordinator:threads-menu', -25],
+        ['conversation.session.header.actions', 'dsh-plugin-coordinator:coordinate', -24],
+        ['conversation.input.left', 'dsh-plugin-coordinator:start-coordinating', 30],
+        ['conversation.chat.turnTail', 'dsh-plugin-coordinator:thread-cards', 30],
         ['conversation.chat.node', 'turn-trigger', null],
-        ['sidebar.session.row.leading', 'dsh-plugin-coordinator/thread-mark', 20],
-        ['sidebar.workspaces.session.row.action', 'dsh-plugin-coordinator/row-place', 900],
-        ['conversation.input.dock', 'dsh-plugin-coordinator/paused-bar', 15],
-        ['conversation.input.dock', 'dsh-plugin-coordinator/ending-bar', 16],
-        ['sidebar.session.row.hover', 'dsh-plugin-coordinator/thread-hover', 20],
-        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator/full-view-item', 50],
-        ['shell.overlay', 'dsh-plugin-coordinator/news-notice', null],
-        ['shell.overlay', 'dsh-plugin-coordinator/session-list', null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-chat', null],
-        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator/thread-chat', null],
+        ['sidebar.session.row.leading', 'dsh-plugin-coordinator:thread-mark', 20],
+        ['sidebar.workspaces.session.row.action', 'dsh-plugin-coordinator:row-place', 900],
+        ['conversation.input.dock', 'dsh-plugin-coordinator:paused-bar', 15],
+        ['conversation.input.dock', 'dsh-plugin-coordinator:ending-bar', 16],
+        ['sidebar.session.row.hover', 'dsh-plugin-coordinator:thread-hover', 20],
+        ['sidebar.workspaces.session.menu.item', 'dsh-plugin-coordinator:full-view-item', 50],
+        ['shell.overlay', 'dsh-plugin-coordinator:news-notice', null],
+        ['shell.overlay', 'dsh-plugin-coordinator:session-list', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:thread-chat', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator:thread-chat', null],
         ['projects.thread.conversation', null, null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/threads-pane', null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-link', null],
-        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator/thread-changes', null],
-        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator/thread-changes', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:threads-pane', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:thread-link', null],
+        ['sidebar.right.pane.tab', 'dsh-plugin-coordinator:thread-changes', null],
+        ['sidebar.right.pane.tab.title', 'dsh-plugin-coordinator:thread-changes', null],
     ]);
     // The thread chat tab hosts the conversation slot it renders.
-    const chatTab = registered.find((r) => r.name === 'sidebar.right.pane.tab' && r.key === 'dsh-plugin-coordinator/thread-chat');
+    const chatTab = registered.find((r) => r.name === 'sidebar.right.pane.tab' && r.key === 'dsh-plugin-coordinator:thread-chat');
     assert.deepEqual(plain(chatTab.children), { 'projects.thread.conversation': { kind: 'single', scope: 'session' } });
     assert.deepEqual(protocols, ['projectthread']);
     assert.deepEqual(types.map((t) => [t.id, t.kind, t.patterns ? [...t.patterns] : null]), [
-        ['dsh-plugin-coordinator/thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
-        ['dsh-plugin-coordinator/threads-pane', 'projectthreads', null],
-        ['dsh-plugin-coordinator/thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*']],
-        ['dsh-plugin-coordinator/thread-changes', 'projectchanges', ['dsh-resource://projectchanges/session/**']],
+        ['dsh-plugin-coordinator:thread-chat', 'projectthread', ['dsh-resource://projectthread/session/**']],
+        ['dsh-plugin-coordinator:threads-pane', 'projectthreads', null],
+        ['dsh-plugin-coordinator:thread-link', 'projectthreadlink', ['dsh-resource://file/session/**/.dsh-thread/*', 'dsh-resource://file/session/*/.t*']],
+        ['dsh-plugin-coordinator:thread-changes', 'projectchanges', ['dsh-resource://projectchanges/session/**']],
     ]);
     const [chat, pane, link, changes] = types;
     assert.equal(chat.canOpen('dsh-resource://projectthread/session/s%2F1'), true);
@@ -1908,7 +1908,7 @@ test('browser half: a thread opens beside its coordinator, and in full view wher
         sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator/threads-menu').inject();
+    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator:threads-menu').inject();
     // A thread from a card or a row: the chat that started it as the main chat, the thread beside it.
     projects.openThread('t');
     assert.deepEqual(opened, ['c']);
@@ -1967,7 +1967,7 @@ test('browser half: a thread opened beside its coordinator, or from the Threads 
         },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator/threads-menu').inject();
+    const { projects } = registered.find((r) => r.id === 'dsh-plugin-coordinator:threads-menu').inject();
     // The first thread gets a tab; opened again, DSH brings that tab to the front.
     projects.openThread('t1');
     tabs = [{ id: 'a', kind: 'projectthread', contentId: address('t1') }];
@@ -2030,7 +2030,7 @@ test('browser half: with "Open threads beside their coordinator" off, a thread o
         sidebarRight: { mounted: { getSnapshot: () => 'c' }, openResource: (address, options) => beside.push([decodeURIComponent(address.split('/').pop()), options.kind]) },
     };
     client.apply(ctx);
-    const { projects } = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator/threads-menu').slot.inject();
+    const { projects } = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator:threads-menu').slot.inject();
     // A thread from a row or a card's name opens as the main chat, as before the setting.
     projects.openThread('t');
     assert.deepEqual([opened, beside], [['t'], []]);
@@ -2046,7 +2046,7 @@ test('browser half: with "Open threads beside their coordinator" off, a thread o
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual([opened, holds, beside], [[], [], []]);
     // A thread's menu in the session list offers to pair it, even while it is the main chat.
-    const item = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator/full-view-item');
+    const item = registered.find((r) => r.slot.id === 'dsh-plugin-coordinator:full-view-item');
     const menuItem = () => item.component({ sessionId: 't', useMenuOpenState: () => [true, () => {}], useSessions: (select) => select(snapshot), ...item.slot.inject() });
     let shown = menuItem();
     assert.deepEqual(shown.children, ['Open beside its coordinator']);
@@ -2653,4 +2653,52 @@ test('browser half: a thread\'s Changes tab lists its files with their diffs, an
     card = CardChanges({ changes: counts, ...changesOpener(noTab, 's-t1', counts) });
     assert.equal(card.props['data-projects-changes'], 'gone');
     assert.deepEqual(plain(changesOpener(withTab, undefined, counts)), {}, 'a card whose thread has no session opens nothing');
+});
+
+test('browser half: its one style sheet goes with the plugin, its motion stops under wp-still and reduced motion, and no rule finds DSH\'s header by :has()', () => {
+    const tags = [];
+    const document = {
+        addEventListener: () => {}, removeEventListener: () => {},
+        querySelector: (selector) => tags.find((tag) => selector === `style[data-plugin-css=${JSON.stringify(tag.dataset.pluginCss)}]`) ?? null,
+        createElement: () => {
+            const tag = { dataset: {}, remove: () => { tags.splice(tags.indexOf(tag), 1); } };
+            return tag;
+        },
+        head: { appendChild: (tag) => { tags.push(tag); } },
+    };
+    const { client } = loadClient({ document });
+    // Added once when DSH loads the window half, as the plugin's own sheet.
+    assert.equal(tags.length, 1);
+    assert.deepEqual(plain(tags[0].dataset), { plugin: 'dsh-plugin-coordinator', pluginCss: 'dsh-plugin-coordinator/client.css' });
+    const css = tags[0].textContent;
+    // Switched off (its context disposed), the sheet goes; on again, it comes back once.
+    const disposers = [];
+    const ctx = { effect: (fn) => { const undo = fn(); if (typeof undo === 'function') disposers.push(undo); }, inject: () => {}, slots: { inject: () => {}, register: () => () => {} } };
+    client.apply(ctx);
+    assert.equal(tags.length, 1, 'applying adds no second sheet');
+    for (const undo of disposers.splice(0)) undo();
+    assert.equal(tags.length, 0, 'switched off, no rule is left');
+    client.apply(ctx);
+    client.apply(ctx);
+    assert.equal(tags.length, 1, 'on again: one sheet');
+    // Motion: every transition and animation the plugin draws stops under body.wp-still and prefers-reduced-motion,
+    // with what DSH draws inside its views, pseudo-elements too.
+    const moving = [...css.matchAll(/([^{}]+)\{[^}]*\b(?:animation|transition):(?!none)[^}]*\}/g)].map((m) => m[1].trim()).filter((s) => !s.startsWith('@'));
+    assert.ok(moving.length >= 8, moving.join(' | '));
+    const still = /body\.wp-still :is\(([^)]*)\),body\.wp-still :is\([^)]*\)::before,body\.wp-still :is\([^)]*\)::after,body\.wp-still :is\([^)]*\) \*,body\.wp-still :is\([^)]*\) \*::before,body\.wp-still :is\([^)]*\) \*::after\{animation:none!important;transition:none!important\}/.exec(css);
+    assert.ok(still, 'a wp-still rule for the views and their pseudo-elements');
+    const roots = still[1].split(',');
+    assert.match(css, /@media \(prefers-reduced-motion:reduce\)\{:is\([^)]*\),:is\([^)]*\)::before,:is\([^)]*\)::after,:is\([^)]*\) \*,:is\([^)]*\) \*::before,:is\([^)]*\) \*::after\{animation:none!important;transition:none!important\}\}/);
+    // Each moving element is one of those views or sits in one: its rule names a root, or a class only drawn inside one.
+    const inside = { 'dshp-mp-chev': 'dshp-mp', 'dshp-t-chev': 'dshp-t-hdr', 'dshp-t-group': 'dshp-t-menu', 'dshp-ch-busy': 'dshp-ch', 'dshp-ch-chev': 'dshp-ch', 'dshp-nt': 'dshp-nt', 'dshp-t-card-meter': 'dshp-t-card', 'dshp-ps-more': 'dshp-ps' };
+    for (const selector of moving) {
+        const cls = /\.(dshp-[\w-]+)/.exec(selector)?.[1];
+        assert.ok(cls && roots.includes(`.${inside[cls] ?? cls}`), `${selector} stops with its view (${cls})`);
+    }
+    // DSH's header is DSH's: no rule reaches its title crumb, and no :has() looks into DSH's elements.
+    assert.doesNotMatch(css, /nav\[aria-label\]/);
+    for (const rule of css.split('}')) {
+        const selector = rule.slice(0, rule.indexOf('{'));
+        if (selector.includes(':has(')) assert.ok(/^\.dshp-/.test(selector.trim()), `a :has() only inside the plugin's own views: ${selector}`);
+    }
 });
