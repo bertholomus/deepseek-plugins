@@ -167,8 +167,9 @@ test('idle with an active goal that stopped: the goal starts again, proven by th
     assert.equal(goalTurns(), 3, 'Autopilot started it again');
     const [rearm] = entries(journal, 'rearm');
     assert.equal(rearm.state, 'started');
-    assert.equal(rearm.reason, 'round 3 began');
-    assert.match(rearm.why, /^Its goal “Ship the parser” is active but stopped/);
+    assert.equal(rearm.reason, 'round 3 of 20 began');
+    assert.match(rearm.why, /^Its goal “Ship the parser” is active but stopped \(a DSH restart or an error stops a goal\), and it has been idle for 10 minutes\. This start begins round 3 of 20\.$/);
+    assert.deepEqual(rearm.goal, { id: 'goal-g', rev: 2, round: 3, max: 20 }, 'proven by a round of the revision this start wrote');
     assert.equal(notesIn(dsh, 'g').length, 0, 'a goal start, not a note');
     assert.equal(watch.goals, dsh.goals);
 });
@@ -201,14 +202,17 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     const [resume] = entries(after.journal, 'resume');
     assert.equal(resume.state, 'delivered');
     assert.match(resume.why, /^Turn 1 was cut off: DSH stopped before it finished \(a quit, a restart or a crash\)\. Its last step was at .+, and nobody has written in the session since\.$/);
-    // The goal waits for the carry-on turn to end, then goes on by itself.
-    const [rearm] = entries(after.journal, 'rearm');
-    assert.equal(rearm.state, 'waiting for a round');
-    assert.equal(after.pilot.data.notes.length, 2, 'the goal start after the note counts toward the hour too, as the setting says');
+    // The goal waits for the carry-on turn to end without an error (kept on disk), then goes on by itself.
+    assert.equal(entries(after.journal, 'rearm').length, 0, 'no goal start while the note\'s turn runs');
+    assert.equal(after.pilot.data.sessions.r.goalAfter.turn, 2);
     dsh.end('r', { kind: 'completed' }, { reply: 'Checked; the build had finished. Tests next.' });
     await settle();
-    assert.equal(after.journal.get(rearm.id).state, 'started');
-    assert.equal(after.journal.get(rearm.id).reason, 'round 1 began');
+    const [rearm] = entries(after.journal, 'rearm');
+    assert.equal(rearm.state, 'started');
+    assert.equal(rearm.reason, 'round 1 of 20 began');
+    assert.equal(rearm.why, 'Its goal was active when DSH stopped, and the turn after its carry-on note has ended, so its goal goes on: this start begins round 1 of 20.');
+    assert.equal(after.pilot.data.sessions.r.goalAfter, undefined);
+    assert.equal(after.pilot.data.notes.length, 2, 'the goal start after the note counts toward the hour too, as the setting says');
     // The same cut is never handled twice, even by another restart.
     after.pilot.stop();
     dsh.end('r', { kind: 'completed' }, { reply: 'Tests pass.' });
@@ -332,6 +336,89 @@ test('Ask first across stops: an open question is set aside in the log when Auto
     second.pilot.stop();
 });
 
+test('after a crash or a forced quit: what the killed run left open is settled from the logs before the first look', async () => {
+    const dir = tempDir('autopilot');
+    const clock = manualClock();
+    // Notes wait in the queue until the test lets a session read them.
+    const dsh = fakeDsh({ now: clock.now, autoRead: false });
+    const first = setup({ dir, clock, dsh, config: { defaultRule: 'ask' } });
+    for (const id of ['n', 'm', 'g1', 'g2']) first.pilot.setRule(id, 'auto');
+    idleWithTodos(dsh, 'q', { title: 'Parser' });
+    idleWithTodos(dsh, 'n', { title: 'Queued' });
+    idleWithTodos(dsh, 'm', { title: 'Read unseen' });
+    for (const id of ['g1', 'g2']) {
+        dsh.add(id, { title: `Goal ${id}` });
+        dsh.write(id, 'Go');
+        dsh.setGoal(id, `Ship ${id}`, { armed: false });
+        dsh.end(id, { kind: 'completed' }, { reply: 'Stopped.' });
+    }
+    // DSH takes a goal start, but is killed before its driver begins the round.
+    const resume = dsh.goals.resume;
+    dsh.goals.resume = (agent) => {
+        const g = dsh.sessions.get(agent.id).goal;
+        g.activation = 'armed';
+        g.revision += 1;
+        dsh.commit(agent.id, 'goal/change', { operation: 'resume', goal: { id: g.id, revision: g.revision, objective: g.objective, phase: 'active', maxGoalRounds: g.maxGoalRounds }, roundsStarted: g.roundsStarted });
+    };
+    await clock.advance(10 * MIN);
+    const askedAt = first.watch.asks().find((ask) => ask.sessionId === 'q').at;
+    assert.equal(first.notified.length, 1);
+    const open = Object.fromEntries(entries(first.journal).filter((e) => e.kind !== 'rule').map((e) => [e.sessionId, e.state]));
+    assert.deepEqual(open, { q: 'asked you', n: 'in the queue', m: 'in the queue', g1: 'waiting for a round', g2: 'waiting for a round' });
+    // Two things happen that the run never hears of: m reads its note, and g1's round begins.
+    const msg = dsh.agents.get('m').inbox.shift();
+    dsh.commit('m', 'turn/start', { turn: 2 }, { quiet: true });
+    dsh.commit('m', 'user/message', msg, { quiet: true });
+    const g1 = dsh.sessions.get('g1').goal;
+    g1.roundsStarted += 1;
+    dsh.commit('g1', 'turn/start', { turn: 2 }, { quiet: true });
+    dsh.commit('g1', 'user/message', dsh.message('Continue working toward the goal (round 1).', { kind: 'goal', goalId: g1.id, revision: g1.revision, round: 1 }), { quiet: true });
+    // DSH's timer saves both sessions' values with their turns open.
+    dsh.save('m');
+    dsh.save('g1');
+    // The kill: no stop handlers run, every timer of the run is gone, open turns stay open in the logs.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    for (const timer of clock.pending()) clock.clearTimer(timer);
+    dsh.stop({ crash: true });
+    dsh.goals.resume = resume;
+    await clock.advance(2 * MIN);
+    const second = setup({ dir, clock, dsh, config: { defaultRule: 'ask' } });
+    await settle();
+    const byId = (id) => entries(second.journal).find((e) => e.sessionId === id && e.kind !== 'rule');
+    // Before the first look: the question is set aside to be reused, each note and start checked against its log.
+    assert.equal(byId('q').state, 'withdrawn');
+    assert.equal(byId('q').stopped, true);
+    assert.equal(byId('q').reason, 'withdrawn: DSH stopped before it was answered (a crash or a forced quit); it asks again when it runs, if this still applies');
+    assert.equal(byId('n').state, 'not delivered');
+    assert.equal(byId('n').reason, 'DSH stopped before the session read it (a crash or a forced quit)');
+    assert.equal(byId('m').state, 'delivered');
+    assert.equal(byId('m').turn, 2);
+    assert.equal(byId('g1').state, 'started');
+    assert.equal(byId('g1').reason, 'round 1 of 20 began');
+    assert.equal(byId('g2').state, 'not started');
+    assert.equal(byId('g2').reason, 'DSH stopped before a round began (a crash or a forced quit)');
+    for (const id of ['q', 'n', 'm', 'g1', 'g2']) assert.equal(byId(id).settledAt, clock.now(), id);
+    // The first look: the question comes back under its entry and first time, without a second notification;
+    // the note that never arrived and the goal that never started get their turn; nothing is done twice.
+    await clock.advance(MIN);
+    const back = second.watch.asks();
+    assert.deepEqual(back.map((ask) => ask.sessionId), ['q']);
+    assert.equal(back[0].at, askedAt);
+    assert.equal(entries(second.journal, 'ask').length, 1);
+    assert.equal(entries(second.journal, 'ask')[0].state, 'asked you');
+    assert.equal(second.notified.length, 0);
+    assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'n').length, 2, 'n gets its note again');
+    assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'm').length, 1, 'm read its note: not again');
+    const starts = entries(second.journal, 'rearm').filter((e) => e.sessionId === 'g2');
+    assert.equal(starts.length, 2);
+    assert.equal(starts[0].state, 'started');
+    assert.equal(starts[0].reason, 'round 1 of 20 began');
+    assert.equal(entries(second.journal, 'rearm').filter((e) => e.sessionId === 'g1').length, 1, 'g1\'s round began: not started twice');
+    // m's and g1's turns were cut off by the kill: each gets one carry-on note.
+    assert.equal(entries(second.journal, 'resume').map((e) => e.sessionId).sort().join(), 'g1,m');
+    second.pilot.stop();
+});
+
 test('after a restart: sessions cut off too long ago, ones someone wrote in since, and Off sessions are left alone', async () => {
     const dir = tempDir('autopilot');
     const clock = manualClock();
@@ -367,36 +454,138 @@ test('a reload under a running turn (DSH still up): the cut-off session gets its
 
 // ── A failed turn ─────────────────────────────────────────────────────
 
-test('a failed turn that stopped a goal: Autopilot starts it again after growing waits, then gives up and says so', async () => {
-    const { dsh, clock, journal, notified, pilot } = setup();
+test('a failed turn that stopped a goal: a carry-on note goes first and spends no goal round; the goal starts again once a turn ends without an error', async () => {
+    const { dsh, clock, journal, pilot } = setup();
     dsh.add('e', { title: 'Flaky provider' });
-    dsh.setGoal('e', 'Finish the migration');
+    dsh.setGoal('e', 'Finish the migration', { max: 4 });
+    dsh.write('e', 'Go');
+    const rounds = () => dsh.sessions.get('e').goal.roundsStarted;
+    dsh.end('e', { kind: 'error', error: { code: 'provider', message: '502 from the gateway' } });
+    await clock.advance(119000);
+    assert.equal(entries(journal, 'error').length, 0);
+    await clock.advance(1000);
+    const [note] = entries(journal, 'error');
+    assert.equal(note.state, 'delivered', 'the first try, 2 minutes after the error, is a note');
+    assert.equal(note.why, 'Turn 1 failed (502 from the gateway), which stops a goal; the goal “Finish the migration” is still active. A note costs no goal round, so it goes first; the goal starts again (round 1 of 4) once a turn ends without an error.');
+    assert.match(notesIn(dsh, 'e')[0], /^\[Autopilot\] Your last turn \(turn 1\) failed: 502 from the gateway\./);
+    assert.equal(rounds(), 0, 'no goal round spent');
+    assert.equal(entries(journal, 'rearm').length, 0);
+    // The note's turn ends cleanly: the goal goes on, and its start begins the next round.
+    dsh.end('e', { kind: 'completed' }, { reply: 'Retried; the gateway answers again.' });
+    await settle();
+    const [rearm] = entries(journal, 'rearm');
+    assert.equal(rearm.state, 'started');
+    assert.equal(rearm.reason, 'round 1 of 4 began');
+    assert.equal(rearm.why, 'The turn after its carry-on note ended without an error, so its goal goes on: this start begins round 1 of 4.');
+    assert.equal(rearm.text, 'Started its goal again after an error');
+    assert.equal(rounds(), 1);
+    assert.equal(pilot.data.sessions.e.errorTries, 0);
+    assert.equal(pilot.data.notes.length, 2, 'the note and the goal start after it both count toward the hour');
+});
+
+test('an outage: each carry-on note fails too, so no goal round is spent; the waits grow, then Autopilot gives up at once, tagged gave up', async () => {
+    const { dsh, clock, journal, notified, pilot, watch, config } = setup();
+    dsh.add('e', { title: 'Flaky provider' });
+    dsh.setGoal('e', 'Finish the migration', { max: 4 });
     dsh.write('e', 'Go');
     const fail = () => dsh.end('e', { kind: 'error', error: { code: 'provider', message: '502 from the gateway' } });
     fail();
-    await clock.advance(119000);
-    assert.equal(entries(journal, 'rearm').length, 0);
-    await clock.advance(1000);
-    assert.equal(entries(journal, 'rearm').length, 1, 'first try after 2 minutes');
-    assert.match(entries(journal, 'rearm')[0].why, /^Turn 1 failed \(502 from the gateway\), which stops a goal/);
-    await settle();
+    await clock.advance(2 * MIN);
+    assert.equal(entries(journal, 'error').length, 1, 'first note after 2 minutes');
     fail();
-    await clock.advance(10 * MIN);
-    assert.equal(entries(journal, 'rearm').length, 2, 'second after 10 more');
+    await settle();
+    assert.equal(pilot.pending().e.trigger, 'error');
+    await clock.advance(10 * MIN - 1000);
+    assert.equal(entries(journal, 'error').length, 1);
+    await clock.advance(1000);
+    assert.equal(entries(journal, 'error').length, 2, 'second after 10 more');
     fail();
     await clock.advance(30 * MIN);
-    assert.equal(entries(journal, 'rearm').length, 3, 'third after 30 more');
+    assert.equal(entries(journal, 'error').length, 3, 'third after 30 more');
+    // The third note's turn fails: no fourth wait, the give-up comes at once.
     fail();
-    await clock.advance(60 * MIN);
-    assert.equal(entries(journal, 'rearm').length, 3);
+    await clock.advance(0);
     const [giveup] = entries(journal, 'giveup');
+    assert.equal(giveup.state, 'gave up');
     assert.equal(giveup.text, 'Stopped retrying after errors');
+    assert.equal(giveup.why, 'It failed again after 3 tries, so Autopilot stops retrying and leaves it to you.');
+    assert.equal(giveup.at, clock.now());
     assert.equal(notified.at(-1).title, 'Autopilot stopped retrying: Flaky provider');
+    assert.equal(dsh.sessions.get('e').goal.roundsStarted, 0, 'no goal round went to the outage');
+    assert.equal(entries(journal, 'rearm').length, 0);
     assert.ok(pilot.data.sessions.e.gaveUp);
-    // Try again from the page starts over.
+    const view = await pageState({ pilot, watch, journal, config });
+    const row = view.sessions.find((r) => r.sessionId === 'e');
+    assert.equal(row.word, 'gave up');
+    assert.equal(row.last.text, 'stopped retrying after errors');
+    assert.equal(row.next, undefined);
+    // Try again from the page starts over, with a note again (a person's own action).
     const result = await pilot.retry('e');
-    assert.equal(result.action, 'rearm');
+    assert.equal(result.action, 'note');
+    assert.equal(result.entry.by, 'you');
     assert.equal(pilot.data.sessions.e.gaveUp, undefined);
+});
+
+test('a goal start is proven only by a round of the revision it wrote: a turn that fails first leaves it not started, and a later start\'s round is not credited to it', async () => {
+    const { dsh, clock, journal } = setup();
+    dsh.add('g', { title: 'Goal' });
+    dsh.write('g', 'Go');
+    dsh.setGoal('g', 'Ship it', { armed: false, max: 4 });
+    dsh.end('g', { kind: 'completed' }, { reply: 'Stopped.' });
+    // DSH takes the start, but its driver has not begun the round when a turn of the person's starts and fails.
+    const resume = dsh.goals.resume;
+    dsh.goals.resume = (agent) => {
+        const g = dsh.sessions.get(agent.id).goal;
+        g.activation = 'armed';
+        g.revision += 1;
+        dsh.commit(agent.id, 'goal/change', { operation: 'resume', goal: { id: g.id, revision: g.revision, objective: g.objective, phase: 'active', maxGoalRounds: g.maxGoalRounds }, roundsStarted: g.roundsStarted });
+    };
+    await clock.advance(10 * MIN);
+    const [first] = entries(journal, 'rearm');
+    assert.equal(first.state, 'waiting for a round');
+    assert.deepEqual(first.goal, { id: 'goal-g', rev: 2, round: 1, max: 4 });
+    dsh.goals.resume = resume;
+    dsh.write('g', 'Use the other gateway.');
+    dsh.end('g', { kind: 'error', error: { message: '502 from the gateway' } });
+    await settle();
+    assert.equal(journal.get(first.id).state, 'not started');
+    assert.equal(journal.get(first.id).reason, 'the turn running in the session failed before a round began (an error stops a goal)');
+    // The next start writes revision 3 and begins round 1: credited to it alone.
+    dsh.write('g', 'Carry on.');
+    dsh.end('g', { kind: 'completed' }, { reply: 'Gateway fixed.' });
+    await clock.advance(10 * MIN);
+    const [second] = entries(journal, 'rearm');
+    assert.notEqual(second.id, first.id);
+    assert.equal(second.state, 'started');
+    assert.equal(second.reason, 'round 1 of 4 began');
+    assert.deepEqual(second.goal, { id: 'goal-g', rev: 3, round: 1, max: 4 });
+    assert.equal(journal.get(first.id).state, 'not started');
+});
+
+test('a goal that used all its rounds is never started again: the skip and the row say to raise its round limit', async () => {
+    const { dsh, clock, journal, pilot, watch } = setup();
+    dsh.add('g', { title: 'Short goal' });
+    dsh.write('g', 'Go');
+    dsh.setGoal('g', 'Ship it', { max: 2 });
+    dsh.end('g', { kind: 'completed' }, { reply: 'Round one.' });
+    await settle();
+    dsh.end('g', { kind: 'completed' }, { reply: 'Round two.' });
+    await settle();
+    // Two rounds of two: the driver stops; a restart of the agent leaves it disarmed.
+    dsh.sessions.get('g').goal.activation = 'disarmed';
+    dsh.end('g', { kind: 'completed' }, { reply: 'Out of rounds.' });
+    await settle();
+    assert.equal(dsh.sessions.get('g').goal.roundsStarted, 2);
+    await clock.advance(10 * MIN);
+    assert.equal(entries(journal, 'rearm').length, 0, 'no start DSH would refuse');
+    const [skip] = entries(journal, 'skip');
+    assert.equal(skip.why, 'Its goal used all 2 of its rounds; raise its round limit to let it go on.');
+    const row = (await watch.list(undefined, { maxAgeMs: 0 })).find((r) => r.sessionId === 'g');
+    assert.equal(pilot.holdOf(row), 'waits for you: its goal used all 2 of its rounds; raise its round limit to let it go on');
+    // Try again says the same, without asking DSH.
+    const result = await pilot.retry('g');
+    assert.equal(result.action, 'none');
+    assert.match(entries(journal, 'skip')[0].why, /^You pressed Try again, but its goal used all 2 of its rounds; raise its round limit to let it go on\.$/);
 });
 
 test('a failed turn with open todos and no goal gets a carry-on note naming the error', async () => {
@@ -499,6 +688,68 @@ test('the hourly limit holds notes back, says so once, and tries again later', a
     assert.match(held[0].why, /already sent 1 note in the last hour/);
     await clock.advance(60 * MIN);
     assert.equal(notesIn(dsh, 'a').length + notesIn(dsh, 'b').length, 2, 'the held one goes once the hour has room');
+});
+
+test('the hourly limit stops Autopilot, not the person: an answer goes at once with the hour full, and is not counted', async () => {
+    const { dsh, clock, journal, pilot, watch } = setup({ config: { defaultRule: 'ask', maxNotesPerHour: 1 } });
+    pilot.setRule('a', 'auto');
+    idleWithTodos(dsh, 'a');
+    idleWithTodos(dsh, 'b');
+    await clock.advance(10 * MIN);
+    assert.equal(notesIn(dsh, 'a').length, 1, 'the hour is full');
+    const ask = watch.asks().find((item) => item.sessionId === 'b');
+    const result = await watch.answerAsk(ask.id, 'go', 'you');
+    assert.equal(result.ok, true);
+    await settle();
+    assert.equal(notesIn(dsh, 'b').length, 1, 'the person\'s answer goes at once');
+    assert.equal(pilot.data.notes.length, 1, 'and is not counted');
+    assert.equal(entries(journal, 'held').length, 0);
+    assert.equal(entries(journal, 'nudge').find((entry) => entry.sessionId === 'b').by, 'you');
+    // So is Try again; Autopilot's own next note still waits for the hour.
+    dsh.write('a', 'More');
+    dsh.end('a', { kind: 'completed' }, { todos: TODOS });
+    await clock.advance(10 * MIN);
+    assert.equal(notesIn(dsh, 'a').length, 1);
+    assert.equal(entries(journal, 'held').length, 1);
+});
+
+test('a cut-off session Autopilot has not looked at since its start is offered when the switch comes on, its rule leaves Off, or the default rule changes', async () => {
+    const dir = tempDir('autopilot');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const before = setup({ dir, clock, dsh, config: { defaultRule: 'off' } });
+    before.pilot.setRule('c', 'off');
+    before.pilot.setRule('e', 'auto');
+    before.pilot.setPaused(true);
+    for (const id of ['c', 'd', 'e']) {
+        dsh.add(id, { title: `Draft ${id}` });
+        dsh.write(id, 'Draft it.');
+        dsh.commit(id, 'todo/write', { todos: TODOS });
+    }
+    before.watch.running.flush();
+    dsh.save('c');
+    before.pilot.stop();
+    before.store.close();
+    // A forced quit: the turns stay open in the logs.
+    dsh.stop({ crash: true });
+    await clock.advance(2 * MIN);
+    const after = setup({ dir, clock, dsh, config: { defaultRule: 'off' } });
+    await clock.advance(MIN);
+    assert.deepEqual(after.watch.asks(), []);
+    assert.equal(entries(after.journal, 'resume').length, 0, 'off, and every rule Off: nothing');
+    // The switch comes on: e (Auto) gets its note.
+    after.pilot.setPaused(false);
+    await clock.advance(1000);
+    assert.equal(notesIn(dsh, 'e').length, 1);
+    // c's own rule leaves Off: its log is read, and it is asked about.
+    after.pilot.setRule('c', 'ask');
+    await clock.advance(1000);
+    assert.deepEqual(after.watch.asks().map((ask) => ask.sessionId), ['c']);
+    // The default leaves Off: d is asked about too.
+    after.pilot.setDefaultRule('ask');
+    await clock.advance(1000);
+    assert.deepEqual(after.watch.asks().map((ask) => ask.sessionId).sort(), ['c', 'd']);
+    after.pilot.stop();
 });
 
 test('subagent sessions are left to their parent', async () => {
@@ -754,13 +1005,13 @@ test('holds: a quiet session with open work that Autopilot leaves alone says why
         'blocked-goal': 'waits for you: its goal is blocked',
         stopped: 'you stopped its last turn, so Autopilot leaves it to you',
         left: 'Autopilot already handled its last turn; it looks again after the next one',
-        fresh: undefined,
+        fresh: 'waits for your answer: Autopilot asked whether to tell it to carry on',
     });
-    // The page puts the reason on the row; a session with a question waiting, or a check pending, needs none.
+    // The page puts the reason on the row (a question of Autopilot's waiting says so); a check pending needs none.
     const view = await pageState({ pilot, watch, journal, config });
     const byId = Object.fromEntries(view.sessions.map((row) => [row.sessionId, row]));
     assert.equal(byId.asks.hold, 'waits for you: its last reply asks you something');
-    assert.equal(byId.fresh.hold, undefined);
+    assert.equal(byId.fresh.hold, 'waits for your answer: Autopilot asked whether to tell it to carry on');
     assert.equal(view.asks.map((ask) => ask.sessionId).join(), 'fresh');
     // Off, or a rule of Off, says it in the switch and the rule: no hold on top.
     pilot.setRule('asks', 'off');

@@ -88,12 +88,19 @@ export function whyNudge(state, idleMs) {
     return `It has been idle for ${spanWords(idleMs)} after turn ${state.end?.turn ?? state.turn} with ${count(state.todos?.open ?? 0, 'open todo')}, and its last reply asked you nothing.`;
 }
 
-export function whyRearmIdle(state, idleMs) {
-    return `Its goal “${clip(state.goal?.objective, 80)}” is active but stopped (a DSH restart or an error stops a goal), and it has been idle for ${spanWords(idleMs)}.`;
+/** "round 3 of 4": the round a start of this goal begins. */
+function roundWords(goal) {
+    const next = (goal?.rounds ?? 0) + 1;
+    return goal?.max ? `round ${next} of ${goal.max}` : `round ${next}`;
 }
 
+export function whyRearmIdle(state, idleMs) {
+    return `Its goal “${clip(state.goal?.objective, 80)}” is active but stopped (a DSH restart or an error stops a goal), and it has been idle for ${spanWords(idleMs)}. This start begins ${roundWords(state.goal)}.`;
+}
+
+/** A failed turn stopped a goal: a note goes first (it costs no goal round), and the goal starts again only after a turn without an error. */
 export function whyRearmError(end, state) {
-    return `Turn ${end.turn} failed${end.error ? ` (${clip(end.error, 120)})` : ''}, which stops a goal; the goal “${clip(state.goal?.objective, 80)}” was still active.`;
+    return `Turn ${end.turn} failed${end.error ? ` (${clip(end.error, 120)})` : ''}, which stops a goal; the goal “${clip(state.goal?.objective, 80)}” is still active. A note costs no goal round, so it goes first; the goal starts again (${roundWords(state.goal)}) once a turn ends without an error.`;
 }
 
 export function whyErrorNote(end, state) {

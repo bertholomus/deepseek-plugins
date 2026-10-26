@@ -183,6 +183,12 @@ test('words: times and spans in plain words', () => {
     assert.equal(spanWords(45000), '45 seconds');
     assert.equal(spanWords(1000), '1 second');
     assert.equal(spanWords(10 * 60000), '10 minutes');
+    // Under two minutes in seconds, so 90 seconds never reads as 2 minutes; minutes and seconds up to ten minutes.
+    assert.equal(spanWords(90000), '90 seconds');
+    assert.equal(spanWords(119000), '119 seconds');
+    assert.equal(spanWords(150000), '2 minutes 30 seconds');
+    assert.equal(spanWords(181000), '3 minutes 1 second');
+    assert.equal(spanWords(5 * 60000), '5 minutes');
     assert.equal(spanWords(3 * 3600000), '3 hours');
     assert.equal(spanWords(3 * 86400000), '3 days');
     assert.equal(count(1, 'open todo'), '1 open todo');
