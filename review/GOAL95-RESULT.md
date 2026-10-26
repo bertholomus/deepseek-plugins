@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 2:10 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 2:12 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -28,7 +28,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Recall | not judged yet (earlier best 8.8, round 2, 2e6de4d) | 8b70bff | goal95/recall | NOT YET | builder working |
 | Session Bridge | 8.0 (round 1) | b5768b6 | goal95/session-bridge | NOT YET | a retried create runs the job twice; a prompt cut off by a restart cannot be resent with its id; round 2 building |
 | Session Watch | not judged yet | c0c4d23 | goal95/session-watch | NOT YET | builder working |
-| Wallpaper | not judged yet | 5b4d1eb | goal95/wallpaper (redesign repo) | NOT YET | builder working |
+| Wallpaper | being judged (round 1) | 29329f7 | goal95/wallpaper (redesign repo) | NOT YET | judge working |
 
 Live DSH: pid 43210, started Mon Oct 26 07:14:47, unchanged at every check. Its patch sha moved at 9:00 AM (a scheduled context job) and at
 9:06, 9:31 and 9:45 AM (MiniMe's direct edits of Fleet Shell's `runnerRev`), never from this work; f240a78d… since 9:45 AM.
