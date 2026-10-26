@@ -15,12 +15,18 @@
  * window (Chromium on the web profile, Playwright from .e2e/tools): the
  * session list by category with every workspace still there, folding by
  * click and by key, a running chat's dot on its folded workspace's own row
- * and on its folded category (and gone when the turn ends), the Categories
- * page on its glass card, find, the chip at the top of a chat, light and
+ * and on its folded category (and gone when the turn ends), a workspace
+ * dragged onto another category's header and back, the Categories page on
+ * its glass card, find, the chip at the top of a chat, light and
  * dark, 760 px and contrast, and switched off
  * in Plugins it leaves no header, mark, class or style sheet behind; on
  * again, one of everything. Pictures go to SHOTS (default
- * .e2e/shots/categories/<DSH version>/). Without Playwright the run fails,
+ * .e2e/shots/categories/<DSH version>/). Last, its row in the profile at
+ * DSH's next start: values of the wrong type count as their defaults, each
+ * warned in its log and named for the page, and enabled: false says off,
+ * refuses changes in words and writes nothing; and a store that can't be
+ * used starts it with none, said in its log, the file kept beside the new
+ * store at the first change. Without Playwright the run fails,
  * unless NO_WINDOW=1 says to run without the window.
  *
  * With COORDINATOR=1 the coordinator plugin runs beside it: neither answers
@@ -35,7 +41,7 @@
  * KEEP=1 keeps the temp folder.
  */
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -172,8 +178,8 @@ function webApi(web, endpoint, args) {
 
 const profile = join(home, 'profiles', 'web');
 
-/** The web profile with these of the repo's plugins linked in, and its patch. */
-function writeProfile(names) {
+/** The web profile with these of the repo's plugins linked in, and its patch (plus `rows`, more patch rows). */
+function writeProfile(names, rows = '') {
     rmSync(join(profile, 'node_modules'), { recursive: true, force: true });
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
     const plugins = Object.fromEntries(names.map((name) => [`dsh-plugin-${name}`, join(pluginsDir, name)]));
@@ -208,7 +214,7 @@ function writeProfile(names) {
   config:
     socketPath: ${q(sock)}
     logFile: ${q(join(root, 'bridge.log'))}
-`);
+${rows}`);
 }
 
 function startDsh(dsh) {
@@ -546,6 +552,29 @@ try {
             await waitFor(async () => (await recipe.getAttribute('aria-expanded')) === 'true', 'the unfold', 5000);
         });
 
+        await section('a workspace dragged onto another category\'s header is filed there; dragged back, it is as it was', async () => {
+            const webDrag = await signInWeb();
+            const holds = async () => Object.fromEntries(((await webApi(webDrag, 'dsh-plugin-categories/list', {})).value?.categories ?? []).map((c) => [c.name, c.workspaces.map((w) => w.id)]));
+            const rowE = page.locator(`[data-slot="sidebar.workspaces"] [data-row-key="workspace:${wsId.e}"]`);
+            const fleet = page.locator('[data-categories-sb="fleet-services"]');
+            const experimentation = page.locator('[data-categories-sb="experimentation"]');
+            const said = page.locator('[data-categories-sidebar-said]');
+            await rowE.dragTo(fleet);
+            // The store takes it at once; the list follows DSH's order, which the plugin puts in step a moment later.
+            const moved = await waitFor(async () => { const now = await holds(); return now['Fleet Services']?.[0] === wsId.e ? now : null; }, 'work-e first in Fleet Services', 10000).catch(() => holds());
+            // Said once the window has the answer (the store may have it a moment before).
+            const heard = await waitFor(async () => (await said.textContent())?.trim() || null, 'the move said for screen readers', 5000).catch(() => '');
+            const label = await fleet.getAttribute('aria-label');
+            check('a workspace\'s row dragged onto another category\'s header is filed there, first in it, and that is said',
+                json(moved['Fleet Services']) === json([wsId.e, wsId.d]) && json(moved.Experimentation) === json([])
+                && label === 'Fleet Services, 2 workspaces' && heard === 'work-e moved to Fleet Services.',
+            json({ fleet: moved['Fleet Services'], e: wsId.e, d: wsId.d, label, heard }));
+            await shot(page, shots, 'sidebar-dragged-light');
+            await rowE.dragTo(experimentation);
+            const back = await waitFor(async () => { const now = await holds(); return now.Experimentation?.length === 1 ? now : null; }, 'work-e back in Experimentation', 10000).catch(() => holds());
+            check('dragged back onto its own category\'s header, it is where it was', json(back['Fleet Services']) === json([wsId.d]) && json(back.Experimentation) === json([wsId.e]), json(back));
+        });
+
         await section('the Categories page on its glass card', async () => {
             // Its entry in DSH's sidebar panel list (a button named by its label, with or without the label showing).
             await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
@@ -599,7 +628,8 @@ try {
         await section('the chip at the top of a chat', async () => {
             // The chat by its title in DSH's list (DSH may have titled it from its reply instead).
             const list = page.locator('[data-slot="sidebar.workspaces"]');
-            const row = (await list.getByText('Chip check', { exact: true }).count()) ? list.getByText('Chip check', { exact: true }) : list.getByText(/Filed under General/);
+            // Waits for either (the list may still be drawing its rows after the 760 px window).
+            const row = list.getByText('Chip check', { exact: true }).or(list.getByText(/Filed under General/));
             await row.first().click();
             const chip = page.locator('[data-categories-chip]');
             await chip.first().waitFor({ state: 'visible', timeout: 20000 });
@@ -638,7 +668,68 @@ try {
 
         const ours = win.errors.filter((text) => /categor/i.test(text));
         check('no errors from the plugin in the window', ours.length === 0, ours.join('\n'));
+        await win.browser?.close().catch(() => {});
+        win = undefined;
     }
+
+    // 7. Its row in the profile, as the user writes it, at DSH's next start. Values of the wrong type: each counts as
+    //    its default (the categories still show), the plugin's log warns once for each, in words, and the list names
+    //    them for the page. Then enabled: false: the list says off, a change is refused in words, and nothing is
+    //    written (the store, the log, DSH's workspace order).
+    const names = WITH_COORDINATOR ? ['categories', 'session-bridge', 'coordinator'] : ['categories', 'session-bridge'];
+    await stopDsh(child);
+    const logAt = readText(logFile).length;
+    writeProfile(names, '- id: categories\n  config:\n    enabled: "no"\n    projectsStoreFile: 7\n');
+    child = await boot(dsh, 'wrong settings');
+    const webWrong = await signInWeb();
+    const wrong = await waitFor(async () => { const r = await webApi(webWrong, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the list with wrong settings', 30000);
+    const warned = readText(logFile).slice(logAt).split('\n').filter(Boolean).map((line) => line.replace(/^\S+ /, ''));
+    check('settings of the wrong type count as their defaults: the categories show, and the list names both for the page',
+        json(wrong.value?.categories?.map((c) => c.name)) === json(['General', 'Local Model Recipe', 'Fleet Services', 'Experimentation']) && json((wrong.value?.problems ?? []).map((p) => p.key)) === json(['enabled', 'projectsStoreFile']),
+        json({ categories: wrong.value?.categories?.map((c) => c.name), problems: wrong.value?.problems }));
+    check('… and the plugin\'s log warns once for each, in words',
+        warned.filter((line) => line.startsWith('warn a setting is wrong: ')).length === 2
+        && warned.includes('warn a setting is wrong: enabled must be true or false, but it is "no"; it counts as true until you change it')
+        && warned.includes('warn a setting is wrong: projectsStoreFile must be a file path, or empty to skip the move from the projects plugin, but it is 7; ~/.dsh/projects/projects.json is used until you change it'),
+        warned.join('\n'));
+    const orderKept = await dshOrder();
+    await stopDsh(child);
+    const storeKept = readText(storeFile);
+    const logKept = readText(logFile);
+    writeProfile(names, '- id: categories\n  config:\n    enabled: false\n');
+    child = await boot(dsh, 'switched off in its row');
+    const webOff = await signInWeb();
+    const offList = await waitFor(async () => { const r = await webApi(webOff, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the list switched off', 30000);
+    const refused = await webApi(webOff, 'dsh-plugin-categories/createCategory', { name: 'Not now' });
+    check('enabled: false: the list says off and shows no category; a change is refused in words',
+        offList.value?.off === true && offList.value.categories.length === 0 && !refused.ok && refused.error?.code === 'categories/off' && /switched off/.test(refused.error?.message ?? ''),
+        json({ off: offList.value, refused: refused.error }));
+    await sleep(500);
+    check('… and writes nothing: the store and the log as they were, DSH\'s workspace order untouched',
+        readText(storeFile) === storeKept && readText(logFile) === logKept && json(await dshOrder()) === json(orderKept),
+        json({ store: readText(storeFile) === storeKept, log: readText(logFile).slice(logKept.length), order: json(await dshOrder()) === json(orderKept) }));
+
+    // 8. A store that can't be used (cut off mid-write by hand, say), at DSH's next start: the plugin starts with no
+    //    categories and its log says so, the file stays as it was, and the first change keeps it beside the new store.
+    await stopDsh(child);
+    writeProfile(names);
+    const broken = '{"version": 1, "categories": {"cut-off';
+    writeFileSync(storeFile, broken);
+    const logBad = readText(logFile).length;
+    child = await boot(dsh, 'an unusable store');
+    const webBad = await signInWeb();
+    const empty = await waitFor(async () => { const r = await webApi(webBad, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the list over an unusable store', 30000);
+    const badLines = readText(logFile).slice(logBad).split('\n').filter(Boolean).map((line) => line.replace(/^\S+ /, ''));
+    check('a store that can\'t be used: the plugin starts with no categories, its log says so, and the file is left as it was',
+        empty.value?.categories?.length === 0 && readText(storeFile) === broken
+        && badLines.includes(`warn the store ${storeFile} is not JSON: the categories start empty, and the file as it was is kept beside it before a change writes a new one`),
+        json({ categories: empty.value?.categories?.length, lines: badLines }));
+    const made = await webApi(webBad, 'dsh-plugin-categories/createCategory', { name: 'Fresh' });
+    const keptFiles = readdirSync(categoriesDir).filter((name) => name.startsWith('categories.json.unreadable-'));
+    check('… and the first change keeps it beside the new store (mode 600), then writes the new one',
+        made.ok && keptFiles.length === 1 && readText(join(categoriesDir, keptFiles[0])) === broken && (statSync(join(categoriesDir, keptFiles[0])).mode & 0o777) === 0o600
+        && JSON.parse(readText(storeFile)).categories?.fresh?.name === 'Fresh',
+        json({ made: made.ok, keptFiles }));
 } catch (error) {
     failed += 1;
     console.log(`not ok - e2e aborted: ${error?.stack ?? error}`);
