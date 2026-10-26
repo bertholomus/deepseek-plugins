@@ -50,7 +50,12 @@ const VERSION = (() => {
     }
 })();
 
-export function apply(ctx, config) {
+/**
+ * Start the bridge. When it cannot listen (a refused socket path, a socket another program answers on), apply
+ * fails with the reason, so DSH shows the plugin as failed ("Problem" on its Plugins page) and logs why, instead
+ * of "Running". Saving the row again, or switching the plugin off and on, tries again.
+ */
+export async function apply(ctx, config) {
     const settings = checkSettings(config, {
         socketPath: dshHomePath('session-bridge', 'bridge.sock'),
         logFile: dshHomePath('session-bridge', 'bridge.log'),
@@ -82,9 +87,14 @@ export function apply(ctx, config) {
     const started = bridge.start().catch((error) => {
         bridge.log(`not listening: ${errorText(error)}`);
         ctx.logger.error('session-bridge: not listening: %s', errorText(error));
+        return false;
     });
     ctx.effect(() => async () => {
         await started;
         await bridge.stop();
     });
+    const listening = await started;
+    if (!listening && bridge.refused) {
+        throw new Error(`Session Bridge is not listening on ${bridge.socketPath}: ${bridge.refused}. Fix socketPath in its row (or free the socket), then save the row again or switch the plugin off and on.`);
+    }
 }

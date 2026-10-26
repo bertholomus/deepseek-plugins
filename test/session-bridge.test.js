@@ -5,13 +5,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
-    BridgeError, EVENTS_LIMIT_MAX, LOG_MAX_BYTES, MAX_BODY_DEFAULT, MAX_BODY_RANGE, SOCKET_PATH_MAX, WAIT_MAX_SECONDS, answers, checkSettings, codeOf,
-    createBridge, expandHome, lastAssistantText, prepareSocket, requestState, sessionSummary, statusFor, summarize,
+    BridgeError, CREATES_FILE, EVENTS_LIMIT_MAX, LOG_MAX_BYTES, MAX_BODY_DEFAULT, MAX_BODY_RANGE, PROMPT_MS, READ_MS, SOCKET_PATH_MAX, WAIT_MAX_SECONDS, answers, attemptOf,
+    checkSettings, codeOf, createBridge, expandHome, isNotFound, lastAssistantText, prepareSocket, requestState, rpcIdFor, sessionSummary, statusFor, summarize, withDeadline,
 } from '../plugins/session-bridge/lib/bridge.js';
 import { OTHER_NAMES } from './helpers/client.mjs';
 import { tempDir } from './helpers/temp.mjs';
@@ -167,6 +167,8 @@ function fakeDsh() {
         sessions,
         /** Hold every prompt until let go (DSH slow to accept), or fail the next call of a kind. */
         hold: null,
+        holdCreate: null,
+        afterInspect: null,
         failNext: {},
         attach: (b) => { bridge = b; },
         push(id, type, data = {}) {
@@ -176,12 +178,19 @@ function fakeDsh() {
         },
         controller: {
             inspect: async (id) => {
+                if (dsh.failNext.inspect) throw dsh.failNext.inspect;
                 const s = live(id);
-                return { meta: s.header, events: [...s.events] };
+                const copy = { meta: s.header, events: [...s.events] };
+                // An event that lands just after this read (before the caller's wait is registered).
+                const after = dsh.afterInspect;
+                dsh.afterInspect = null;
+                if (after) queueMicrotask(after);
+                return copy;
             },
             list: async () => ({ items: [...sessions.keys()].map((sessionId) => ({ sessionId })) }),
             create: async ({ workspaceId, agentPreset }) => {
                 calls.push(['create', workspaceId, agentPreset]);
+                if (dsh.holdCreate) await dsh.holdCreate;
                 const id = `session-${++n}`;
                 sessions.set(id, { header: { cwd: workspaces.get(workspaceId)?.path, title: 'New session' }, events: [], agent: { status: 'idle' } });
                 return { sessionId: id };
@@ -192,6 +201,9 @@ function fakeDsh() {
                 if (dsh.failNext.prompt) throw dsh.failNext.prompt;
                 live(req.sessionId);
                 if (dsh.hold) await dsh.hold;
+                const late = dsh.failLate;
+                dsh.failLate = undefined;
+                if (late) throw late;
                 return { accepted: true };
             },
             selectModel: async (req) => {
@@ -200,11 +212,14 @@ function fakeDsh() {
                 dsh.failNext.model = undefined;
                 if (failure) throw failure;
                 live(req.sessionId);
+                // DSH records the choice in the session's log; the stand-in does when a test asks it to.
+                if (dsh.recordSteps) dsh.push(req.sessionId, 'model/selection', { provider: req.provider, model: req.model, ...(req.reasoningEffort ? { reasoningEffort: req.reasoningEffort } : {}) });
                 return { provider: req.provider, model: req.model };
             },
             rename: async (req) => {
                 calls.push(['rename', req]);
                 live(req.sessionId);
+                if (dsh.recordSteps) dsh.push(req.sessionId, 'session/title', { title: req.title });
                 return { title: req.title, seq: 1 };
             },
             cancel: async (req) => {
@@ -231,8 +246,8 @@ function fakeDsh() {
 }
 
 /** A bridge over a stand-in DSH on a real socket in a temp folder. */
-async function bridgeOn(t, { raw = {}, folder = tempDir('sb'), logger, logMaxBytes } = {}) {
-    const dsh = fakeDsh();
+async function bridgeOn(t, { raw = {}, folder = tempDir('sb'), logger, logMaxBytes, promptMs, readMs, dsh: given } = {}) {
+    const dsh = given ?? fakeDsh();
     const settings = checkSettings(raw, { socketPath: join(folder, 'sock', 'bridge.sock'), logFile: join(folder, 'sock', 'bridge.log') });
     const lines = [];
     const bridge = createBridge({
@@ -242,6 +257,8 @@ async function bridgeOn(t, { raw = {}, folder = tempDir('sb'), logger, logMaxByt
         version: '9.9.9',
         sent: new Map(),
         ...(logMaxBytes ? { logMaxBytes } : {}),
+        ...(promptMs ? { promptMs } : {}),
+        ...(readMs ? { readMs } : {}),
     });
     dsh.attach(bridge);
     const ok = await bridge.start();
@@ -704,6 +721,261 @@ test('api: DSH too slow, or failing, is said as such and never stops the bridge'
     assert.equal((await call(sock, 'GET', '/health')).status, 200);
 });
 
+// ── Round 2: retried creates, cut-off turns, deadlines, read errors ──
+
+test('log: a turn cut off after DSH saved the message (interrupted) or that failed (error) leaves it unfinished; an aborted one is answered', () => {
+    const base = [ev(1, 'turn/start', { turn: 1 }), ev(2, 'user/message', asked('job', 'j1'))];
+    const ended = (kind, extra = []) => [...base, ...extra, ev(9, 'turn/end', { turn: 1, reason: { kind } })];
+    assert.deepEqual(requestState(ended('interrupted'), 'j1'), { requestId: 'j1', state: 'unfinished', seq: 2, turn: 1, end: { seq: 9, kind: 'interrupted' }, reply: null });
+    assert.equal(requestState(ended('error'), 'j1').state, 'unfinished');
+    assert.equal(requestState(ended('interrupted', [ev(3, 'assistant/message', said('Half way'))]), 'j1').reply.text, 'Half way', 'a reply it gave before the cut is kept');
+    assert.equal(requestState(ended('aborted'), 'j1').state, 'answered', 'stopped on purpose is not resent');
+    assert.equal(requestState(ended('completed'), 'j1').state, 'answered');
+    // Sent again as the next attempt: the newest attempt counts, and says which it is.
+    const again = [...ended('interrupted'), ev(10, 'turn/start', { turn: 2 }), ev(11, 'user/message', asked('job', 'j1~2')), ev(12, 'assistant/message', said('Done')), ev(13, 'turn/end', { turn: 2, reason: { kind: 'completed' } })];
+    assert.deepEqual(requestState(again, 'j1'), { requestId: 'j1', state: 'answered', seq: 11, turn: 2, end: { seq: 13, kind: 'completed' }, reply: { seq: 12, text: 'Done' }, attempt: 2 });
+    assert.deepEqual(requestState(ended('interrupted'), 'j1', 2), { requestId: 'j1', state: 'waiting', attempt: 2 }, 'an attempt the bridge sent and DSH has not shown yet is waiting');
+    assert.equal(attemptOf('j1', 'j1'), 1);
+    assert.equal(attemptOf('j1~3', 'j1'), 3);
+    assert.equal(attemptOf('j1~x', 'j1'), 0);
+    assert.equal(attemptOf('j10', 'j1'), 0);
+    assert.equal(rpcIdFor('j1', 1), 'j1');
+    assert.equal(rpcIdFor('j1', 2), 'j1~2');
+});
+
+test('log: a queued prompt taken out of DSH\'s queue (outcome canceled) is dropped at once, removed, even while a turn runs', () => {
+    const msg = (rpcId) => ({ id: rpcId, role: 'user', content: [{ type: 'text', text: 'x' }], source: { kind: 'user', rpcId } });
+    const log = [ev(1, 'turn/start', { turn: 1 }), ev(2, 'agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [msg('q')] }), ev(3, 'agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' })];
+    assert.deepEqual(requestState(log, 'q'), { requestId: 'q', state: 'dropped', seq: 3, removed: true });
+    // Moved from the queue into the running turn (the window's "steer now"): removed, then queued anew as a steer.
+    const moved = [...log, ev(4, 'agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [msg('q')] })];
+    assert.deepEqual(requestState(moved, 'q'), { requestId: 'q', state: 'queued', seq: 4, target: 'next-step' });
+});
+
+test('api: a create retried with its request id makes one session and sends one message, also while the first is on its way', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t);
+    dsh.recordSteps = true;
+    const body = { workspacePath: folder, title: 'Nightly', provider: 'p', model: 'm', text: 'Run the nightly job.', requestId: 'cron-nightly-1026' };
+    let release;
+    dsh.holdCreate = new Promise((r) => { release = r; });
+    const first = call(sock, 'POST', '/sessions', body);
+    await sleep(50);
+    const overlap = call(sock, 'POST', '/sessions', body);
+    await sleep(50);
+    release();
+    dsh.holdCreate = null;
+    const [a, b] = [await first, await overlap];
+    assert.equal(a.status, 200, a.text);
+    assert.equal(b.status, 200, b.text);
+    assert.equal(b.body.sessionId, a.body.sessionId, 'one session');
+    assert.equal(b.body.alreadyCreated, true);
+    assert.equal(b.body.prompt.alreadySent, true);
+    assert.equal(b.body.model, undefined, 'the model was not set again');
+    assert.equal(b.body.title, undefined, 'nor the title (DSH has it)');
+    assert.deepEqual(dsh.calls.map(([k]) => k), ['create', 'model', 'rename', 'prompt'], 'each step once');
+    const later = await call(sock, 'POST', '/sessions', body);
+    assert.equal(later.body.sessionId, a.body.sessionId);
+    assert.equal(dsh.calls.filter(([k]) => k === 'create' || k === 'prompt').length, 2, 'still one create and one prompt');
+    // The same id for another folder is refused in words.
+    const elsewhere = join(folder, 'other');
+    mkdirSync(elsewhere);
+    const conflict = await call(sock, 'POST', '/sessions', { ...body, workspacePath: elsewhere });
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.body.error.code, 'request/conflict');
+    assert.match(conflict.body.error.message, /^Request id cron-nightly-1026 already made session session-1 in \S+; use a new request id for a session in \S+other\.$/);
+    // The record beside the socket: 600, ids only, never the text or the title.
+    const record = join(folder, 'sock', CREATES_FILE);
+    assert.equal(modeOf(record), 0o600);
+    const text = readFileSync(record, 'utf8');
+    assert.ok(!text.includes('Run the nightly job') && !text.includes('Nightly'), text);
+    assert.deepEqual(JSON.parse(text.trim()), { ...JSON.parse(text.trim()), requestId: 'cron-nightly-1026', sessionId: a.body.sessionId });
+});
+
+test('api: a create retried after DSH restarts finds its session from the record beside the socket, and finishes only what was not done', async (t) => {
+    const folder = tempDir('sb');
+    const dsh = fakeDsh();
+    const ws = join(folder, 'ws');
+    mkdirSync(ws);
+    // The first create's model step fails after DSH made the session.
+    dsh.failNext.model = remoteError('session/model-unavailable', 'Select an available model before sending a message.');
+    const body = { workspacePath: ws, title: 'Report', provider: 'p', model: 'm', text: 'Write the report.', requestId: 'report-2026-10-26' };
+    const one = await bridgeOn(t, { folder, dsh });
+    const failed = await call(one.sock, 'POST', '/sessions', body);
+    assert.equal(failed.status, 409);
+    assert.equal(failed.body.failedStep, 'model');
+    await one.bridge.stop();
+    // DSH restarted: a new bridge with nothing in memory (its own empty map), the same socket folder.
+    const two = await bridgeOn(t, { folder, dsh });
+    const retried = await call(two.sock, 'POST', '/sessions', body);
+    assert.equal(retried.status, 200, retried.text);
+    assert.equal(retried.body.sessionId, failed.body.sessionId, 'the session the first try made');
+    assert.equal(retried.body.alreadyCreated, true);
+    assert.deepEqual(retried.body.model, { provider: 'p', model: 'm' }, 'the step that failed is done now');
+    assert.equal(retried.body.prompt.alreadySent, undefined, 'and the prompt is sent, once');
+    assert.deepEqual(dsh.calls.map(([k]) => k), ['create', 'model', 'model', 'rename', 'prompt']);
+    // Its message reached the log; a third try after another restart sends nothing.
+    dsh.push(retried.body.sessionId, 'user/message', asked('Write the report.', 'report-2026-10-26'));
+    await two.bridge.stop();
+    const three = await bridgeOn(t, { folder, dsh });
+    const third = await call(three.sock, 'POST', '/sessions', body);
+    assert.equal(third.body.prompt.alreadySent, true);
+    assert.equal(dsh.calls.filter(([k]) => k === 'create' || k === 'prompt').length, 2);
+    // A session DSH no longer has is said so, never made again silently.
+    dsh.sessions.delete(retried.body.sessionId);
+    const gone = await call(three.sock, 'POST', '/sessions', body);
+    assert.equal(gone.status, 409);
+    assert.equal(gone.body.error.code, 'request/session-gone');
+});
+
+test('api: an unfinished prompt (its turn cut off after DSH saved it) is sent once more under the next attempt, which DSH takes as new', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t);
+    const id = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    const first = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Migrate.', requestId: 'mig-1' })).body;
+    assert.equal(first.requestId, 'mig-1');
+    assert.equal(dsh.calls.at(-1)[1].requestId, 'mig-1', 'the first attempt is the id itself');
+    dsh.push(id, 'turn/start', { turn: 1 });
+    dsh.push(id, 'user/message', asked('Migrate.', 'mig-1'));
+    dsh.push(id, 'turn/end', { turn: 1, reason: { kind: 'interrupted' } });
+    const cut = (await call(sock, 'GET', `/sessions/${id}/requests/mig-1?wait=5`)).body;
+    assert.deepEqual({ state: cut.state, end: cut.end.kind, timedOut: cut.timedOut }, { state: 'unfinished', end: 'interrupted', timedOut: false }, 'a wait ends on it');
+    const again = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Migrate.', requestId: 'mig-1' })).body;
+    assert.deepEqual(again, { accepted: true, mode: 'followup', requestId: 'mig-1', chars: 8, attempt: 2, resent: true });
+    assert.equal(dsh.calls.at(-1)[1].requestId, 'mig-1~2', 'DSH gets a new rpcId, so it does not take it as the old one');
+    // While it is on its way, and once it is read, a retry is not sent a third time.
+    assert.equal((await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Migrate.', requestId: 'mig-1' })).body.alreadySent, true);
+    dsh.push(id, 'turn/start', { turn: 2 });
+    dsh.push(id, 'user/message', asked('Migrate.', 'mig-1~2'));
+    dsh.push(id, 'assistant/message', said('Migrated.'));
+    dsh.push(id, 'turn/end', { turn: 2, reason: { kind: 'completed' } });
+    const done = (await call(sock, 'GET', `/sessions/${id}/requests/mig-1`)).body;
+    assert.deepEqual({ state: done.state, attempt: done.attempt, reply: done.reply.text }, { state: 'answered', attempt: 2, reply: 'Migrated.' });
+    const third = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Migrate.', requestId: 'mig-1' })).body;
+    assert.deepEqual({ alreadySent: third.alreadySent, state: third.state, attempt: third.attempt }, { alreadySent: true, state: 'answered', attempt: 2 });
+    assert.equal(dsh.calls.filter(([k]) => k === 'prompt').length, 2);
+    // A queued prompt someone takes out of DSH's queue reads dropped (removed), and may be sent again.
+    const msg = (rpcId) => ({ id: rpcId, role: 'user', content: [{ type: 'text', text: 'x' }], source: { kind: 'user', rpcId } });
+    dsh.push(id, 'agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [msg('later-1')] });
+    dsh.push(id, 'agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' });
+    assert.deepEqual((await call(sock, 'GET', `/sessions/${id}/requests/later-1`)).body, { sessionId: id, requestId: 'later-1', state: 'dropped', seq: 8, removed: true });
+    assert.equal((await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'x', requestId: 'later-1' })).body.alreadySent, undefined);
+});
+
+test('api: DSH holding a prompt past the deadline gets a 504 in words at the deadline; a retry meanwhile is not sent; a late refusal frees the id', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t, { promptMs: 300 });
+    const id = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    let release;
+    dsh.hold = new Promise((r) => { release = r; });
+    const t0 = Date.now();
+    const slow = await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy.', requestId: 'deploy-7' });
+    const took = Date.now() - t0;
+    assert.equal(slow.status, 504);
+    assert.ok(took >= 280 && took < 2000, `answered at the deadline (${took} ms)`);
+    assert.equal(slow.body.error.code, 'dsh/timeout');
+    assert.match(slow.body.error.message, new RegExp(`^DSH did not take the prompt in 0\\.3 s\\. It may still take it: ask GET /sessions/${id}/requests/deploy-7 before you send it again\\.$`));
+    assert.equal(slow.body.requestId, 'deploy-7');
+    const retry = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy.', requestId: 'deploy-7' })).body;
+    assert.deepEqual({ alreadySent: retry.alreadySent, state: retry.state }, { alreadySent: true, state: 'waiting' });
+    assert.equal(dsh.calls.filter(([k]) => k === 'prompt').length, 1);
+    // DSH refuses it late: the id is free again, and a retry goes through.
+    dsh.failLate = remoteError('session/agent-busy', 'prompt rejected');
+    release();
+    dsh.hold = null;
+    await sleep(50);
+    assert.equal((await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy.', requestId: 'deploy-7' })).body.alreadySent, undefined);
+    assert.equal(PROMPT_MS, 60000);
+    assert.equal(READ_MS, 20000);
+});
+
+test('api: a read DSH fails for another reason than "not found" is a 500 in words, never a 404; DSH\'s own not-found stays a 404', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t);
+    const id = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    dsh.failNext.inspect = Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' });
+    const io = await call(sock, 'GET', `/sessions/${id}`);
+    assert.equal(io.status, 500);
+    assert.equal(io.body.error.code, 'session/read-failed');
+    assert.match(io.body.error.message, new RegExp(`^DSH could not read session ${id}: EIO: i/o error, read\\. The session may still be there: try again; DSH's log says more\\.$`));
+    assert.equal((await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'x', requestId: 'r-io' })).status, 500, 'a prompt with an id is not sent blind');
+    assert.equal(dsh.calls.filter(([k]) => k === 'prompt').length, 0);
+    class ApiSessionNotFound extends Error {}
+    dsh.failNext.inspect = new ApiSessionNotFound(`session "${id}" not found`);
+    assert.equal((await call(sock, 'GET', `/sessions/${id}`)).status, 404);
+    dsh.failNext.inspect = undefined;
+    assert.equal(isNotFound(Object.assign(new Error('x'), { code: 'SESSION_QUERY_SESSION_NOT_FOUND' })), true);
+    assert.equal(isNotFound(new Error('session "a" not found')), true);
+    assert.equal(isNotFound(new Error('disk full')), false);
+    // A deadline that DSH would not keep is kept by the bridge, and a late failure is never unhandled.
+    const late = withDeadline(new Promise((_, reject) => setTimeout(() => reject(new Error('late')), 30)), 10, () => new Error('deadline'));
+    await assert.rejects(late, /deadline/);
+    await sleep(40);
+});
+
+test('api: reasoningEffort goes with a model: alone, or not a string, it is refused in words before anything is made', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t);
+    const alone = await call(sock, 'POST', '/sessions', { workspacePath: folder, reasoningEffort: 'max' });
+    assert.equal(alone.status, 400);
+    assert.match(alone.body.error.message, /^reasoningEffort goes with provider and model: give all three \(GET \/models lists them\), or none for DSH's default model and effort\.$/);
+    const number = await call(sock, 'POST', '/sessions', { workspacePath: folder, provider: 'p', model: 'm', reasoningEffort: 7 });
+    assert.equal(number.status, 400);
+    assert.match(number.body.error.message, /^reasoningEffort must be a string/);
+    assert.equal(dsh.calls.length, 0, 'nothing was made');
+    const ok = await call(sock, 'POST', '/sessions', { workspacePath: folder, provider: 'p', model: 'm', reasoningEffort: 'high' });
+    assert.equal(ok.status, 200);
+    assert.equal(dsh.calls[1][1].reasoningEffort, 'high');
+});
+
+test('api: an event that lands between a wait\'s first read and its start is not missed; a wait the bridge\'s stop ends says stopped', async (t) => {
+    const { sock, dsh, bridge, folder } = await bridgeOn(t);
+    const id = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    dsh.afterInspect = () => dsh.push(id, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+    const t0 = Date.now();
+    const page = (await call(sock, 'GET', `/sessions/${id}/events?after=-1&types=turn/end&wait=5`)).body;
+    assert.equal(page.timedOut, false);
+    assert.deepEqual(page.events.map((e) => e.type), ['turn/end']);
+    assert.ok(Date.now() - t0 < 2000, 'answered at once, not at the deadline');
+    const waiting = call(sock, 'GET', `/sessions/${id}/events?after=99&wait=60`);
+    await sleep(100);
+    await bridge.stop();
+    assert.deepEqual(pickKeys((await waiting).body, ['timedOut', 'stopped']), { timedOut: true, stopped: true });
+});
+
+test('socket: the home folder is refused however it is spelt: through a symlink, or in another letter case on a disk that ignores case', async () => {
+    const folder = tempDir('sb');
+    const home = process.env.HOME;
+    process.env.HOME = join(folder, 'home');
+    mkdirSync(process.env.HOME, { mode: 0o755 });
+    try {
+        symlinkSync(process.env.HOME, join(folder, 'link'));
+        assert.match(await prepareSocket(join(folder, 'link', 'bridge.sock')), /is shared/);
+        const upper = join(folder, 'HOME');
+        if (existsSync(upper)) assert.match(await prepareSocket(join(upper, 'bridge.sock')), /is shared/);
+        assert.equal(modeOf(process.env.HOME), 0o755, 'left as it was');
+    } finally {
+        process.env.HOME = home;
+    }
+});
+
+test('log: its size counts bytes; a symlink at its path is never written through', async (t) => {
+    const folder = tempDir('sb');
+    const ws = join(folder, 'wé-ü-漢字');
+    mkdirSync(ws);
+    const { sock, logFile } = await bridgeOn(t, { folder, logMaxBytes: 1200 });
+    for (let i = 0; i < 12; i++) await call(sock, 'POST', '/sessions', { workspacePath: ws });
+    assert.ok(statSync(logFile).size <= 1200, `${statSync(logFile).size} bytes`);
+    assert.ok(statSync(`${logFile}.1`).size <= 1200);
+    const folder2 = tempDir('sb');
+    mkdirSync(join(folder2, 'sock'), { mode: 0o700 });
+    const target = join(folder2, 'elsewhere.txt');
+    writeFileSync(target, 'keep\n');
+    symlinkSync(target, join(folder2, 'sock', 'bridge.log'));
+    const linked = await bridgeOn(t, { folder: folder2 });
+    assert.equal(linked.ok, true, 'the bridge still listens');
+    await call(linked.sock, 'GET', '/health');
+    assert.equal(readFileSync(target, 'utf8'), 'keep\n', 'nothing written through the link');
+    assert.ok(lstatSync(join(folder2, 'sock', 'bridge.log')).isSymbolicLink());
+});
+
+const pickKeys = (o, keys) => Object.fromEntries(keys.map((k) => [k, o?.[k]]));
+
 // ── The plugin's files ────────────────────────────────────────────────
 
 test('files: the plugin\'s code parses, its real-DSH test parses, and no file names another vendor\'s assistant', () => {
@@ -712,6 +984,16 @@ test('files: the plugin\'s code parses, its real-DSH test parses, and no file na
     for (const file of walk(PLUGIN_DIR)) assert.doesNotMatch(readFileSync(file, 'utf8'), OTHER_NAMES, file);
     const pkg = JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8'));
     assert.equal(pkg.name, 'dsh-plugin-session-bridge');
+    // Presented as DSH presents its own plugins: a title, one plain sentence and a 36 by 36 icon.
+    const meta = JSON.parse(readFileSync(join(PLUGIN_DIR, 'locale', 'en.json'), 'utf8')).meta;
+    assert.equal(meta.title, 'Session Bridge');
+    assert.match(meta.description, /^[A-Z][^.]+\.$/);
+    assert.equal(pkg.description, meta.description);
+    assert.equal(pkg.icon, './icon.svg');
+    assert.match(readFileSync(join(PLUGIN_DIR, 'icon.svg'), 'utf8'), /^<svg width="36" height="36" viewBox="0 0 36 36"/);
+    assert.equal(pkg.exports['./locale/*.json'], './locale/*.json');
+    assert.equal(pkg.exports['.'], './lib/index.js');
+    for (const file of ['lib', 'locale', 'icon.svg', 'cordis.patch.yml', 'README.md']) assert.ok(pkg.files.includes(file), file);
     assert.ok(pkg.peerDependencies['@deepseek-ai/dsh-home-paths'], 'it takes its folder from DSH');
     const index = readFileSync(join(PLUGIN_DIR, 'lib', 'index.js'), 'utf8');
     assert.match(index, /from '@deepseek-ai\/dsh-home-paths'/);
@@ -727,7 +1009,8 @@ test('readme: its settings, limits, routes and states are the code\'s', async (t
     assert.deepEqual(problems, [], 'each one is a setting of the bridge');
     // The limits the README gives are the code's.
     for (const text of [`\`${MAX_BODY_DEFAULT}\``, `${MAX_BODY_RANGE[0]} to ${MAX_BODY_RANGE[1]}`, `at most ${SOCKET_PATH_MAX} bytes`, `Past ${LOG_MAX_BYTES / 1048576} MB`,
-        `(0 to ${WAIT_MAX_SECONDS})`, `\`limit\` is 1 to ${EVENTS_LIMIT_MAX}`, 'at most 500 characters', '1 to 128 letters, digits or `. _ : -`', '20 s to read a session or the list, 60 s to take a prompt']) {
+        `(0 to ${WAIT_MAX_SECONDS})`, `\`limit\` is 1 to ${EVENTS_LIMIT_MAX}`, 'at most 500 characters', '1 to 128 letters, digits or `. _ : -`',
+        `${READ_MS / 1000} s to read a session or the list, ${PROMPT_MS / 1000} s to take a prompt`, `\`${CREATES_FILE}\``]) {
         assert.ok(readme.includes(text), `the README says ${text}`);
     }
     // Every route in its table is one the bridge answers, with that method.
@@ -748,7 +1031,7 @@ test('readme: its settings, limits, routes and states are the code\'s', async (t
     assert.ok(dsh.calls.some(([kind]) => kind === 'cancel'));
     // The states it lists are the ones requestState gives, and the status codes the ones the bridge answers with.
     const states = [...readme.matchAll(/^\| `(\w+)` \| (?!Meaning)/gm)].map((m) => m[1]).filter((s) => !table.includes(s));
-    assert.deepEqual(states, ['waiting', 'queued', 'read', 'answered', 'dropped']);
+    assert.deepEqual(states, ['waiting', 'queued', 'read', 'answered', 'unfinished', 'dropped']);
     const codes = [...readme.matchAll(/^\| (\d{3}) \|/gm)].map((m) => Number(m[1]));
     assert.deepEqual(codes, [400, 404, 405, 409, 413, 500, 503, 504]);
 });

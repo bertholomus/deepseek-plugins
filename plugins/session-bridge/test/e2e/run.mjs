@@ -129,8 +129,12 @@ const read = (file) => {
         return '';
     }
 };
-/** The user messages in a session's own log sent with one request id. */
-const sentWith = async (sessionId, rid) => (await run.events(sessionId, 'user/message')).filter((e) => e.source?.rpcId === rid);
+/** Whether an rpcId is one attempt of a request id: the id itself, or `<id>~<n>` when the bridge sent it again. */
+const ofRequest = (rpcId, rid) => rpcId === rid || (typeof rpcId === 'string' && rpcId.startsWith(`${rid}~`) && /^\d+$/.test(rpcId.slice(rid.length + 1)));
+/** The user messages in a session's own log sent with one request id (each attempt). */
+const sentWith = async (sessionId, rid) => (await run.events(sessionId, 'user/message')).filter((e) => ofRequest(e.source?.rpcId, rid));
+/** The same, read from the session's log on disk, as DSH saved it (not through the bridge). */
+const savedWith = (sessionId, rid) => run.savedEvents(sessionId).filter((e) => e.type === 'user/message' && ofRequest(e.data?.source?.rpcId, rid));
 const turnEnds = (sessionId) => run.events(sessionId, 'turn/end');
 
 /** The TCP addresses DSH's process listens on (lsof), or null when lsof cannot say. */
@@ -143,6 +147,8 @@ function tcpListeners() {
     }
 }
 const windowPort = () => Number(new URL(run.signInLink()).port);
+/** The bridge's entry in DSH's plugin inventory (what its Plugins page shows): phase, switch and meta. */
+const bridgeEntry = async () => (await run.api('pluginInventory/list', {}))?.value?.entries?.find((e) => e.moduleName === 'dsh-plugin-session-bridge');
 
 /** Start DSH again without clearing the socket first (the harness's boot() removes it): the bridge must replace a stale one itself. */
 async function startKeepingSocket(what) {
@@ -195,6 +201,26 @@ try {
         check('GET /sessions/:id/events by type: the reply', page.events.length === 1 && page.events[0].text === `First reply ${MARK}` && page.more === false, json(page).slice(0, 300));
         const retry = (await call('POST', `/sessions/${ids.first}/prompt`, { text: `E2E:say First reply ${MARK}`, requestId: rid })).body;
         check('a retry with the same request id is not sent again: said so, and the log still has it once', retry.alreadySent === true && (await sentWith(ids.first, rid)).length === 1, json(retry));
+    });
+
+    await step('a create retried with its request id: one session and one message, also when the retry overlaps the first', async () => {
+        const rid = `e2e-create-${randomUUID().slice(0, 8)}`;
+        const body = { workspacePath: run.ws, title: `${TITLE} once`, text: 'E2E:say Made once', requestId: rid };
+        const before = (await run.bridge('GET', '/sessions')).length;
+        const [a, b] = await Promise.all([call('POST', '/sessions', body), call('POST', '/sessions', body)]);
+        check('both answered 200 with the same session; the second says it was already made and already sent', a.status === 200 && b.status === 200 && a.body.sessionId === b.body.sessionId
+            && [a.body, b.body].filter((x) => x.alreadyCreated === true && x.prompt?.alreadySent === true).length === 1, json([a.body, b.body]));
+        ids.once = a.body.sessionId;
+        const done = (await call('GET', `/sessions/${ids.once}/requests/${rid}?wait=60`)).body;
+        const third = await call('POST', '/sessions', body);
+        check('a third try after it was answered: the same session, nothing sent', third.status === 200 && third.body.sessionId === ids.once && third.body.alreadyCreated === true && third.body.prompt?.alreadySent === true && third.body.prompt.state === 'answered', third.text);
+        const after = (await run.bridge('GET', '/sessions')).length;
+        const sent = await sentWith(ids.once, rid);
+        check('DSH has one more session, not two, and its log has the message once, answered', done.state === 'answered' && done.reply?.text === 'Made once' && sent.length === 1 && after === before + 1, json({ done, sent: sent.length, before, after }));
+        const record = join(ownDir, 'creates.jsonl');
+        check('the record beside the socket is 600 and holds ids, never the text or the title', modeOf(record) === 0o600 && read(record).includes(rid) && !read(record).includes('Made once') && !read(record).includes(TITLE), read(record).slice(0, 300));
+        const other = await call('POST', '/sessions', { ...body, workspacePath: run.root });
+        check('the same request id for another folder: 409 in words, and nothing made', other.status === 409 && other.body?.error?.code === 'request/conflict' && other.body.sessionId === ids.once, other.text);
     });
 
     await step('steer into a running turn, and a followup after it: each read where it should be, and answered', async () => {
@@ -313,11 +339,13 @@ try {
     }
 
     // ── Restart and crash ─────────────────────────────────────────────
-    await step('a restart under a running turn: the old socket is replaced, the turn reads as interrupted, nothing is sent again', async () => {
+    await step('a restart under a running turn: the old socket is replaced, the turn reads as interrupted, its prompt is sent again once', async () => {
         const rid = `e2e-restart-${randomUUID().slice(0, 8)}`;
         ids.restarted = (await run.bridge('POST', '/sessions', { workspacePath: run.ws, title: 'Restarted', text: 'E2E:slow', requestId: rid })).sessionId;
         await waitFor(async () => (await run.session(ids.restarted)).status === 'running', 'the slow turn to run', 30000, 200);
         await run.stop();
+        // DSH saves a session's events about 200 ms after they happen: what reached the disk before it quit decides the path.
+        const saved = savedWith(ids.restarted, rid).length;
         const left = existsSync(run.sock) && statSync(run.sock).isSocket() ? statSync(run.sock).ino : undefined;
         check('DSH quit: nobody answers on the socket', !(await answers()));
         await startKeepingSocket('restart under a running turn');
@@ -328,16 +356,40 @@ try {
         }, 'the interrupted turn to be closed', 30000, 300);
         check('the turn that was running reads as interrupted', s.turns.lastEnd?.kind === 'interrupted' && s.turns.started === 1, json(s.turns));
         const state = (await call('GET', `/sessions/${ids.restarted}/requests/${rid}`)).body;
-        check('what became of its prompt: dropped (DSH stopped before saving it), with the turn\'s interrupted end', state.state === 'dropped' && state.end?.kind === 'interrupted' && (await sentWith(ids.restarted, rid)).length === 0, json(state));
+        const expected = saved ? 'unfinished' : 'dropped';
+        check(`what became of its prompt matches the log on disk: ${expected} (${saved ? 'DSH saved it before it quit' : 'DSH quit before it saved it'}), with the turn's interrupted end`, state.state === expected && state.end?.kind === 'interrupted', json({ state, saved }));
         const retry = (await call('POST', `/sessions/${ids.restarted}/prompt`, { text: 'E2E:say Sent again after the restart', requestId: rid })).body;
         const answered = (await call('GET', `/sessions/${ids.restarted}/requests/${rid}?wait=60`)).body;
-        check('a retry with its request id is sent (nothing is lost), answered, and in the log once', retry.accepted === true && !retry.alreadySent && answered.state === 'answered' && answered.reply?.text === 'Sent again after the restart'
-            && (await sentWith(ids.restarted, rid)).length === 1, json({ retry, answered }));
+        check('a retry with its request id is sent (nothing is lost) and answered', retry.accepted === true && !retry.alreadySent && answered.state === 'answered' && answered.reply?.text === 'Sent again after the restart', json({ retry, answered }));
         const again = (await call('POST', `/sessions/${ids.restarted}/prompt`, { text: 'E2E:say Sent again after the restart', requestId: rid })).body;
-        check('and once answered, the same id is not sent a third time', again.alreadySent === true && again.state === 'answered' && (await sentWith(ids.restarted, rid)).length === 1, json(again));
+        check('once answered, the same id is not sent a third time', again.alreadySent === true && again.state === 'answered', json(again));
+        check('the log has the message once per attempt: the first only if DSH saved it, then the one sent again', (await sentWith(ids.restarted, rid)).length === saved + 1, json(await sentWith(ids.restarted, rid)));
         check('the restart sent nothing by itself: the first prompt is in its session\'s log once', (await sentWith(ids.first, ids.firstRid)).length === 1);
         const cold = await call('POST', `/sessions/${ids.first}/cancel`, {});
         check('cancel on a session not open in DSH since the restart: 409, said in words', cold.status === 409 && cold.body?.error?.code === 'session/not-running' && /is not open in DSH, so no turn runs to cancel/.test(cold.body.error.message), cold.text);
+    });
+
+    await step('a restart after DSH saved the prompt and while its turn still ran: unfinished, then sent once more as a new attempt, answered, and on disk once each', async () => {
+        const rid = `e2e-saved-${randomUUID().slice(0, 8)}`;
+        ids.saved = (await run.bridge('POST', '/sessions', { workspacePath: run.ws, title: 'Saved then cut off', text: 'E2E:slow', requestId: rid })).sessionId;
+        await waitFor(async () => (await run.session(ids.saved)).status === 'running', 'the slow turn to run', 30000, 200);
+        await waitFor(() => savedWith(ids.saved, rid).length === 1, 'DSH to save the message on disk', 30000, 100);
+        const read = (await call('GET', `/sessions/${ids.saved}/requests/${rid}`)).body;
+        check('before the restart: read by the running turn', read.state === 'read' && read.turn === 1, json(read));
+        await run.stop();
+        await startKeepingSocket('restart after the message was saved');
+        await waitFor(async () => (await run.session(ids.saved)).turns.ended >= 1, 'the interrupted turn to be closed', 30000, 300);
+        const cut = (await call('GET', `/sessions/${ids.saved}/requests/${rid}?wait=30`)).body;
+        check('after it: unfinished, the turn interrupted, and a wait ends on it at once', cut.state === 'unfinished' && cut.end?.kind === 'interrupted' && cut.timedOut === false && cut.seq === read.seq, json(cut));
+        const resent = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: 'E2E:say Done after the cut', requestId: rid })).body;
+        check('a retry with the same id is sent once more, as attempt 2', resent.accepted === true && !resent.alreadySent && resent.resent === true && resent.attempt === 2 && resent.requestId === rid, json(resent));
+        const done = (await call('GET', `/sessions/${ids.saved}/requests/${rid}?wait=60`)).body;
+        check('attempt 2 is answered by a turn of its own', done.state === 'answered' && done.attempt === 2 && done.turn === 2 && done.reply?.text === 'Done after the cut', json(done));
+        const third = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: 'E2E:say Done after the cut', requestId: rid })).body;
+        check('a third try sends nothing', third.alreadySent === true && third.state === 'answered' && third.attempt === 2, json(third));
+        await waitFor(() => savedWith(ids.saved, rid).length === 2, 'both attempts on disk', 10000, 100).catch(() => {});
+        const disk = savedWith(ids.saved, rid).map((e) => e.data.source.rpcId);
+        check('the session\'s log on disk: the first attempt once and the second once, nothing more', json(disk) === json([rid, `${rid}~2`]), json(disk));
     });
 
     await step('a crash (SIGKILL to DSH\'s process group): the bridge comes back on the same socket', async () => {
@@ -397,15 +449,24 @@ try {
             await waitFor(() => read(newLog).includes(`not listening on ${otherSock}: another program answers on ${otherSock}`), 'the refusal in the log', 30000, 300);
             const still = await call('GET', '/health', undefined, { sock: otherSock });
             check('the bridge refused it, in its log, and the other program still answers there', still.body?.other === true, still.text);
+            const failed = await waitFor(async () => (await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null, 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
+            check('DSH shows the plugin as failed (its Plugins page says Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json(failed));
+            check('and DSH\'s own log says why', run.logText().includes(`Session Bridge is not listening on ${otherSock}: another program answers on ${otherSock}`), run.logText().slice(-800));
         } finally {
             writeRow({ logFile: newLog });
             await waitFor(() => answers(), 'the bridge back on its own socket', 30000, 300);
             await new Promise((r) => other.close(r));
         }
-        check('pointed back at its own socket, it answers again', await answers());
+        check('pointed back at its own socket, it answers again, and DSH shows it running', (await answers()) && (await waitFor(async () => (await bridgeEntry())?.fiberPhase === 'active', 'the plugin to run', 30000, 300).catch(() => false)));
     });
 
     // ── Plugins ───────────────────────────────────────────────────────
+    await step('the Plugins page presents it as DSH presents its own: a title, a plain sentence and an icon', async () => {
+        const entry = await bridgeEntry();
+        check('its title and sentence, not the package id', entry?.meta?.title === 'Session Bridge' && /^Lets scripts and scheduled jobs/.test(entry.meta.description ?? ''), json(entry));
+        check('its icon is its own SVG', /svg/.test(json(entry?.meta?.icon ?? '')), json(entry?.meta?.icon ?? null).slice(0, 200));
+    });
+
     await step('switched off in Plugins: no socket left, the same TCP ports; on again, it answers', async () => {
         const tcpOn = tcpListeners();
         const off = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: false });

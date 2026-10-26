@@ -11,11 +11,11 @@
  * @module dsh-plugin-session-bridge/bridge
  */
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, closeSync, constants as fsc, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 export const PLUGIN = 'session-bridge';
 /** The longest socket path macOS takes (104 bytes with its closing zero byte). */
@@ -29,15 +29,17 @@ export const EVENTS_LIMIT_MAX = 2000;
 /** maxBodyBytes: its default and its range. */
 export const MAX_BODY_DEFAULT = 1048576;
 export const MAX_BODY_RANGE = Object.freeze([1024, 64 * 1024 * 1024]);
-/** A request id a caller chooses: letters, digits and . _ : - (128 at most). */
+/** A request id a caller chooses: letters, digits and . _ : - (128 at most). A resend adds `~<n>`, which no caller's id can hold. */
 export const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-/** How many prompt request ids the bridge remembers, for "already sent". */
+/** How many request ids the bridge remembers, for "already sent" and "already made". */
 const REMEMBERED = 5000;
 const TITLE_MAX = 500;
 const TEXT_PREVIEW = 4000;
-/** How long the bridge gives DSH for one call, in ms. */
-const READ_MS = 20000;
-const PROMPT_MS = 60000;
+/** How long the bridge gives DSH for one call, in ms: it answers 504 when DSH takes longer. */
+export const READ_MS = 20000;
+export const PROMPT_MS = 60000;
+/** The file beside the socket that remembers which session each create's request id made. */
+export const CREATES_FILE = 'creates.jsonl';
 const SETTING_KEYS = new Set(['enabled', 'socketPath', 'logFile', 'maxBodyBytes']);
 
 // ── Small helpers ─────────────────────────────────────────────────────
@@ -97,6 +99,27 @@ export function statusFor(error) {
     if (code === 'gateway/cancelled') return 504;
     if (code.includes('/') && code !== 'gateway/internal') return 409;
     return 500;
+}
+
+/** Whether DSH said "no such session": its code, its own error class, or its words. Any other failure is not a 404. */
+export function isNotFound(error) {
+    if (statusFor(error) === 404) return true;
+    if (error?.constructor?.name === 'ApiSessionNotFound' || error?.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return true;
+    return /^session "[^"]*" not found$/.test(typeof error?.message === 'string' ? error.message : '');
+}
+
+/**
+ * `promise`, or a rejection made by `onTimeout` when it takes longer than `ms`. DSH checks a call's signal only
+ * as the call starts, so the bridge keeps its own deadline. A late failure of `promise` is caught, never unhandled.
+ */
+export function withDeadline(promise, ms, onTimeout) {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(onTimeout()), ms);
+        timer.unref?.();
+    });
+    Promise.resolve(promise).catch(() => {});
+    return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
@@ -219,28 +242,68 @@ export function sessionSummary(sessionId, header, events, agent) {
     };
 }
 
+/** Which attempt of `requestId` an rpcId is: 1 for the id itself, n for `<id>~n` (sent again), 0 for another id. */
+export function attemptOf(rpcId, requestId) {
+    if (typeof rpcId !== 'string') return 0;
+    if (rpcId === requestId) return 1;
+    if (!rpcId.startsWith(`${requestId}~`)) return 0;
+    const n = Number(rpcId.slice(requestId.length + 1));
+    return Number.isInteger(n) && n >= 2 ? n : 0;
+}
+
+/** The rpcId DSH gets for one attempt: the request id itself, then `<id>~2`, `<id>~3` for each send after a cut-off turn. */
+export const rpcIdFor = (requestId, attempt) => (attempt > 1 ? `${requestId}~${attempt}` : requestId);
+
+/** Turn ends after which a prompt was not done: DSH stopped or crashed under the turn, or the turn failed. */
+const UNFINISHED = new Set(['interrupted', 'error']);
+
 /**
  * What became of one prompt, read from the session's own log, by its request id:
  *
  * - "waiting": not in the log yet (on its way into DSH);
  * - "queued": in DSH's inbox, for the next turn (a followup) or the next step (a steer);
- * - "read": a turn took it and is still running (DSH saves the message as the step ends);
- * - "answered": the turn that read it ended: how (`end`), and its last reply (`reply`, or null);
- * - "dropped": it left the inbox but never reached the log as a message: the turn that took it
- *   was cut off before DSH saved it (DSH stopped mid-step), or the queue was cleared. Send it again.
+ * - "read": a turn took it and is still running;
+ * - "answered": the turn that read it finished (completed) or was stopped on purpose (aborted): how (`end`),
+ *   and its last reply (`reply`, or null);
+ * - "unfinished": the turn that read it ended without finishing it: DSH stopped or crashed under it
+ *   (interrupted), or it failed (error). Send it again with the same id: the bridge sends it once more;
+ * - "dropped": it left the inbox but never reached the log as a message: the turn that took it was cut off
+ *   before DSH saved it, or it was taken out of the queue (`removed: true`). Send it again.
+ *
+ * A prompt sent again after a cut-off turn goes to DSH as `<id>~2` (then `~3`), because DSH takes each rpcId
+ * once per session; the newest attempt counts, and `attempt` names it when it is not the first.
+ * @param {object[]} events - the session's log.
+ * @param {string} requestId - the caller's (or the bridge's) request id.
+ * @param {number} [sent] - the attempt this bridge has sent and may not see yet in the log (0: none).
  */
-export function requestState(events, requestId) {
-    const mine = (message) => message?.source?.rpcId === requestId;
+export function requestState(events, requestId, sent = 0) {
+    let latest = 0;
+    for (const e of events) {
+        if (e.type === 'user/message') latest = Math.max(latest, attemptOf(e.data?.source?.rpcId, requestId));
+        else if (e.type === 'agent/inbox/spliced' && Array.isArray(e.data?.inserted)) {
+            for (const m of e.data.inserted) latest = Math.max(latest, attemptOf(m?.source?.rpcId, requestId));
+        }
+    }
+    const attempt = Math.max(latest, sent);
+    const named = attempt > 1 ? { attempt } : {};
+    if (sent > latest || latest === 0) return { requestId, state: 'waiting', ...named };
+    return { requestId, ...attemptState(events, rpcIdFor(requestId, latest)), ...named };
+}
+
+/** The state of one attempt (one rpcId) in the session's log. */
+function attemptState(events, rpcId) {
+    const mine = (message) => message?.source?.rpcId === rpcId;
     const at = events.findLastIndex((e) => e.type === 'user/message' && mine(e.data));
     if (at >= 0) {
         const message = events[at];
         const start = events.slice(0, at).findLast((e) => e.type === 'turn/start');
         const endAt = events.findIndex((e, i) => i > at && e.type === 'turn/end');
-        const out = { requestId, state: endAt < 0 ? 'read' : 'answered', seq: message.seq };
+        const out = { state: 'read', seq: message.seq };
         const turn = start?.data?.turn ?? message.data?.turn;
         if (turn !== undefined) out.turn = turn;
         if (endAt >= 0) {
             out.end = endOf(events[endAt]);
+            out.state = UNFINISHED.has(out.end.kind) ? 'unfinished' : 'answered';
             out.reply = lastAssistantText(events.slice(at + 1, endAt));
         }
         return out;
@@ -249,26 +312,33 @@ export function requestState(events, requestId) {
     const inbox = { 'next-turn': [], 'next-step': [] };
     let queued;
     let taken;
+    let removed = false;
     for (const e of events) {
         if (e.type !== 'agent/inbox/spliced' || !isRecord(e.data)) continue;
         const d = e.data;
         const list = inbox[d.target] ?? (inbox[d.target] = []);
         const inserted = Array.isArray(d.inserted) ? d.inserted : [];
-        const removed = list.splice(Number.isInteger(d.start) ? d.start : 0, Number.isInteger(d.removedCount) ? d.removedCount : 0, ...inserted);
+        const out = list.splice(Number.isInteger(d.start) ? d.start : 0, Number.isInteger(d.removedCount) ? d.removedCount : 0, ...inserted);
         // The latest attempt counts: a prompt sent again after it was dropped is queued anew.
-        if (removed.some(mine) && queued !== undefined && taken === undefined) taken = e;
+        if (out.some(mine) && queued !== undefined && taken === undefined) {
+            taken = e;
+            // DSH marks a removal from the queue (in the window, or a clear) as canceled; a turn taking it has no outcome.
+            removed = d.outcome === 'canceled';
+        }
         if (inserted.some(mine)) {
             queued = e;
             taken = undefined;
+            removed = false;
         }
     }
-    if (!queued) return { requestId, state: 'waiting' };
-    if (!taken) return { requestId, state: 'queued', seq: queued.seq, target: queued.data.target };
+    if (!queued) return { state: 'waiting' };
+    if (!taken) return { state: 'queued', seq: queued.seq, target: queued.data.target };
+    if (removed) return { state: 'dropped', seq: taken.seq, removed: true };
     const before = events.filter((e) => e.seq <= taken.seq);
     const lastStart = before.findLast((e) => e.type === 'turn/start');
     const lastEnd = before.findLast((e) => e.type === 'turn/end');
     const open = lastStart !== undefined && (lastEnd === undefined || lastEnd.seq < lastStart.seq);
-    const out = { requestId, state: 'dropped', seq: taken.seq };
+    const out = { state: 'dropped', seq: taken.seq };
     if (open && lastStart.data?.turn !== undefined) out.turn = lastStart.data.turn;
     if (!open) return out;
     const end = events.find((e) => e.seq > taken.seq && e.type === 'turn/end');
@@ -282,8 +352,8 @@ function endOf(event) {
     return { seq: event.seq, ...(isRecord(reason) ? reason : { kind: String(reason ?? 'unknown') }) };
 }
 
-/** States a prompt does not leave. */
-const FINAL = new Set(['answered', 'dropped']);
+/** States a prompt does not leave by itself (a wait ends on them). */
+const FINAL = new Set(['answered', 'unfinished', 'dropped']);
 
 // ── Query values ──────────────────────────────────────────────────────
 
@@ -306,6 +376,73 @@ function wholeParam(url, key, fallback, min, max, what = `a whole number of at l
 const SENT = new Map();
 
 /**
+ * Which session each create's request id made, kept in a file beside the socket (mode 600, one JSON line per
+ * create: the request id, the session id and its workspace; never a text or a title), so a create retried
+ * after DSH restarts finds its session. It holds the last 5000 and is written again, shorter, past 10000 lines.
+ */
+export function createsRecord(file) {
+    const map = new Map();
+    let loaded = false;
+    let lines = 0;
+    const load = () => {
+        if (loaded) return;
+        loaded = true;
+        if (!file) return;
+        let text = '';
+        try {
+            text = readFileSync(file, 'utf8');
+        } catch {
+            return;
+        }
+        for (const line of text.split('\n')) {
+            if (!line.trim()) continue;
+            lines += 1;
+            try {
+                const entry = JSON.parse(line);
+                if (typeof entry?.requestId === 'string' && typeof entry.sessionId === 'string') {
+                    map.delete(entry.requestId);
+                    map.set(entry.requestId, entry);
+                }
+            } catch {}
+        }
+        while (map.size > REMEMBERED) map.delete(map.keys().next().value);
+    };
+    const writeAll = () => {
+        const tmp = `${file}.tmp`;
+        writeFileSync(tmp, [...map.values()].map((e) => `${JSON.stringify(e)}\n`).join(''), { mode: 0o600, flag: 'w' });
+        renameSync(tmp, file);
+        lines = map.size;
+    };
+    return {
+        get(requestId) {
+            load();
+            return map.get(requestId);
+        },
+        /** Remember one; a file that cannot be written is said (the caller logs it) and never stops the create. */
+        add(entry) {
+            load();
+            map.delete(entry.requestId);
+            map.set(entry.requestId, entry);
+            while (map.size > REMEMBERED) map.delete(map.keys().next().value);
+            if (!file) return;
+            if (lines + 1 > 2 * REMEMBERED) return writeAll();
+            const fd = openSync(file, fsc.O_WRONLY | fsc.O_APPEND | fsc.O_CREAT | fsc.O_NOFOLLOW, 0o600);
+            try {
+                fchmodSync(fd, 0o600);
+                writeSync(fd, `${JSON.stringify(entry)}\n`);
+            } finally {
+                closeSync(fd);
+            }
+            lines += 1;
+        },
+        get size() {
+            load();
+            return map.size;
+        },
+    };
+}
+
+/**
  * One bridge: its routes over DSH's services, its log and its socket.
  *
  * @param {object} options
@@ -314,7 +451,7 @@ const SENT = new Map();
  * @param {{ info: Function, warn: Function, error?: Function }} [options.logger] - DSH's logger.
  * @param {string} [options.version] - the plugin's version, for GET /health.
  */
-export function createBridge({ host, settings, logger, version = '', sent = SENT, logMaxBytes = LOG_MAX_BYTES }) {
+export function createBridge({ host, settings, logger, version = '', sent = SENT, logMaxBytes = LOG_MAX_BYTES, readMs = READ_MS, promptMs = PROMPT_MS }) {
     const { values, problems } = settings;
     const socketPath = values.socketPath;
     const say = {
@@ -329,22 +466,29 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
     function log(line) {
         if (!logFile) return;
         try {
+            const text = `${new Date().toISOString()} ${line}\n`;
+            const bytes = Buffer.byteLength(text);
             if (logSize < 0) {
                 mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
                 try {
-                    logSize = statSync(logFile).size;
-                    chmodSync(logFile, 0o600);
+                    logSize = lstatSync(logFile).size;
                 } catch {
                     logSize = 0;
                 }
             }
-            const text = `${new Date().toISOString()} ${line}\n`;
-            if (logSize + text.length > logMaxBytes && logSize > 0) {
+            if (logSize > 0 && logSize + bytes > logMaxBytes) {
                 renameSync(logFile, `${logFile}.1`);
                 logSize = 0;
             }
-            appendFileSync(logFile, text, { mode: 0o600 });
-            logSize += Buffer.byteLength(text);
+            // O_NOFOLLOW: a symlink at the log's path is never written through. The mode is 600 even for a log that was wider.
+            const fd = openSync(logFile, fsc.O_WRONLY | fsc.O_APPEND | fsc.O_CREAT | fsc.O_NOFOLLOW, 0o600);
+            try {
+                fchmodSync(fd, 0o600);
+                writeSync(fd, text);
+            } finally {
+                closeSync(fd);
+            }
+            logSize += bytes;
         } catch {
             // The log never stops the bridge; the next line tries again from the file's real size.
             logSize = -1;
@@ -366,7 +510,7 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
     /**
      * Run `check` now and again after each event of the session, until it
      * says yes, `ms` pass, the caller goes away or the bridge stops.
-     * @returns {Promise<boolean>} whether `check` said yes.
+     * @returns {Promise<'yes' | 'timeout' | 'stopped' | 'gone'>} why the wait ended.
      */
     function waitUntil(sessionId, ms, check, signal) {
         return new Promise((resolvePromise, reject) => {
@@ -395,25 +539,28 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
                 try {
                     do {
                         again = false;
-                        if (await check()) return finish(true);
+                        if (await check()) return finish('yes');
                     } while (again && !done);
                 } catch (error) {
-                    finish(false, error);
+                    finish(undefined, error);
                 } finally {
                     busy = false;
                 }
             };
             const wake = () => {
-                if (stopping) return finish(false);
+                if (stopping) return finish('stopped');
                 void run();
             };
-            const onAbort = () => finish(false);
-            if (signal?.aborted || stopping) return finish(false);
+            const onAbort = () => finish('gone');
+            if (signal?.aborted) return finish('gone');
+            if (stopping) return finish('stopped');
             signal?.addEventListener?.('abort', onAbort, { once: true });
             if (!waiters.has(sessionId)) waiters.set(sessionId, new Set());
             waiters.get(sessionId).add(wake);
-            timer = setTimeout(() => finish(false), ms);
+            timer = setTimeout(() => finish('timeout'), ms);
             timer.unref?.();
+            // An event that landed between the caller's first read and this registration is not missed.
+            void run();
         });
     }
 
@@ -421,18 +568,32 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
     const sc = () => host.sessionController();
 
     async function inspect(sessionId) {
+        let r;
         try {
-            const r = await sc().inspect(sessionId, AbortSignal.timeout(READ_MS));
-            return { header: r?.meta, events: Array.isArray(r?.events) ? r.events : [] };
+            r = await withDeadline(sc().inspect(sessionId, AbortSignal.timeout(readMs)), readMs, () => Object.assign(new Error('timeout'), { name: 'TimeoutError' }));
         } catch (error) {
-            if (statusFor(error) === 504) throw new BridgeError(504, 'dsh/timeout', `DSH did not read session ${sessionId} in ${READ_MS / 1000} s; try again.`);
-            throw new BridgeError(404, 'session/not-found', errorText(error) || `session "${sessionId}" not found`);
+            if (statusFor(error) === 504) throw new BridgeError(504, 'dsh/timeout', `DSH did not read session ${sessionId} in ${readMs / 1000} s; try again.`);
+            if (isNotFound(error)) throw new BridgeError(404, 'session/not-found', errorText(error) || `session "${sessionId}" not found`);
+            // Not "not found": the session may well be there, so a caller must not make a new one for its job.
+            throw new BridgeError(500, 'session/read-failed', `DSH could not read session ${sessionId}: ${errorText(error)}. The session may still be there: try again; DSH's log says more.`);
         }
+        return { header: r?.meta, events: Array.isArray(r?.events) ? r.events : [] };
     }
 
-    const remember = (requestId, sessionId) => {
-        sent.set(requestId, sessionId);
+    /** Remember an attempt this bridge is sending (or sent) for a request id, before DSH is asked. */
+    const remember = (requestId, sessionId, attempt) => {
+        sent.delete(requestId);
+        sent.set(requestId, { sessionId, attempt });
         while (sent.size > REMEMBERED) sent.delete(sent.keys().next().value);
+    };
+    /** The attempt this bridge sent for a request id to this session, or 0. */
+    const sentAttempt = (requestId, sessionId) => {
+        const memo = sent.get(requestId);
+        if (memo === sessionId) return 1;
+        return memo?.sessionId === sessionId ? memo.attempt : 0;
+    };
+    const forget = (requestId, sessionId, attempt) => {
+        if (sentAttempt(requestId, sessionId) === attempt) sent.delete(requestId);
     };
 
     function requestIdOf(body) {
@@ -452,39 +613,61 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         const mode = body.mode === 'steer' ? 'steer' : 'followup';
         const own = requestIdOf(body);
         const requestId = own ?? `bridge-${randomUUID()}`;
+        let attempt = 1;
         if (own) {
-            // A caller's own id makes a retry safe: one DSH has (queued, read or answered), or one this bridge
-            // is still handing over, is not sent again; one that was dropped (DSH stopped before saving it) is.
-            const { state } = requestState((await inspect(sessionId)).events, own);
-            if (state === 'queued' || state === 'read' || state === 'answered' || (state === 'waiting' && sent.get(own) === sessionId)) {
-                log(`prompt ${sessionId} already-sent request=${own} state=${state}`);
-                return { accepted: true, alreadySent: true, state, mode, requestId: own, chars: text.length };
+            // A caller's own id makes a retry safe: one DSH has (queued, read or answered), or one this bridge is
+            // still handing over, is not sent again. A dropped one is sent again; an unfinished one (its turn was
+            // cut off after DSH saved it) is sent once more as the next attempt, which DSH takes as a new message.
+            const { events } = await inspect(sessionId);
+            const known = sentAttempt(own, sessionId);
+            const now = requestState(events, own, known);
+            if (now.state === 'queued' || now.state === 'read' || now.state === 'answered' || (now.state === 'waiting' && known > 0)) {
+                log(`prompt ${sessionId} already-sent request=${own} state=${now.state}`);
+                return { accepted: true, alreadySent: true, state: now.state, mode, requestId: own, chars: text.length, ...(now.attempt ? { attempt: now.attempt } : {}) };
             }
+            const last = now.attempt ?? (now.state === 'waiting' ? 0 : 1);
+            attempt = now.state === 'unfinished' ? last + 1 : Math.max(last, 1);
         }
         // Remembered before DSH is asked, so a retry that comes while this one is on its way is not sent twice.
-        remember(requestId, sessionId);
+        remember(requestId, sessionId, attempt);
+        const rpcId = rpcIdFor(requestId, attempt);
+        const call = Promise.resolve().then(() => sc().prompt({ sessionId, content: [{ type: 'text', text }], mode, requestId: rpcId }, AbortSignal.timeout(promptMs)));
+        let late = false;
         try {
-            await sc().prompt({ sessionId, content: [{ type: 'text', text }], mode, requestId }, AbortSignal.timeout(PROMPT_MS));
+            await withDeadline(call, promptMs, () => {
+                late = true;
+                return new BridgeError(504, 'dsh/timeout', `DSH did not take the prompt in ${promptMs / 1000} s. It may still take it: ask GET /sessions/${sessionId}/requests/${requestId} before you send it again.`, { requestId });
+            });
         } catch (error) {
-            sent.delete(requestId);
+            if (late) {
+                // Still remembered: DSH may take it yet, and a retry meanwhile must not send it twice.
+                log(`prompt ${sessionId} timeout request=${requestId} after=${promptMs}ms`);
+                call.then(() => log(`prompt ${sessionId} taken-late request=${requestId}`), (refused) => {
+                    forget(requestId, sessionId, attempt);
+                    log(`prompt ${sessionId} refused-late request=${requestId} ${errorText(refused)}`);
+                });
+            } else {
+                forget(requestId, sessionId, attempt);
+            }
             throw error;
         }
-        log(`prompt ${sessionId} mode=${mode} chars=${text.length} request=${requestId}`);
-        return { accepted: true, mode, requestId, chars: text.length };
+        log(`prompt ${sessionId} mode=${mode} chars=${text.length} request=${requestId}${attempt > 1 ? ` attempt=${attempt}` : ''}`);
+        return { accepted: true, mode, requestId, chars: text.length, ...(attempt > 1 ? { attempt, resent: true } : {}) };
+    }
+
+    function effortOf(body) {
+        if (body.reasoningEffort === undefined || body.reasoningEffort === null) return undefined;
+        if (typeof body.reasoningEffort !== 'string' || !body.reasoningEffort.trim()) throw bad('reasoningEffort must be a string, such as "high".');
+        return body.reasoningEffort;
     }
 
     async function selectModel(sessionId, body) {
         if (typeof body.provider !== 'string' || !body.provider || typeof body.model !== 'string' || !body.model) {
             throw bad('provider and model are required, as strings (GET /models lists them).');
         }
-        if (body.reasoningEffort !== undefined && body.reasoningEffort !== null && typeof body.reasoningEffort !== 'string') {
-            throw bad('reasoningEffort must be a string, such as "high".');
-        }
-        const r = await sc().selectModel({
-            sessionId, provider: body.provider, model: body.model,
-            ...(body.reasoningEffort ? { reasoningEffort: body.reasoningEffort } : {}),
-        });
-        log(`model ${sessionId} ${body.provider}/${body.model}${body.reasoningEffort ? ` ${body.reasoningEffort}` : ''}`);
+        const effort = effortOf(body);
+        const r = await sc().selectModel({ sessionId, provider: body.provider, model: body.model, ...(effort ? { reasoningEffort: effort } : {}) });
+        log(`model ${sessionId} ${body.provider}/${body.model}${effort ? ` ${effort}` : ''}`);
         return r;
     }
 
@@ -520,33 +703,89 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         throw bad('workspacePath (a folder) or workspaceId (from GET /workspaces) is required.');
     }
 
-    async function createSession(body) {
+    // ── Creates: one session per request id, even when retried after a timeout or a restart ──
+    const creates = createsRecord(socketPath ? join(dirname(socketPath), CREATES_FILE) : '');
+    /** request id → the create (or carry-on) running for it now, so retries that overlap run one after another. */
+    const creating = new Map();
+
+    function checkCreate(body) {
         for (const key of ['title', 'text', 'provider', 'model', 'agentPreset']) {
             if (body[key] !== undefined && body[key] !== null && typeof body[key] !== 'string') throw bad(`${key} must be a string.`);
         }
         if (body.title) titleOf(body);
         if ((body.provider || body.model) && !(body.provider && body.model)) throw bad('provider and model go together: give both, or neither for DSH\'s default model.');
+        if (effortOf(body) !== undefined && !body.model) throw bad('reasoningEffort goes with provider and model: give all three (GET /models lists them), or none for DSH\'s default model and effort.');
         if (typeof body.text === 'string' && body.text !== '' && body.text.trim() === '') throw bad('text must hold more than spaces: the first message to send.');
-        requestIdOf(body);
-        const ws = await workspaceFor(body);
-        const created = await sc().create({ workspaceId: ws.id, ...(body.agentPreset ? { agentPreset: body.agentPreset } : {}) });
-        const sessionId = created.sessionId;
-        log(`create ${sessionId} ws=${ws.path}${body.agentPreset ? ` preset=${body.agentPreset}` : ''}`);
-        const out = { sessionId, workspace: { id: ws.id, path: ws.path } };
-        // The session exists from here on: a step that fails says so, with the session's id, so the caller can carry on or clean up.
+        return requestIdOf(body);
+    }
+
+    async function createSession(body) {
+        const own = checkCreate(body);
+        if (!own) return makeSession(body);
+        // Retries of one request id run one after another: the second finds the session the first made.
+        const before = creating.get(own) ?? Promise.resolve();
+        const run = before.catch(() => {}).then(() => (creates.get(own) ? carryOn(creates.get(own), body, own) : makeSession(body, own)));
+        creating.set(own, run);
+        try {
+            return await run;
+        } finally {
+            if (creating.get(own) === run) creating.delete(own);
+        }
+    }
+
+    /** The steps after the session exists: its model, its title, its first prompt. A step that fails says which. */
+    async function steps(sessionId, workspace, body, out, skip = {}) {
         let stepName = 'model';
         try {
-            if (body.model) out.model = await selectModel(sessionId, body);
+            if (body.model && !skip.model) out.model = await selectModel(sessionId, body);
             stepName = 'title';
-            if (body.title) out.title = await rename(sessionId, body.title);
+            if (body.title && !skip.title) out.title = await rename(sessionId, body.title);
             stepName = 'prompt';
             if (body.text) out.prompt = await prompt(sessionId, { text: body.text, mode: 'followup', requestId: body.requestId });
         } catch (error) {
             const status = statusFor(error);
-            const code = codeOf(error);
-            throw new BridgeError(status, code, `Session ${sessionId} was made, but setting its ${stepName} failed: ${errorText(error)}`, { sessionId, workspace: out.workspace, failedStep: stepName });
+            const code = error instanceof BridgeError ? error.code : codeOf(error);
+            throw new BridgeError(status, code, `Session ${sessionId} was made, but setting its ${stepName} failed: ${errorText(error)}`, { sessionId, workspace, failedStep: stepName });
         }
         return out;
+    }
+
+    async function makeSession(body, own) {
+        const ws = await workspaceFor(body);
+        const created = await sc().create({ workspaceId: ws.id, ...(body.agentPreset ? { agentPreset: body.agentPreset } : {}) });
+        const sessionId = created.sessionId;
+        const workspace = { id: ws.id, path: ws.path };
+        log(`create ${sessionId} ws=${ws.path}${body.agentPreset ? ` preset=${body.agentPreset}` : ''}${own ? ` request=${own}` : ''}`);
+        if (own) {
+            try {
+                creates.add({ requestId: own, sessionId, workspace, time: new Date().toISOString() });
+            } catch (error) {
+                log(`error remembering create request=${own}: ${errorText(error)}`);
+            }
+        }
+        // The session exists from here on: a step that fails says so, with the session's id, so the caller can carry on or clean up.
+        return steps(sessionId, workspace, body, { sessionId, workspace });
+    }
+
+    /** A create retried with its request id: the session it made, with the steps it did not finish done now, once. */
+    async function carryOn(known, body, own) {
+        const ws = await workspaceFor(body);
+        if (ws.id !== known.workspace?.id) {
+            throw new BridgeError(409, 'request/conflict', `Request id ${own} already made session ${known.sessionId} in ${known.workspace?.path ?? 'another folder'}; use a new request id for a session in ${ws.path}.`, { sessionId: known.sessionId });
+        }
+        let read;
+        try {
+            read = await inspect(known.sessionId);
+        } catch (error) {
+            if (error?.status !== 404) throw error;
+            throw new BridgeError(409, 'request/session-gone', `Request id ${own} made session ${known.sessionId}, which DSH no longer has; use a new request id to make another.`, { sessionId: known.sessionId });
+        }
+        const { header, events } = read;
+        const chosen = events.findLast((e) => e.type === 'model/selection')?.data;
+        const sameModel = chosen?.provider === body.provider && chosen?.model === body.model && (effortOf(body) === undefined || chosen?.reasoningEffort === body.reasoningEffort);
+        const title = events.findLast((e) => e.type === 'session/title')?.data?.title ?? header?.title;
+        log(`create ${known.sessionId} already-made request=${own}`);
+        return steps(known.sessionId, known.workspace, body, { sessionId: known.sessionId, workspace: known.workspace, alreadyCreated: true }, { model: sameModel, title: title === body.title });
     }
 
     // ── Routes ──
@@ -623,38 +862,42 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         const pick = (list) => list.filter((e) => e.seq > after && (!want || want.has(e.type)));
         let { events } = await inspect(sessionId);
         let chosen = pick(events);
-        let timedOut = false;
+        let ended;
         if (wait > 0 && chosen.length === 0) {
-            const got = await waitUntil(sessionId, wait * 1000, async () => {
+            ended = await waitUntil(sessionId, wait * 1000, async () => {
                 ({ events } = await inspect(sessionId));
                 chosen = pick(events);
                 return chosen.length > 0;
             }, signal);
-            timedOut = !got;
         }
         const more = chosen.length > limit;
         chosen = chosen.slice(0, limit);
-        return { lastSeq: events.at(-1)?.seq ?? -1, more, events: chosen.map((e) => summarize(e, full)), ...(wait > 0 ? { timedOut } : {}) };
+        return { lastSeq: events.at(-1)?.seq ?? -1, more, events: chosen.map((e) => summarize(e, full)), ...waited(wait, ended) };
+    }
+
+    /** What a wait says: `timedOut` (as before) when it ended without news, and `stopped` when the bridge's stop ended it. */
+    function waited(wait, ended) {
+        if (!(wait > 0)) return {};
+        return { timedOut: ended !== undefined && ended !== 'yes', ...(ended === 'stopped' ? { stopped: true } : {}) };
     }
 
     async function requestPage(sessionId, requestId, url, signal) {
         if (!REQUEST_ID.test(requestId)) throw bad('That is not a request id (the requestId a prompt answered with).');
         const wait = wholeParam(url, 'wait', 0, 0, WAIT_MAX_SECONDS, `a whole number of seconds from 0 to ${WAIT_MAX_SECONDS}`);
         let { events } = await inspect(sessionId);
-        let state = requestState(events, requestId);
-        if (state.state === 'waiting' && sent.get(requestId) !== sessionId) {
+        let state = requestState(events, requestId, sentAttempt(requestId, sessionId));
+        if (state.state === 'waiting' && sentAttempt(requestId, sessionId) === 0) {
             throw new BridgeError(404, 'request/not-found', `Session ${sessionId} has no message with request id ${requestId}: none is in its log, and the bridge sent none to it since DSH started.`);
         }
-        let timedOut = false;
+        let ended;
         if (wait > 0 && !FINAL.has(state.state)) {
-            const got = await waitUntil(sessionId, wait * 1000, async () => {
+            ended = await waitUntil(sessionId, wait * 1000, async () => {
                 ({ events } = await inspect(sessionId));
-                state = requestState(events, requestId);
+                state = requestState(events, requestId, sentAttempt(requestId, sessionId));
                 return FINAL.has(state.state);
             }, signal);
-            timedOut = !got;
         }
-        return { sessionId, ...state, ...(wait > 0 ? { timedOut } : {}) };
+        return { sessionId, ...state, ...waited(wait, ended) };
     }
 
     // ── HTTP ──
@@ -824,6 +1067,17 @@ export function answers(path, ms = 1000) {
     });
 }
 
+/** Whether a folder is the home folder, however it is spelt (another letter case, a symlink): by device and inode. */
+function isHome(dir, st) {
+    if (resolve(dir) === resolve(homedir())) return true;
+    try {
+        const home = statSync(homedir());
+        return st.dev === home.dev && st.ino === home.ino;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Make the socket's place ready, or say in words why the bridge will not
  * listen there. Its folder is closed to everyone else (700) unless it is a
@@ -853,7 +1107,7 @@ export async function prepareSocket(socketPath) {
     } else {
         if (!st.isDirectory()) return `${dir} is not a folder`;
         if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return `its folder ${dir} belongs to another user; give the socket a folder of its own`;
-        if ((st.mode & 0o1000) !== 0 || resolve(dir) === resolve(homedir())) return `its folder ${dir} is shared, and the bridge closes its folder to everyone else; give the socket a folder of its own, such as ${resolve(dir, 'session-bridge', 'bridge.sock')}`;
+        if ((st.mode & 0o1000) !== 0 || isHome(dir, st)) return `its folder ${dir} is shared, and the bridge closes its folder to everyone else; give the socket a folder of its own, such as ${resolve(dir, 'session-bridge', 'bridge.sock')}`;
         try {
             chmodSync(dir, 0o700);
         } catch (error) {
