@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
-Updated: 2026-10-26 9:56 AM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 10:06 AM PDT by A (gmail), thread "Goal 9.5 builder"
 Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
 Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
 
@@ -29,6 +29,8 @@ Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19
 - Instance names with distinct ports: `~/Projects/goal95/instances.txt`. Memory guard: `~/Projects/goal95/bin/slot take|give|list` (7 slots).
 
 ## Gotchas (GOAL95)
+- Live dsh-site: its builder's audit found security problems in the live version (details only in the local `~/Projects/goal95/status/dsh-site.md`); the fix is `goal95/dsh-site` 56fa8e9 (judge round 1 running) and needs a new `allowHosts` value in the live row in the same change. Raised in the thread at 10:03 AM; deploying or switching it off is MiniMe's and Albert's call.
+- The DSH Test seed's access preset is Full access: switch sessions to Workspace Write before sending turns (RULES.md, JUDGE-GOAL95.md).
 - MiniMe committed b399db0 on the live redesign branch at Albert's request (Fleet fix lanes follow the Bertnet Gateway model order; runnerRev 33). goal95/fleet and goal95/fleet-card-flip were fast-forwarded to it at 9:10 AM; never revert it. Second fix b44d7f8 (bank a Hugging Face cache as one snapshot with links resolved; runnerRev 34), fast-forwarded at 9:35 AM: keep both.
 - Named DSH Test instances get a port from a hash of the name; some old names share ports (dna and fleet-models, glass and fleet-people, glass-coordinator and sparkdash): use only the names in instances.txt.
 - Live runs Fleet, Wallpaper and Reasoning Pill straight from `~/Projects/worktrees/dsh-split-plugins` and Discord, dsh-site, Hermes Bridge, DNA Studio from their folders: those folders are live checkouts, never edited.
