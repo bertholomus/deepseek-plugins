@@ -671,3 +671,79 @@ test('its page in Plugins: what it watches, by state word, which plugins read th
     assert.match(textIn(failed), /Couldn't read the sessions: Session Watch is not running in DSH\.Retry/);
     kit.setConnection(undefined);
 });
+
+test('its page in Plugins: choosing a state lists the sessions that read it, newest first, each with Open; choosing it again closes the list', async () => {
+    const { client } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url));
+    const { kit, readWatching, WatchingView, SHOWN, views } = client.internals;
+    const plain = (value) => JSON.parse(JSON.stringify(value));
+    const at = Date.now() - 5 * 60000;
+    const idle = Array.from({ length: SHOWN + 2 }, (_, i) => ({ sessionId: `idle-${i}`, title: `Idle ${i}`, word: 'idle', updatedAt: at - i * 1000 }));
+    const items = [{ sessionId: 'cut', title: '', word: 'cut off', updatedAt: at }, ...idle, { title: 'no id', word: 'idle' }];
+    kit.setConnection({ rpc: { call: async (_api, method) => (method === 'dsh-plugin-session-watch/sessions' ? { ok: true, value: { items } }
+        : method === 'dsh-plugin-session-watch/status' ? { ok: true, value: { running: true } } : { ok: true, value: [] }) } });
+    const data = await readWatching();
+    kit.setConnection(undefined);
+    // A row without a session id is counted but cannot be listed or opened.
+    assert.equal(data.total, items.length);
+    assert.equal(data.rows.length, items.length - 1);
+    const chips = (view) => elementsOf(view).filter((e) => e.type === 'button' && e.props.className === 'dshsw-word');
+    const picks = [];
+    const closed = WatchingView({ data, onChoose: (word) => picks.push(word) });
+    assert.deepEqual(plain(chips(closed).map((b) => `${textIn(b)}:${b.props['aria-expanded']}`)), ['cut off1:false', `idle${SHOWN + 3}:false`]);
+    assert.equal(chips(closed)[1].props.title, `Show the ${SHOWN + 3} sessions that read idle`);
+    assert.equal(chips(closed)[1].props['aria-controls'], undefined);
+    assert.equal(elementsOf(closed).some((e) => e.props?.['data-session-watch-chosen'] !== undefined), false, 'nothing listed until a state is chosen');
+    chips(closed)[1].props.onClick();
+    assert.deepEqual(picks, ['idle']);
+    // Chosen: its button says so and names the list; the list shows the newest, each with when and Open.
+    const opened = [];
+    const chosen = WatchingView({ data, chosen: 'idle', onChoose: (word) => picks.push(word), onOpen: (id) => opened.push(id) });
+    const [, button] = chips(chosen);
+    assert.equal(button.props['aria-expanded'], 'true');
+    assert.equal(button.props['aria-controls'], 'dshsw-chosen');
+    assert.equal(button.props.title, 'Hide these sessions');
+    const list = elementsOf(chosen).find((e) => e.props?.['data-session-watch-chosen'] === 'idle');
+    assert.equal(list.props.id, 'dshsw-chosen');
+    assert.equal(elementsOf(list).find((e) => e.type === 'ul').props['aria-label'], 'Sessions that read idle');
+    const rows = elementsOf(list).filter((e) => e.type === 'li');
+    assert.equal(rows.length, SHOWN);
+    assert.equal(textIn(rows[0]), 'Idle 05 min agoOpen');
+    assert.equal(elementsOf(rows[0]).find((e) => e.type === 'time').props.dateTime, new Date(at).toISOString());
+    assert.match(textIn(list), /and 2 more, older$/);
+    const open = elementsOf(rows[1]).find((e) => e.type === 'button');
+    assert.equal(open.props['aria-label'], 'Open Idle 1');
+    open.props.onClick();
+    assert.deepEqual(opened, ['idle-1']);
+    button.props.onClick();
+    assert.deepEqual(picks, ['idle', undefined], 'choosing the open state again closes it');
+    // An untitled session says so; without DSH's workspace there is no Open.
+    const cutList = elementsOf(WatchingView({ data, chosen: 'cut off' })).find((e) => e.props?.['data-session-watch-chosen'] === 'cut off');
+    assert.equal(textIn(cutList), 'Untitled session5 min ago');
+    assert.equal(elementsOf(cutList).some((e) => e.type === 'button'), false);
+    // A state no session reads any more closes by itself.
+    const gone = WatchingView({ data, chosen: 'running' });
+    assert.equal(elementsOf(gone).some((e) => e.props?.['data-session-watch-chosen'] !== undefined), false);
+    assert.equal(chips(gone).every((b) => b.props['aria-expanded'] === 'false'), true);
+    // Open goes through DSH's workspace, from the time it is there until it goes.
+    const shown = [];
+    const cleanups = [];
+    const scope = {
+        uiWorkspace: { openSession: (id) => { shown.push(id); if (id === 'bad') throw new Error('no such session'); } },
+        slots: { inject: () => {}, register: () => () => {} },
+        effect: (fn) => { const undo = fn(); if (typeof undo === 'function') cleanups.push(undo); },
+        inject: (names, fn) => { if (names[0] === 'uiWorkspace') fn(scope); },
+    };
+    const warned = [];
+    const { client: wired } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url), { console: { ...console, warn: (...args) => warned.push(args.map(String).join(' ')) } });
+    assert.equal(wired.internals.views.openSession, undefined);
+    wired.apply(scope);
+    wired.internals.views.openSession('s1');
+    wired.internals.views.openSession('');
+    wired.internals.views.openSession('bad');
+    assert.deepEqual(shown, ['s1', 'bad']);
+    assert.equal(warned.length, 1);
+    assert.match(warned[0], /could not open the session/);
+    for (const undo of cleanups) undo();
+    assert.equal(wired.internals.views.openSession, undefined);
+    assert.equal(views.openSession, undefined, 'each window load has its own');
+});

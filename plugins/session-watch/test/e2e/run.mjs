@@ -399,7 +399,7 @@ try {
                 const text = (await watching.innerText()).replace(/\n+/g, ' ');
                 return text.includes(`${items.length} sessions · ${counts.get('running') ?? 0} running`) ? text : null;
             }, 'the section to show the sessions', 15000, 300).catch(async () => (await watching.innerText()).replace(/\n+/g, ' '));
-            const tags = await watching.locator('li').allInnerTexts();
+            const tags = await watching.locator('[aria-label="Sessions by state"] > li').allInnerTexts();
             check('under the form, what it watches: every session counted by its state word, as the watcher has them',
                 seen.includes(`What it watches ${items.length} sessions · ${counts.get('running') ?? 0} running`) && tags.length === counts.size
                 && [...counts].every(([word, n]) => tags.some((t) => t.replace(/\s+/g, ' ').trim() === `${word} ${n}`)), `${seen} | ${JSON.stringify([...counts])}`);
@@ -420,11 +420,45 @@ try {
             ids.live = await run.newSession('E2E:say Counted live.', 'Live count');
             const grew = await waitFor(async () => (await watching.innerText()).includes(`${items.length + 1} sessions`), 'the new session in the count', 20000, 300).catch(() => false);
             check('a new session shows in the count by itself, without a reload', grew, (await watching.innerText()).replace(/\n+/g, ' '));
+            // Choosing a state lists the sessions that read it, newest first, each with when it changed and Open.
+            const liveRow = await waitFor(async () => {
+                const row = (await watchApi('sessions')).value.items.find((r) => r.sessionId === ids.live);
+                return row && row.word !== 'running' && row.word !== 'new' ? row : null;
+            }, 'the new session to finish its turn', 20000, 300).catch(() => null);
+            const liveWord = liveRow?.word ?? 'idle';
+            await watching.locator(`button[title$=" that read ${liveWord}"]`).click();
+            const chip = watching.locator('button[aria-controls="dshsw-chosen"]');
+            const chosen = watching.locator(`[data-session-watch-chosen="${liveWord}"]`);
+            await chosen.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+            const listedRight = await waitFor(async () => {
+                const expected = (await watchApi('sessions')).value.items.filter((r) => r.word === liveWord).slice(0, 12).map((r) => r.title || 'Untitled session');
+                const shown = (await chosen.locator('li').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+                return shown.length === expected.length && expected.every((title, i) => shown[i].startsWith(`${title} `) && / Open$/.test(shown[i])) ? shown : null;
+            }, 'the chosen state to list its sessions', 15000, 300).catch(async () => `not as the watcher has them: ${JSON.stringify((await chosen.locator('li').allInnerTexts().catch(() => [])))}`);
+            check(`choosing a state ("${liveWord}") lists the sessions that read it, newest first, each with when it changed and Open`,
+                Array.isArray(listedRight) && listedRight[0]?.startsWith('Live count ') && (await chip.count()) === 1 && (await chip.getAttribute('aria-expanded')) === 'true'
+                && (await chip.innerText()).replace(/\s+/g, ' ').trim().startsWith(`${liveWord} `), JSON.stringify(listedRight));
+            await shot(page, shots, 'watching-chosen-light', watching);
+            await setDark(page, true);
+            await shot(page, shots, 'watching-chosen-dark', watching);
+            await setDark(page, false);
             await page.setViewportSize({ width: 760, height: 860 });
             const wide = await page.evaluate(() => document.documentElement.scrollWidth);
-            check('at 760 px its page has no sideways scroll', wide <= 760, `${wide} px`);
+            check('at 760 px its page has no sideways scroll, with a state\'s sessions listed', wide <= 760, `${wide} px`);
             await shot(page, shots, 'settings-760-light');
             await page.setViewportSize({ width: 1280, height: 860 });
+            // Open shows that session in the window, as a session in the sidebar does; Plugins brings the page back.
+            const reply = page.getByText('Counted live.', { exact: true });
+            const before = await reply.count();
+            await chosen.locator('button[aria-label="Open Live count"]').click();
+            const opened = await waitFor(async () => ((await reply.count()) > 0 ? true : null), 'the session to show', 20000, 300).catch(() => false);
+            check('Open shows that session in the window', before === 0 && opened === true, `before ${before}, after ${await reply.count()}`);
+            await shot(page, shots, 'opened-session-light');
+            await page.getByRole('button', { name: 'Plugins', exact: true }).first().click();
+            await Promise.race([form.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {}), view.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {})]);
+            if (!(await form.isVisible())) await view.click();
+            await form.waitFor({ state: 'visible', timeout: 20000 });
+            await watching.waitFor({ state: 'visible', timeout: 15000 });
             const save = form.getByRole('button', { name: 'Save' });
             await field.fill('5');
             const refused = (await page.locator('[data-suite-setting="deliveryTimeoutSeconds"]').innerText()).replace(/\n+/g, ' ');

@@ -3,9 +3,10 @@
  * setting there (DSH's `plugins.bundle.config`), saved through DSH's own
  * settings form and used as soon as it is saved; and a section under it
  * (DSH's `plugins.detail.section`) with what it watches now: how many
- * sessions in each state, a wrong setting's effect, and which of the
- * plugins that read sessions through it are on. The watcher has no page of
- * its own: Autopilot, Decisions and Agent Terminals show what it sees.
+ * sessions in each state (choose one to list its sessions, each with Open),
+ * a wrong setting's effect, and which of the plugins that read sessions
+ * through it are on. The watcher has no page of its own: Autopilot,
+ * Decisions and Agent Terminals show what it sees.
  *
  * Hand-written in the module format DSH serves to the browser (no build
  * step). Nothing here may throw at load: DSH joins every plugin's browser
@@ -1121,10 +1122,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-watching{margin:28px 0 0;min-width:0;color:var(--dsw-alias-label-primary)}`,
             `.${P}-watching-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}`,
             `.${P}-watching-count{font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
-            `.${P}-words{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px 14px}`,
-            `.${P}-word{display:inline-flex;align-items:center;gap:6px;font:var(--dsw-font-xs-13)}`,
+            `.${P}-words{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px 8px}`,
+            `.${P}-word{display:inline-flex;align-items:center;gap:6px;padding:3px 8px 3px 4px;border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-sm);background:none;font:var(--dsw-font-xs-13);color:inherit;cursor:pointer}`,
+            `.${P}-word:hover,.${P}-word[aria-expanded="true"]{background:var(--${P}-fill)}`,
+            `.${P}-word[aria-expanded="true"]{border-color:var(--${P}-text-2)}`,
+            `.${P}-chosen{margin:10px 0 0;min-width:0}`,
+            `.${P}-sessions{list-style:none;margin:0;padding:0;display:grid;gap:4px;max-width:72ch}`,
+            `.${P}-session{display:flex;align-items:baseline;gap:10px;min-width:0;font:var(--dsw-font-xs-13)}`,
+            `.${P}-session-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`,
+            `.${P}-session time{flex:none;color:var(--${P}-text-2)}`,
+            `.${P}-session .${P}-link{flex:none;margin-left:auto}`,
             `.${P}-watching .${P}-note{max-width:72ch}`,
         ];
+        /** How many sessions a chosen state lists at once. */
+        const SHOWN = 12;
 
         const api = kit.link(BUNDLE, { name: 'Session Watch' });
         const pluginList = kit.link('pluginManager', { name: 'DSH' });
@@ -1165,6 +1176,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return {
                 total: items.length,
                 words: wordCounts(items),
+                // Newest first, as the watcher lists them: what a chosen state shows.
+                rows: items.filter((row) => typeof row?.sessionId === 'string' && row.sessionId !== '').map((row) => ({
+                    sessionId: row.sessionId,
+                    title: typeof row.title === 'string' ? row.title : '',
+                    word: typeof row.word === 'string' && row.word ? row.word : 'unknown',
+                    updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
+                })),
                 ...(kit.isRecord(status?.problem) ? { problem: status.problem } : {}),
                 users: plugins?.ok ? usersOf(plugins.value) : undefined,
             };
@@ -1174,20 +1192,46 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const listed = (parts) => (parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
         const sessionsWord = (n) => `${n} session${n === 1 ? '' : 's'}`;
 
-        /** What it watches, from what `readWatching` gave: pure, for the tests. */
-        function WatchingView({ data, error, onRetry }) {
+        /** The sessions of the chosen state, newest first, each with when it last changed and Open. */
+        function ChosenView({ word, rows, onOpen }) {
+            const mine = (Array.isArray(rows) ? rows : []).filter((row) => row.word === word);
+            return h('div', { id: `${P}-chosen`, className: `${P}-chosen`, 'data-session-watch-chosen': word },
+                h('ul', { className: `${P}-sessions`, 'aria-label': `Sessions that read ${word}` },
+                    mine.slice(0, SHOWN).map((row) => {
+                        const title = row.title || 'Untitled session';
+                        return h('li', { key: row.sessionId, className: `${P}-session` },
+                            h('span', { className: `${P}-session-title`, title }, title),
+                            h(kit.TimeText, { at: row.updatedAt }),
+                            onOpen ? h('button', { type: 'button', className: `${P}-link`, 'aria-label': `Open ${title}`, onClick: () => onOpen(row.sessionId) }, 'Open') : null);
+                    })),
+                mine.length > SHOWN ? h('p', { className: `${P}-note` }, `and ${mine.length - SHOWN} more, older`) : null);
+        }
+
+        /** What it watches, from what `readWatching` gave: pure, for the tests. Choosing a state lists its sessions. */
+        function WatchingView({ data, error, onRetry, chosen, onChoose, onOpen }) {
             const head = [h('h2', { key: 'title', className: `${P}-h2`, id: `${P}-watching-title` }, 'What it watches')];
             let body;
             if (!data) {
                 body = error ? h(kit.ErrorLine, { text: error, onRetry, lead: 'Couldn\'t read the sessions' }) : h(kit.Loading, { text: 'Reading the sessions' });
             } else {
                 const running = data.words.find((w) => w.word === 'running')?.count ?? 0;
+                // A state no session reads any more closes by itself.
+                const open = data.words.some((w) => w.word === chosen) ? chosen : undefined;
                 head.push(h('span', { key: 'count', className: `${P}-watching-count ${P}-num` }, data.total === 0 ? 'none yet' : `${sessionsWord(data.total)} · ${running} running`));
                 body = [
                     data.total === 0
                         ? h('p', { key: 'none', className: `${P}-note` }, 'No sessions yet. Each new session shows here as soon as DSH makes it.')
                         : h('ul', { key: 'words', className: `${P}-words`, 'aria-label': 'Sessions by state' },
-                            data.words.map(({ word, count }) => h('li', { key: word, className: `${P}-word` }, h(kit.StateTag, { word }), h('span', { className: `${P}-num` }, String(count))))),
+                            data.words.map(({ word, count }) => h('li', { key: word },
+                                h('button', {
+                                    type: 'button',
+                                    className: `${P}-word`,
+                                    'aria-expanded': open === word ? 'true' : 'false',
+                                    ...(open === word ? { 'aria-controls': `${P}-chosen` } : {}),
+                                    title: open === word ? 'Hide these sessions' : `Show the ${sessionsWord(count)} that read ${word}`,
+                                    onClick: () => onChoose?.(open === word ? undefined : word),
+                                }, h(kit.StateTag, { word }), h('span', { className: `${P}-num` }, String(count)))))),
+                    open ? h(ChosenView, { key: 'chosen', word: open, rows: data.rows, onOpen }) : null,
                     data.users ? h('p', { key: 'users', className: `${P}-note`, 'data-session-watch-users': '' },
                         `Autopilot, Decisions and Agent Terminals read sessions through it. ${listed(data.users.map((u) => `${u.name} is ${u.state}`))}.`) : null,
                     data.problem ? h('p', { key: 'problem', className: `${P}-note`, 'data-session-watch-problem': '' },
@@ -1199,9 +1243,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-watching-head` }, head), body);
         }
 
+        /** DSH's way to show a session in the window, once its workspace is there (see apply). */
+        const views = { openSession: undefined };
+
         function Watching() {
             const live = kit.useLive(readWatching, ['sessions', 'settings'], { delayMs: 800 });
-            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh });
+            const [chosen, setChosen] = React.useState(undefined);
+            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh, chosen, onChoose: setChosen, onOpen: views.openSession });
         }
 
         /** On Session Watch's own page in Plugins only. */
@@ -1238,6 +1286,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     console?.warn?.('dsh-plugin-session-watch: settings:', error);
                 }
             });
+            // Open on a session in the section: DSH's workspace shows it, as a session in the sidebar does.
+            ctx.inject(['uiWorkspace'], (scope) => scope.effect(() => {
+                views.openSession = (sessionId) => {
+                    if (typeof sessionId !== 'string' || sessionId === '') return;
+                    try { scope.uiWorkspace.openSession(sessionId); } catch (error) { console?.warn?.('dsh-plugin-session-watch: could not open the session', error); }
+                };
+                return () => { views.openSession = undefined; };
+            }, 'session-watch: open sessions'));
             // What it watches, under its setting on the same page.
             try {
                 ctx.slots.inject('plugins.detail.section', () => ctx.slots.register({ name: 'plugins.detail.section', id: `${BUNDLE}:watching`, order: 10, label: 'Session Watch' }, WatchingSection));
@@ -1249,7 +1305,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, wordCounts, usersOf, readWatching, WatchingView, WatchingSection };
+        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, SHOWN, views, wordCounts, usersOf, readWatching, WatchingView, ChosenView, WatchingSection };
         return module.exports;
     },
 });

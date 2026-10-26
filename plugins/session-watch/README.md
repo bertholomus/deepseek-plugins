@@ -7,8 +7,10 @@ own. It has no page of its own: you see it through the plugins that use
 it. Its page in Plugins has its one setting and, under it, **What it
 watches**: how many sessions are in each state (*running*, *waiting for
 approval*, *cut off*, *idle* and so on), which of Autopilot, Decisions and
-Agent Terminals are on, and what a wrong setting means meanwhile. It
-follows the sessions as they change, without a reload.
+Agent Terminals are on, and what a wrong setting means meanwhile. Choose a
+state to list its sessions, newest first (twelve at a time), each with when
+it last changed and **Open**, which shows that session in the window as the
+sidebar does. It follows the sessions as they change, without a reload.
 
 ## What it knows about every session
 
@@ -194,8 +196,9 @@ proves, from each session's own log:
 - a number in quotes in the profile: `status` names it, delivery still
   works, and its page in Plugins flags it, refuses a value out of range,
   and fixes it on Save; **What it watches** counts every session by state,
-  follows a new session without a reload, and drops its setting line once
-  fixed; pictures light, dark and at 760 px;
+  follows a new session without a reload, lists a chosen state's sessions
+  as the watcher has them, opens one with **Open**, and drops its setting
+  line once fixed; pictures light, dark and at 760 px;
 - switched off in Plugins: no failure from DSH, its endpoints, service,
   section and style sheet go; on again, it serves and delivers at once.
 
