@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 2:31 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 2:33 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -20,7 +20,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | DNA Studio | 8.0 (round 1) | cdac02e | goal95/dna-studio (local copy, no remote) | NOT YET | a chat never shows the pictures it made; saving the plugin's settings during a page job marks the job cut off, and Rerun then runs it twice |
 | dsh-site | 8.0 (round 1) | 56fa8e9 | goal95/dsh-site (dsh-plugin-dsh-site) | NOT YET | round 2 at af7f673 being judged (last round) |
 | Fleet | being judged (round 1; card flip 4e24735 and MiniMe's b399db0, b44d7f8 merged) | 3142189 | goal95/fleet (redesign repo) | NOT YET | judge working |
-| Focus | being judged (round 1) | 3859b8d | goal95/focus | NOT YET | judge working |
+| Focus | 8.5 (round 1) | 3859b8d | goal95/focus | NOT YET | the end of a timer leaves no mark once its 6-second toast is gone, and a hidden window announces the end while still hidden (the README says it tells it later) |
 | Hermes Bridge | being judged (round 1) | 717b595 | goal95/hermes-bridge (dsh-plugin-hermes-bridge) | NOT YET | judge working |
 | Notifications | 8.0 (round 1) | b7836d2 | goal95/notifications | NOT YET | news is dropped while DSH's window is in front with nobody at it; a window that cannot show notifications drops the queue; round 2 building |
 | Proof | not judged yet (earlier best 7.5) | 4a9e6fc | goal95/proof | NOT YET | builder working |
