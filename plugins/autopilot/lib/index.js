@@ -26,7 +26,7 @@ import { JsonStore } from './shared/files.js';
 import { Journal } from './shared/journal.js';
 import { errorText, guard } from './shared/safe.js';
 import { SettingsCheck, live, liveSettings } from './shared/settings.js';
-import { LIVE_SETTINGS, checkConfig, savedEntry } from './config.js';
+import { LIVE_SETTINGS, SETTING_TITLES, checkConfig, savedEntry } from './config.js';
 
 export { SETTING_TITLES, LIVE_SETTINGS, checkConfig, changedWords } from './config.js';
 
@@ -111,10 +111,21 @@ export function apply(ctx, config) {
         };
         startIfReady();
 
-        // Settings saved on Autopilot's page in Plugins: checked again, and they apply at once.
+        // Settings saved on Autopilot's page in Plugins: checked again, and they apply at once. The log says each
+        // new value and the one before it, so a copy of the values is kept between saves.
+        const values = () => {
+            const out = {};
+            for (const key of Object.keys(SETTING_TITLES)) {
+                try { out[key] = structuredClone(settings[key]); } catch { out[key] = String(settings[key]); }
+            }
+            return out;
+        };
+        let lastValues = values();
         const saved = (paths) => {
             const wasWrong = !check.ok;
-            const entry = savedEntry(check, paths);
+            const before = lastValues;
+            lastValues = values();
+            const entry = savedEntry(check, paths, { before, after: lastValues });
             if (entry) journal.add(entry);
             if (pilot.started) pilot.settingsChanged({ fixed: wasWrong && check.ok });
             else startIfReady();
@@ -122,8 +133,19 @@ export function apply(ctx, config) {
         };
         onSaved = saved;
 
+        // Whether Decisions runs, from its service: the page names it only then, and never calls it to find out.
+        let decisionsUp = false;
+        scope.inject(['dshPluginDecisionsRemote'], () => {
+            decisionsUp = true;
+            bump();
+            return () => {
+                decisionsUp = false;
+                bump();
+            };
+        });
+
         scope.inject(['typertGateway'], (inner) => {
-            inner.provide(SERVICE, new AutopilotRemote({ pilot, watch, journal, config: settings, check }));
+            inner.provide(SERVICE, new AutopilotRemote({ pilot, watch, journal, config: settings, check, decisions: () => decisionsUp }));
         });
 
         scope.effect(() => () => {

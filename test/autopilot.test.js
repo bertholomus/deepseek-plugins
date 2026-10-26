@@ -881,6 +881,12 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     assert.match(textIn(AutopilotPage({ autopilot: {} })), /Reading the sessions/);
     const head = HeaderCard({ data: base, busy: false, act });
     assert.match(textIn(head), /Watching 4 sessions · 3 notes this hour; the limit is 20 · a session with open work gets a note after 10 minutes of quiet/);
+    // The quiet time reads as the log says it: 90 seconds is not "2 minutes".
+    const quiet = (idleSeconds) => /gets a note after (.+) of quiet/.exec(textIn(HeaderCard({ data: { ...base, settings: { ...base.settings, idleSeconds } }, busy: false, act })))[1];
+    assert.deepEqual([90, 119, 150, 300, 600, 7200].map(quiet), ['90 seconds', '119 seconds', '2 minutes 30 seconds', '5 minutes', '10 minutes', '2 hours']);
+    // The Ask first line names Decisions only when DSH says it runs (the page never calls it to find out).
+    assert.match(textIn(HeaderCard({ data: { ...base, defaultRule: 'ask' }, busy: false, act, decisions: true })), /on this page and in Decisions/);
+    assert.doesNotMatch(textIn(HeaderCard({ data: { ...base, defaultRule: 'ask' }, busy: false, act, decisions: false })), /Decisions/);
     const toggle = elementsOf(head).find((e) => e.type === 'Switch');
     assert.equal(toggle.props.checked, true);
     toggle.props.onChange(false);
@@ -916,6 +922,16 @@ test('browser half: the page\'s cards say what to do next, in plain words', () =
     const waiting = WaitingCard({ data, busy: false, act, onOpen: () => {} });
     assert.match(textIn(waiting), /Tell it to carry on\?/);
     assert.match(textIn(waiting), /Autopilot backed off: its notes brought no progress\./);
+    const tagIn = (tree) => textIn(elementsOf(tree).find((e) => e.type === 'Tag'));
+    assert.equal(tagIn(waiting), 'backed off');
+    // A give-up is tagged with its own word, and a row whose tries are spent says it gives up next, not that it retries.
+    const gave = WaitingCard({ data: { ...data, asks: [], sessions: [{ ...data.sessions[0], backedOff: undefined, gaveUp: 5 }] }, busy: false, act, onOpen: () => {} });
+    assert.match(textIn(gave), /Autopilot stopped retrying: it kept failing\./);
+    assert.equal(tagIn(gave), 'gave up');
+    const at = Date.now() + 10 * MIN;
+    const nextOf = (trigger) => /next: ([^·]+)/.exec(textIn(SessionsCard({ data: { ...data, sessions: [{ ...data.sessions[0], next: { trigger, at } }] }, busy: false, act, onOpen: () => {} })))[1].trim();
+    assert.match(nextOf('giveup'), /^gives up at /);
+    assert.match(nextOf('error'), /^retry at /);
     elementsOf(waiting).find((e) => e.type === 'Button' && textIn(e) === 'Try again').props.onClick();
     assert.deepEqual(acts.at(-1), ['retry', { sessionId: 's' }]);
     elementsOf(waiting).find((e) => e.type === 'Button' && textIn(e) === 'Leave it').props.onClick();
@@ -955,6 +971,18 @@ test('page: a session\'s last action in a few words, names kept as written', () 
     assert.equal(lastWords({ kind: 'nudge', text: 'Told it to carry on with its todos' }), 'told it to carry on with its todos');
     assert.equal(lastWords({ kind: 'ask', text: '“Config cleanup” stopped with 1 open todo. Tell it to carry on?' }), 'asked you');
     assert.equal(lastWords({ kind: 'skip', text: '' }), '');
+    // What happened, by the entry's state: a refused or unproven start, a note that never arrived.
+    const start = { kind: 'rearm', text: 'Started its goal again after an error' };
+    assert.equal(lastWords({ ...start, state: 'started' }), 'started its goal again after an error');
+    assert.equal(lastWords({ ...start, state: 'not started', reason: 'DSH refused to start it: goal "g" exhausted 4 goal rounds; increase maxGoalRounds before resuming' }), 'DSH refused to start its goal');
+    assert.equal(lastWords({ ...start, state: 'not started', reason: 'DSH stopped before a round began (a crash or a forced quit)' }), 'its goal did not start');
+    assert.equal(lastWords({ ...start, state: 'waiting for a round' }), 'starting its goal');
+    const note = { kind: 'nudge', text: 'Told it to carry on with its todos', note: '[Autopilot] Carry on.' };
+    assert.equal(lastWords({ ...note, state: 'not delivered' }), 'its note was not delivered');
+    assert.equal(lastWords({ ...note, state: 'not proven' }), 'its note may not have arrived');
+    assert.equal(lastWords({ ...note, state: 'in the queue' }), 'its note waits in the queue');
+    assert.equal(lastWords({ ...note, state: 'delivered' }), 'told it to carry on with its todos');
+    assert.equal(lastWords({ kind: 'giveup', text: 'Stopped retrying after errors', state: 'gave up' }), 'stopped retrying after errors');
 });
 
 // ── Round 1 findings: holds, a wrong setting, the switch, settings in Plugins ──
@@ -1153,6 +1181,19 @@ test('settings: read live, checked once per change, and a save says in the log w
     assert.equal(logged.at(-1)[0], 'info');
     current = 90;
     assert.deepEqual(savedEntry(check, [['idleSeconds']]), { kind: 'settings', text: 'Settings changed: “Quiet time before a note”', why: 'They apply now.', state: 'done' });
+    // With the values before and after (index.js keeps them), each change says its new value and the old one.
+    assert.equal(savedEntry(check, [['idleSeconds']], { before: { idleSeconds: 600 }, after: { idleSeconds: 90 } }).text, 'Settings changed: “Quiet time before a note” now 90 seconds (was 600 seconds)');
+    assert.equal(savedEntry(check, [['idleSeconds'], ['maxNudges'], ['errorRetrySeconds'], ['resumeAfterRestart']], { before: { idleSeconds: 600, maxNudges: 2, errorRetrySeconds: [120, 600, 1800], resumeAfterRestart: true }, after: { idleSeconds: 90, maxNudges: 3, errorRetrySeconds: [30, 90], resumeAfterRestart: false } }).text,
+        'Settings changed: “Quiet time before a note” now 90 seconds (was 600 seconds), “Notes in a row without progress” now 3 (was 2), “Waits before each try after an error” now 30, 90 seconds (was 120, 600, 1800 seconds), “Resume after a restart” now off (was on)');
+    assert.equal(savedEntry(check, [['resumeWindowHours']], { before: { resumeWindowHours: 6 }, after: { resumeWindowHours: 1 } }).text, 'Settings changed: “Resume sessions cut off within” now 1 hour (was 6 hours)');
+    // A value in quotes keeps them, so the log shows it was text; the fix says what it is now.
+    current = '90';
+    const quoted = savedEntry(check, [['idleSeconds']], { before: { idleSeconds: 90 }, after: { idleSeconds: '90' } });
+    assert.equal(quoted.text, 'Settings changed: “Quiet time before a note” now "90" (was 90 seconds); Autopilot waits until a wrong one is fixed');
+    current = 90;
+    const fixed = savedEntry(check, [['idleSeconds']], { before: { idleSeconds: '90' }, after: { idleSeconds: 90 } });
+    assert.equal(fixed.text, 'Settings fixed: Autopilot is working again');
+    assert.equal(fixed.why, 'The change to “Quiet time before a note” now 90 seconds (was "90") fixed it.');
     assert.equal(savedEntry(check, []), undefined, 'nothing changed, nothing logged');
     current = 1;
     const broke = savedEntry(check, [['idleSeconds']]);

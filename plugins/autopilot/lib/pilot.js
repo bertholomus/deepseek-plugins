@@ -929,7 +929,7 @@ export class Pilot {
             throw error;
         }
         if (carried) {
-            this.journal.set(carried.id, { state: 'asked you', stopped: false, reason: '', askedAgainAt: this.now() });
+            this.journal.set(carried.id, { state: 'asked you', stopped: false, reason: '', settledAt: null, askedAgainAt: this.now() });
             this.changed();
             return { action: 'ask', id, again: true };
         }

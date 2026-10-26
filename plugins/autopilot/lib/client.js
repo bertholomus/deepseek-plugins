@@ -36,6 +36,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
     const win = typeof window === 'undefined' ? undefined : window;
     const doc = typeof document === 'undefined' ? undefined : document;
+    /** Choices made with the keyboard and not yet applied, by control id (see Choice). */
+    const pendingChoices = new Map();
+    /** Where and when the last press of a pointer was while a choice waited, so a blur toward an empty spot can be told from a redraw. */
+    const lastPointerDown = { at: 0, target: null };
 
     const css = [
         `:is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-glass:rgba(14,18,17,var(--wp-tint,.55));--${P}-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--${P}-fill:rgba(255,255,255,.04);--${P}-text-2:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--${P}-glyph:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary));--${P}-error:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));--${P}-link:color-mix(in srgb,var(--dsw-alias-link,var(--dsw-alias-state-business-primary)) 85%,var(--dsw-alias-label-primary));--${P}-ok:color-mix(in srgb,var(--dsw-alias-state-success-primary) 60%,var(--dsw-alias-label-primary));--${P}-warn:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 40%,var(--dsw-alias-label-primary));--${P}-ring:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}`,
@@ -538,39 +542,68 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      * A choice between a few values that commits only when the person means
      * it: a click commits at once; with the keyboard, the arrow keys move
      * between the values and Enter or Space commits the one in focus (Escape,
-     * or leaving the control, goes back to the saved one). It is never
-     * disabled while a change is on its way, so focus stays where it was; a
-     * choice made meanwhile is applied next. `onChoose(value)` may return a
-     * promise of false when the change did not go through: the control then
-     * shows the saved value again.
+     * or leaving the control for another place, goes back to the saved one).
+     * It is never disabled while a change is on its way, so focus stays where
+     * it was; a choice made meanwhile is applied next. `onChoose(value)` may
+     * return a promise of false when the change did not go through: the
+     * control then shows the saved value again.
+     *
+     * A choice not yet applied outlives a redraw of its list (the row moved,
+     * or was drawn anew): it is kept by the control's id, and the focus comes
+     * back to it, so the next Enter still applies it.
      */
     function Choice({ id, label, value, options, busy = false, onChoose, className = '' }) {
-        const [shown, setShown] = React.useState(value);
+        const kept = pendingChoices.get(id);
+        const [shown, setShownState] = React.useState(kept && kept.from === value ? kept.value : value);
         const sent = React.useRef(undefined);
         const queued = React.useRef(undefined);
         const valueRef = React.useRef(value);
+        const box = React.useRef(null);
+        const mounted = React.useRef(false);
         valueRef.current = value;
+        /** Show a value; one that is not the saved one is kept by id until it is applied or dropped. */
+        const setShown = (next, focused) => {
+            setShownState(next);
+            if (next === valueRef.current) pendingChoices.delete(id);
+            else pendingChoices.set(id, { value: next, from: valueRef.current, focused: focused ?? pendingChoices.get(id)?.focused ?? true });
+        };
         React.useEffect(() => {
+            // The first run is the mount: a kept choice stays. Later, a new saved value replaces what is shown.
+            if (!mounted.current) {
+                mounted.current = true;
+                return;
+            }
             setShown(value);
             sent.current = undefined;
         }, [value]);
+        // Drawn anew, or moved, with its choice kept and the focus lost to the page: the focus comes back.
+        React.useEffect(() => {
+            const entry = pendingChoices.get(id);
+            if (!entry?.focused || !doc || !box.current) return;
+            const active = doc.activeElement;
+            if (active && active !== doc.body && active !== doc.documentElement) return;
+            const tab = box.current.querySelector?.('[role="tab"][aria-selected="true"]') ?? box.current.querySelector?.('[role="tab"]');
+            tab?.focus?.({ preventScroll: true });
+        });
         const commit = (next) => {
             if (!options.some((o) => o.value === next && o.disabled !== true)) return;
             if (busy) {
                 queued.current = next;
-                setShown(next);
+                setShownState(next);
+                pendingChoices.delete(id);
                 return;
             }
+            pendingChoices.delete(id);
             if (next === valueRef.current || next === sent.current) return;
             sent.current = next;
-            setShown(next);
+            setShownState(next);
             void Promise.resolve(onChoose(next)).then((ok) => {
                 if (ok !== false || sent.current !== next) return;
                 sent.current = undefined;
-                setShown(valueRef.current);
+                setShownState(valueRef.current);
             }, () => {
                 sent.current = undefined;
-                setShown(valueRef.current);
+                setShownState(valueRef.current);
             });
         };
         React.useEffect(() => {
@@ -580,12 +613,31 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             commit(next);
         }, [busy]);
         const pending = shown !== value && shown !== sent.current && shown !== queued.current;
+        // While a choice waits, note where the pointer goes down (and nothing after it is applied or this control goes).
+        React.useEffect(() => {
+            if (!pending || !doc?.addEventListener) return undefined;
+            const note = (event) => {
+                lastPointerDown.at = Date.now();
+                lastPointerDown.target = event.target;
+            };
+            doc.addEventListener('pointerdown', note, true);
+            return () => {
+                doc.removeEventListener('pointerdown', note, true);
+                lastPointerDown.at = 0;
+                lastPointerDown.target = null;
+            };
+        }, [pending]);
         const shownLabel = options.find((o) => o.value === shown)?.label ?? shown;
         const tabValue = (target) => {
             const tab = target?.closest?.('[role="tab"]');
             return tab && typeof tab.id === 'string' && tab.id.startsWith(`${id}-`) ? tab.id.slice(id.length + 1) : undefined;
         };
+        const drop = () => {
+            pendingChoices.delete(id);
+            setShownState(valueRef.current);
+        };
         return h('div', {
+            ref: box,
             className: `${P}-choice${className ? ` ${className}` : ''}`,
             'aria-busy': busy ? 'true' : undefined,
             'data-suite-choice': id,
@@ -601,14 +653,27 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     commit(shown);
                 } else if (event.key === 'Escape' && pending) {
                     event.preventDefault();
-                    setShown(value);
+                    drop();
                 }
             },
+            onFocusCapture: () => {
+                const entry = pendingChoices.get(id);
+                if (entry) entry.focused = true;
+            },
             onBlurCapture: (event) => {
-                if (pending && !event.currentTarget.contains(event.relatedTarget)) setShown(value);
+                if (!pending) return;
+                const to = event.relatedTarget;
+                if (to && !event.currentTarget.contains(to)) {
+                    // The person went to another place on the page.
+                    drop();
+                    return;
+                }
+                // The focus went nowhere: a click on an empty spot drops the choice; a redraw that moved the row
+                // (no click) keeps it, and the focus comes back on the next draw.
+                if (!to && Date.now() - lastPointerDown.at < 600 && !event.currentTarget.contains(lastPointerDown.target)) drop();
             },
         },
-        h(ui.SegmentedControl, { id, label, value: shown, options, onChange: setShown }),
+        h(ui.SegmentedControl, { id, label, value: shown, options, onChange: (next) => setShown(next, true) }),
         h('span', { className: pending ? `${P}-choice-hint` : `${P}-sr`, role: 'status', 'aria-live': 'polite' }, pending ? `Press Enter to apply ${shownLabel}.` : ''));
     }
 
@@ -692,6 +757,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const whole = (text) => (/^\d+$/.test(text) ? Number(text) : undefined);
         // A stored value of the wrong kind shows as it is, so the form can flag it rather than show it as empty.
         const raw = (v) => (v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
+        // For a number or a list, a value of the wrong type shows with its quotes ("90" is text, not a number): it
+        // does not parse, so the form flags it as it opens, and typing the number back counts as a change.
+        const typed = (v) => (v === undefined || v === null ? '' : JSON.stringify(v) ?? String(v));
         switch (f.kind) {
             case 'switch':
                 return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : raw(v)), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
@@ -700,7 +768,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'number':
                 return {
                     field: f.name,
-                    format: (v) => (Number.isFinite(v) ? String(v) : raw(v)),
+                    format: (v) => (Number.isFinite(v) ? String(v) : typed(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -711,7 +779,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'numbers':
                 return {
                     field: f.name,
-                    format: (v) => (Array.isArray(v) ? v.join(', ') : raw(v)),
+                    format: (v) => (Array.isArray(v) && v.every((n) => Number.isFinite(n)) ? v.join(', ') : typed(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -1037,8 +1105,6 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const kit = suiteKit({ prefix: 'dshap', bundle: BUNDLE, React, ui, h });
         const P = kit.P;
         const api = kit.link(BUNDLE, { name: 'Autopilot' });
-        /** Decisions, when it runs: Ask first questions show there too. */
-        const decisionsApi = kit.link('dsh-plugin-decisions', { name: 'Decisions' });
 
         const RULES = [
             { value: 'auto', label: 'Auto' },
@@ -1144,17 +1210,6 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('button', { type: 'button', className: `${P}-link ${P}-title`, onClick: () => onOpen(sessionId), title: 'Open this session' }, title);
         }
 
-        /** Whether Decisions runs (Ask first questions show there too): asked once per page. */
-        function useDecisions() {
-            const [up, setUp] = React.useState(false);
-            React.useEffect(() => {
-                let alive = true;
-                void decisionsApi.call('badge').then((result) => { if (alive) setUp(result.ok === true); });
-                return () => { alive = false; };
-            }, []);
-            return up;
-        }
-
         function ruleHint(rule, { paused, decisions }) {
             if (paused) return RULE_HINT.whileOff;
             if (rule === 'ask' && decisions) return RULE_HINT.askDecisions;
@@ -1169,7 +1224,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 : paused ? TEXT.offLine
                     : [`Watching ${data.watching} session${data.watching === 1 ? '' : 's'}`,
                         `${data.notesLastHour} note${data.notesLastHour === 1 ? '' : 's'} this hour; the limit is ${data.settings.maxNotesPerHour}`,
-                        `a session with open work gets a note after ${kit.spanText(data.settings.idleSeconds)} of quiet`].join(' · ');
+                        `a session with open work gets a note after ${quietText(data.settings.idleSeconds)} of quiet`].join(' · ');
             return h(kit.Card, {
                 title: TEXT.title,
                 headingLevel: 1,
@@ -1219,15 +1274,29 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('div', { className: `${P}-why` }, s.gaveUp ? 'Autopilot stopped retrying: it kept failing.' : 'Autopilot backed off: its notes brought no progress.'),
                             h(Refusal, { failure, at: `backed:${s.sessionId}` })),
                         h('div', { className: `${P}-item-side` },
-                            h(kit.StateTag, { word: 'backed off' }),
+                            h(kit.StateTag, { word: s.gaveUp ? 'gave up' : 'backed off' }),
                             h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => press('retry', { sessionId: s.sessionId }, `backed:${s.sessionId}`, data.asks.length + at) }, TEXT.tryAgain))))));
         }
 
         function nextText(next) {
             if (!next) return '';
             const at = kit.timeText(next.at);
+            // A failed session whose tries are spent gives up next, and the row says so.
+            if (next.trigger === 'giveup') return next.at <= Date.now() + 5000 ? 'gives up now' : `gives up at ${at}`;
             const what = next.trigger === 'resume' ? 'resume' : next.trigger === 'error' ? 'retry' : 'check';
             return next.at <= Date.now() + 5000 ? `${what} now` : `${what} at ${at}`;
+        }
+
+        /** The quiet time in words, as the log says it: seconds under two minutes, so 90 seconds stays 90 seconds. */
+        function quietText(seconds) {
+            const n = Math.max(0, Math.round(Number(seconds)));
+            if (!Number.isFinite(n)) return '';
+            const unit = (value, word) => `${value} ${word}${value === 1 ? '' : 's'}`;
+            if (n < 120) return unit(n, 'second');
+            if (n < 600 && n % 60 !== 0) return `${unit(Math.floor(n / 60), 'minute')} ${unit(n % 60, 'second')}`;
+            if (n < 5400) return unit(Math.round(n / 60), 'minute');
+            if (n < 129600) return unit(Math.round(n / 3600), 'hour');
+            return unit(Math.round(n / 86400), 'day');
         }
 
         function SessionRow({ s, busy, act, onOpen, failure }) {
@@ -1287,7 +1356,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function AutopilotPage({ autopilot }) {
             const live = kit.useLive(readState, ['autopilot', 'sessions', 'asks', 'settings'], { delayMs: 400 });
-            const decisions = useDecisions();
+            // Whether Decisions runs comes with the page's state (DSH knows), so the page never calls a plugin that is not there.
+            const decisions = live.data?.decisions === true;
             const [busy, setBusy] = React.useState(false);
             const busyRef = React.useRef(false);
             const [failure, setFailure] = React.useState(undefined);
