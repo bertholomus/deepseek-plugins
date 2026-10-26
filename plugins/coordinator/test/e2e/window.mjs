@@ -27,7 +27,7 @@ import { startFakeModel } from './fake-model.mjs';
 const bin = dshBin();
 const pw = bin ? await findPlaywright() : null;
 if (!bin || !pw) {
-    console.log(`# window: skipped (${!bin ? 'no DSH to run: set DSH_BIN' : 'no Playwright: npm i --prefix .e2e/tools playwright-core, then npx playwright install chromium'})`);
+    console.log(`# window: skipped (${!bin ? 'no DSH to run: set DSH_BIN' : 'no Playwright: npm i --prefix .e2e/tools playwright-core, with Playwright\'s Chromium installed'})`);
     console.log('\n0 passed, 0 failed');
     process.exit(0);
 }

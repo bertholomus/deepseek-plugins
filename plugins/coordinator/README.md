@@ -205,25 +205,29 @@ The projects plugin this one grew from kept its data in `~/.dsh/projects/`. This
 
 ## Config
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `true` | Turn the plugin off without removing the row. |
-| `threadModel` | | Default model for new threads. Empty uses the DSH default. |
-| `threadEffort` | | Default effort for new threads. Empty uses the model's default. |
-| `yourTools` | `asked` | Which threads get your guarded tools: `asked` (a thread only the ones your words for it name) or `always` (every thread). See [Your tools and permissions](#your-tools-and-permissions). |
-| `threadPermission` | `workspace-write` | The DSH permission preset new threads start on, or `default`. |
-| `autoHandback` | `idle` | `idle` nudges a thread that ends a turn the chat started without a handback, once, and tells the chat when it ends that way again. `off` sends only explicit handbacks, and no nudges. |
-| `maxHandbacksPerHour` | `30` | Handbacks one thread may send per hour, automatic notes and nudges included. Stops a chat and a thread from looping. |
-| `maxThreadsPerHour` | `20` | New threads one chat may start per hour. Stops a chat that keeps starting threads, for example to retry a failing one; it gets an error to report to you instead. |
-| `approvalNoticeSeconds` | `0` | How long a thread the chat started may wait on a permission prompt before the chat is told. `0` tells it at once. |
-| `guardedTools` | `[]` | Your personal and infrastructure MCP servers or tools: a list of names, or a map from each name to the words you'd call it by. Threads use them only when your words ask; see [Guarded tools](#guarded-tools). Tools another plugin marks as yours are guarded without being listed. |
-| `trustedHosts` | `[]` | Machines you trust, such as your own NAS: host names or addresses (`frankennas`, `100.64.0.7`); case doesn't matter, and a user, a port or brackets are left off. A thread's command whose sends all reach these runs without asking; a delete on this machine, a push, a publish or a deploy still asks. |
-| `storeFile` | `~/.dsh/coordinator/coordinator.json` | The coordinating chats and their threads: sessions, settings, held handbacks. Mode 600. |
-| `memoryDir` | `~/.dsh/coordinator/memory` | Each chat's shared notes, one file per chat (named by its session id). |
-| `maxMemoryBytes` | `65536` | Largest notes file the tools will write. |
-| `logFile` | `~/.dsh/coordinator/coordinator.log` | Action log, mode 600. Empty string turns it off. |
+Every key is optional. *Live* keys apply while DSH runs; DSH starts the plugin again for a change to any other key, and coordinating chats and their threads carry on from the plugin's store.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | true or false | `true` | Turn the plugin off without removing the row; see [Switch it off](#switch-it-off). |
+| `threadModel` | text, live | | Default model for new threads (`provider:model`, or a model id). Empty uses the DSH default. |
+| `threadEffort` | text, live | | Default effort for new threads. Empty uses the model's default. |
+| `yourTools` | `asked` or `always`, live | `asked` | Which threads get your guarded tools: `asked` (a thread only the ones your words for it name) or `always` (every thread). See [Your tools and permissions](#your-tools-and-permissions). |
+| `threadPermission` | text, live | `workspace-write` | The DSH permission preset new threads start on (`read-only`, `workspace-write`, `danger-full-access`, or one of your own), or `default`. |
+| `autoHandback` | `idle` or `off` | `idle` | `idle` nudges a thread that ends a turn the chat started without a handback, once, and tells the chat when it ends that way again. `off` sends only explicit handbacks, and no nudges. |
+| `maxHandbacksPerHour` | whole number, 1 to 1000 | `30` | Handbacks one thread may send per hour, automatic notes and nudges included. Stops a chat and a thread from looping. |
+| `maxThreadsPerHour` | whole number, 1 to 1000 | `20` | New threads one chat may start per hour. Stops a chat that keeps starting threads, for example to retry a failing one; it gets an error to report to you instead. |
+| `approvalNoticeSeconds` | number, 0 to 86400 | `0` | How long a thread the chat started may wait on a permission prompt before the chat is told. `0` tells it at once. |
+| `guardedTools` | list of names, or map from name to words, live | `[]` | Your personal and infrastructure MCP servers or tools: a list of names (one name alone counts as a list of one), or a map from each name to the words you'd call it by. Threads use them only when your words ask; see [Guarded tools](#guarded-tools). Tools another plugin marks as yours are guarded without being listed. |
+| `trustedHosts` | list of names, live | `[]` | Machines you trust, such as your own NAS: host names or addresses (`frankennas`, `100.64.0.7`); case doesn't matter, and a user, a port or brackets are left off. A thread's command whose sends all reach these runs without asking; a delete on this machine, a push, a publish or a deploy still asks. |
+| `storeFile` | file path | `~/.dsh/coordinator/coordinator.json` | The coordinating chats and their threads: sessions, settings, held handbacks. Mode 600. |
+| `memoryDir` | folder path | `~/.dsh/coordinator/memory` | Each chat's shared notes, one file per chat (named by its session id). |
+| `maxMemoryBytes` | whole number, 1024 to 16777216 | `65536` | Largest notes file the tools will write. |
+| `logFile` | file path, or `""` | `~/.dsh/coordinator/coordinator.log` | Action log, mode 600. Empty string turns it off. |
 
 A path under `~/.dsh` follows DSH's own data folder: with `DSH_HOME` set (a second DSH for testing, say), the store, notes and log live under it instead.
+
+A wrong value never stops the plugin. Each one falls back to its default, and the plugin names it, says what it must be and what it uses meanwhile, in DSH's log, in its own log (`config-problem <key>`) and at the top of its page in **Plugins → Coordinator**, for example *maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.* What YAML or a person means is taken as meant: `"30"` for 30, `on`/`off` and `yes`/`no` for true and false, a bare `off` for `autoHandback: off`. A live text key that isn't text (a bare `5`) counts as not set.
 
 ## Tools
 
@@ -249,6 +253,23 @@ A thread:
 | `thread_ask` | A thread's question to its chat while it works; the answer arrives as a message from the chat. |
 | `thread_handback` | Report to the user, through the chat, with a status (`done`, `blocked`, `needs_decision`, `progress`) and a summary that leads with the result. |
 | `shared_notes` | The same shared notes as its chat. |
+
+## Switch it off
+
+- **One chat:** `/coordinate off`, or **Stop coordinating** in its Threads menu (below).
+- **The whole plugin, kept installed:** switch **Coordinator** off in DSH's **Plugins** page. Its Threads menus, cards, sidebar marks and style leave every window at once, and its host half stops, so no chat is offered the thread tools. Its store, notes and log stay as they are. Switched on again, its views come back once, and coordinating chats and their threads are as they were.
+- **From the profile:** `enabled: false` in the plugin's row. DSH starts the plugin again with it: no chat coordinates and none gets the thread tools, the window offers no **Coordinate**, the plugin's page says *Switched off* and how to switch it on, and anything the window still asks is answered with that. The plugin reads and writes nothing meanwhile. Set it to `true` (or take the line out) to switch it back on.
+
+## Rollback
+
+The plugin is installed from a checkout of this repository (see [Setup](#setup)), so going back is a checkout and a restart:
+
+```bash
+git -C ~/.dsh-plugins/deepseek-plugins log --oneline -- plugins/coordinator   # pick the commit to go back to
+git -C ~/.dsh-plugins/deepseek-plugins checkout <commit> -- plugins/coordinator
+```
+
+Then restart DSH. The store's format is the same as the version before this one, so coordinating chats, threads, held handbacks and notes carry over both ways. To go back to the projects plugin this one grew from, see the end of [Setup](#setup): its data in `~/.dsh/projects/` was never touched.
 
 ## Stop, archive, remove
 
@@ -282,23 +303,28 @@ A thread:
 
 ## Tests
 
+From the repository's root:
+
 ```bash
-npm install --no-save @deepseek-ai/schemastery @deepseek-ai/dsh-tools@next
-node plugins/coordinator/test/smoke.mjs
-node plugins/coordinator/test/client.mjs
+npm test                                          # unit, host and window suites
+node scripts/e2e.mjs coordinator                  # a real DSH: every build under .e2e/ and the installed app's
+node scripts/e2e.mjs coordinator --dsh 0.2.1-rc.1 # one build
 ```
 
-The smoke tests run against a fake Host built from the published `@deepseek-ai/*` packages, including a Host with DSH's per-session model selection and DSH's commands service. The client tests load the window half (lib/client.js) the way DSH does, with stand-ins for React and DSH's primitives.
+`npm test` runs the pure modules' tests (`test/coordinator.test.js`, `deletes`, `sends`, `net`, `grants`) and, through `test/coordinator-host.test.js`, the plugin's two big suites, each in its own process:
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. A plain chat runs `/coordinate` through DSH's own commands service, and the test drives it and its threads through the bridge and checks what reaches the model and what DSH records. A new chat coordinates before its first message too, by `/coordinate` and by the endpoint the window's switch calls, and that message reaches the model with the thread tools.
+- the host suite, `plugins/coordinator/test/smoke.mjs`: the plugin on a fake Host built from DSH's own packages, once for each DSH build under `.e2e/` (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`), including a Host with DSH's per-session model selection and DSH's commands service, and every wrong setting;
+- the window suite, `plugins/coordinator/test/client.mjs`: the window half (`lib/client.js`) loaded the way DSH loads it, with stand-ins for React and DSH's primitives.
+
+Without a DSH under `.e2e/`, the host suite is skipped and says how to install one.
+
+`scripts/e2e.mjs coordinator` reads the live DSH's fingerprint before and after (the tests must leave the DSH you use untouched), then, on each DSH, runs:
+
+- `test/e2e/run.mjs`: a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin, session-bridge and a scripted model server. A plain chat runs `/coordinate` through DSH's own commands service, and the test drives it and its threads through the bridge and the window's endpoints, and checks what reaches the model and what DSH records: thread start and handback, nudges and notes, settings, pause, a restart and a crash, the Changes tab, archive, your tools and permissions, the send and delete checks, wrong settings, and `enabled: false` and back.
+- `test/e2e/window.mjs`, after it: DSH's window in a Chromium (`npm i --prefix .e2e/tools playwright-core`, with Playwright's Chromium installed). A chat starts three threads, and the test looks at the Threads menu by mouse and keyboard, the cards, the nesting in the session list, the Threads panel, Thread settings, a thread's header and the plugin's page with a wrong setting, in light and dark, at 1280 and 760 px, then switches the plugin off and on in **Plugins**. Its pictures go to `.e2e/shots/coordinator/<DSH version>` (`SHOTS=<folder>` for another place). Without Playwright it says so and skips.
+
+A third real-host test checks where a thread on Workspace Write can write, in a DSH whose default is Full access with approvals "never", as yours may be: the thread runs with approvals set to ask, a write inside its folder goes through, a plain write just outside is refused with DSH's note that it may retry, the retry raises DSH's approval prompt and writes nothing while it waits or after a stop, the chat is told, the same for the thread's shell (which also shows whether DSH has a sandbox to run it in on that machine), and a plain chat on DSH's default writes outside without asking, with either. It makes its folder in your home folder, since DSH lets Workspace Write chats write its temp folders, and runs on Linux and macOS in under a minute:
 
 ```bash
-npm install --prefix /tmp/dsh @deepseek-ai/dsh
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/run.mjs
-```
-
-A second real-host test checks where a thread on Workspace Write can write, in a DSH whose default is Full access with approvals "never", as yours may be: the thread runs with approvals set to ask, a write inside its folder goes through, a plain write just outside is refused with DSH's note that it may retry, the retry raises DSH's approval prompt and writes nothing while it waits or after a stop, the chat is told, the same for the thread's shell (which also shows whether DSH has a sandbox to run it in on that machine), and a plain chat on DSH's default writes outside without asking, with either. It makes its folder in your home folder, since DSH lets Workspace Write chats write its temp folders, and runs on Linux and macOS in under a minute:
-
-```bash
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/sandbox.mjs
+DSH_BIN=.e2e/dsh-0.2.1-rc.1/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/coordinator/test/e2e/sandbox.mjs
 ```
