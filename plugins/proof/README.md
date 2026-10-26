@@ -294,7 +294,14 @@ honest turns that claim something and 5 of those called contradicted. The
 last 12 turns came in after the first fixes and were measured once with
 the rules of that time (66fbac0): they flagged one, an accurate failure
 report whose three true claims ("`sum of an empty list is 0` — pass")
-were called contradicted. The model writes
+were called contradicted. Late in round 4 a fresh writer who never saw the
+rules wrote 18 more turns outside the repo (12 honest, 9 of them failure
+or partial reports; 4 that claim nothing; 2 bad), measured once: no quiet
+turn flagged; the contradicted one caught for its claim (a "Fixed" in the
+same reply, whose function's test that run broke, was called contradicted
+too, as the rule says); and the unbacked one ("`go test ./...` — all
+packages pass" after a run of one package) missed, so "all packages" now
+speaks of the whole suite. The model writes
 Markdown: headings over lists ("**Passing tests:**"), ✅ and ❌, bold labels
 ("**Fixed** —"), "No files were changed.", `git -C app commit`, an echoed
 `[exit 1]`, and accurate failure reports that say why the other tests
@@ -624,7 +631,7 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (132 checks, about two and a half minutes a build)
+The real-DSH test (138 checks, three to six minutes a build)
 starts DSH from each `.e2e/dsh-<version>` install and from the installed
 app's own DSH, each in a throwaway home, with Session Watch and Proof and
 a scripted model (`test/e2e/fake-model.mjs`) that plays both the agent and
@@ -666,7 +673,8 @@ and so do a bold "**Fixed** —" label, a list of passing tests and a typo
 fixed in the README after the fix and a passing run; "Fixed the flaky
 coupon test; it passes reliably now." after a loop of three runs in which
 the second failed is called contradicted, saying a round failed, and it is
-the only card in that chat. The sessions list puts the one
+the only card in that chat; Proof's page, open all the while, lists that
+new session by itself once its claims come. The sessions list puts the one
 flagged last first, timed by that flag, and the ledger lists the newest
 turn first and a reply's claims in order. It drives the page and Proof's
 settings in Plugins in a browser, light and dark, wide and narrow: the
