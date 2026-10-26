@@ -14,8 +14,10 @@
  * browser half DSH serves, and a restart that changes nothing. Then a real
  * window (Chromium on the web profile, Playwright from .e2e/tools): the
  * session list by category with every workspace still there, folding by
- * click and by key, the Categories page on its glass card, find, the chip at
- * the top of a chat, light and dark, 760 px and contrast, and switched off
+ * click and by key, a running chat's dot on its folded workspace's own row
+ * and on its folded category (and gone when the turn ends), the Categories
+ * page on its glass card, find, the chip at the top of a chat, light and
+ * dark, 760 px and contrast, and switched off
  * in Plugins it leaves no header, mark, class or style sheet behind; on
  * again, one of everything. Pictures go to SHOTS (default
  * .e2e/shots/categories/<DSH version>/). Without Playwright the run fails,
@@ -485,6 +487,63 @@ try {
             const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-categories-sb'));
             const ring = await general.evaluate((el) => getComputedStyle(el).boxShadow);
             check('Enter opens it again, the keyboard stays on the header, and its ring shows', focused === 'testing-out-coordinator' && /inset/.test(ring) && (await page.locator('[data-slot="sidebar.workspaces"]').getByText(titles.a, { exact: true }).first().isVisible()), json({ focused, ring }));
+        });
+
+        await section('a running chat shows on its folded workspace\'s row and on its folded category, in words too', async () => {
+            // A turn that keeps running in work-c (the scripted model holds its reply open until it is let go).
+            const long = (await bridge('POST', '/sessions', { workspacePath: dirs.c, title: 'Long run', text: 'E2E:slow' })).sessionId;
+            await waitFor(async () => (await bridge('GET', `/sessions/${encodeURIComponent(long)}`))?.status === 'running', 'the long turn to run', 30000);
+            const recipe = page.locator('[data-categories-sb="local-model-recipe"]');
+            const row = page.locator(`[data-slot="sidebar.workspaces"] [data-row-key="workspace:${wsId.c}"]`);
+            const seat = row.locator('[data-categories-ws-dot]');
+            await row.waitFor({ timeout: 20000 });
+            // A click on its row folds or opens a workspace, as DSH does it. Start from an open row, whichever DSH chose.
+            const startedOpen = (await row.getAttribute('aria-expanded')) === 'true';
+            if (!startedOpen) {
+                await row.click({ position: { x: 24, y: 10 } });
+                await waitFor(async () => (await row.getAttribute('aria-expanded')) === 'true', 'DSH to open work-c', 5000);
+            }
+            await waitFor(async () => (await seat.count()) === 0, 'no seat on the open row', 5000).catch(() => {});
+            check('an open workspace with a running chat has no seat of the plugin\'s (DSH shows the chat\'s own)', (await seat.count()) === 0);
+            // DSH's own fold of the workspace (a click on its row): the dot DSH no longer shows goes on the row.
+            await row.click({ position: { x: 24, y: 10 } });
+            await waitFor(async () => (await row.getAttribute('aria-expanded')) === 'false', 'DSH to fold work-c', 5000);
+            const said = await waitFor(async () => ((await seat.count()) === 1 ? seat.textContent() : null), 'the dot on the folded workspace\'s row', 20000).catch(() => null);
+            check('a folded workspace with a running chat shows the dot on its own row, said as "a chat is running"', said === ', a chat is running' && (await seat.locator('[aria-hidden="true"] *').count()) > 0, json({ said }));
+            await shot(page, shots, 'sidebar-running-workspace-light');
+            await setDark(page, true);
+            await shot(page, shots, 'sidebar-running-workspace-dark');
+            await setDark(page, false);
+            await row.click({ position: { x: 24, y: 10 } });
+            await waitFor(async () => (await row.getAttribute('aria-expanded')) === 'true', 'DSH to open work-c again', 5000);
+            await waitFor(async () => (await seat.count()) === 0, 'the seat to go', 5000).catch(() => {});
+            check('open again, the row\'s seat is gone', (await seat.count()) === 0);
+            if (!startedOpen) {
+                await row.click({ position: { x: 24, y: 10 } });
+                await waitFor(async () => (await row.getAttribute('aria-expanded')) === 'false', 'DSH to fold work-c as it was', 5000);
+            }
+            // The category folded: its header shows the dot and says "running".
+            await recipe.click();
+            await waitFor(async () => (await recipe.getAttribute('aria-expanded')) === 'false', 'the fold', 5000);
+            const label = await waitFor(async () => {
+                const now = await recipe.getAttribute('aria-label');
+                return /, running$/.test(now ?? '') ? now : null;
+            }, 'the running mark on the folded header', 20000).catch(() => recipe.getAttribute('aria-label'));
+            check('a folded category with a running chat shows its dot and says "running"', label === 'Local Model Recipe, 1 workspace, running' && (await recipe.locator('.dshc-sb-dot').count()) === 1, json({ label }));
+            await shot(page, shots, 'sidebar-running-folded-light');
+            await setDark(page, true);
+            await shot(page, shots, 'sidebar-running-folded-dark');
+            await setDark(page, false);
+            // The turn ends: the dot goes from the folded header too.
+            model.release();
+            await waitFor(async () => (await bridge('GET', `/sessions/${encodeURIComponent(long)}`))?.status === 'idle', 'the long turn to end', 30000).catch(() => {});
+            const after = await waitFor(async () => {
+                const now = await recipe.getAttribute('aria-label');
+                return now === 'Local Model Recipe, 1 workspace' ? now : null;
+            }, 'the running mark to go', 20000).catch(() => recipe.getAttribute('aria-label'));
+            check('when the chat stops running, the folded header loses its dot and its "running"', after === 'Local Model Recipe, 1 workspace' && (await recipe.locator('.dshc-sb-dot').count()) === 0, json({ after }));
+            await recipe.click();
+            await waitFor(async () => (await recipe.getAttribute('aria-expanded')) === 'true', 'the unfold', 5000);
         });
 
         await section('the Categories page on its glass card', async () => {
