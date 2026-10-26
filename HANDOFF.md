@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
-Updated: 2026-10-26 1:47 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 1:51 PM PDT by A (gmail), thread "Goal 9.5 builder"
 Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
 Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
 
@@ -31,6 +31,7 @@ Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19
 - Instance names with distinct ports: `~/Projects/goal95/instances.txt`. Memory guard: `~/Projects/goal95/bin/slot take|give|list` (`slots.max` 8 for anyone, plus `slots.judges` 6 judge-only slots 9-14 for owners named `-j<N>`; a slot is taken only while memory is at least 20% free).
 
 ## Gotchas (GOAL95)
+- Never capture the owner's screen (RULES.md): Notifications' judge took one full-screen shot at 10:49 AM, which showed private windows (deleted) and left a macOS screen-recording prompt for the owner.
 - dsh-site scorecards and their pictures stay local in `review/` (not committed); its SCOREBOARD rows give the scores only.
 - Shared kit: goal95/decisions changes `shared/client-kit.js` (synced into all 7 kit blocks) and carries goal95/session-watch's db946fd as 18a58ee. Merge goal95/session-watch to main first, then goal95/decisions, then run `node scripts/sync-shared.mjs --check`; any other branch that synced `shared/` needs the same check after its merge.
 - Commit 09a18d1 (suite/v1) carries a tool-attribution trailer by mistake; it is not rewritten (no force-push). Commit messages here carry no attribution lines.
