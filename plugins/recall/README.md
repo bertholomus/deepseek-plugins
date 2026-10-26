@@ -508,7 +508,9 @@ the line above the message box for a running one, rows that follow their
 turns, Back from the tool's card to its search and to its chat, buttons
 named with their result, focus after Back, the folder menu's cut paths,
 the page's state read without Session Watch, and every state's words. The
-bench test runs the bench on 200 sessions.
+bench test runs the bench on 200 sessions: each search three times, its
+median inside 300 ms (one slow round on a busy computer does not fail it),
+the rare word at its exact turn, and a new turn and session found.
 
 **Real-DSH test.** It makes 126 checks and takes three to eight minutes
 a build, by how busy the computer is. It starts DSH from each
