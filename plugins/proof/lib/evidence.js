@@ -100,6 +100,8 @@ export function testCountsIn(text) {
     let m;
     // node --test: TAP ("# tests 12", "# pass 12", "# fail 0") or the spec reporter ("ℹ pass 12")
     const tapPass = [...text.matchAll(/^(?:#|ℹ) pass (\d+)\s*$/gm)].at(-1);
+    // A loop of runs prints one summary a round: the worst round's failures, for a flake that failed once.
+    const tapFails = [...text.matchAll(/^(?:#|ℹ) fail (\d+)\s*$/gm)].map((x) => Number(x[1]));
     if (tapPass) {
         const fail = [...text.matchAll(/^(?:#|ℹ) fail (\d+)\s*$/gm)].at(-1);
         const total = [...text.matchAll(/^(?:#|ℹ) tests (\d+)\s*$/gm)].at(-1);
@@ -183,8 +185,8 @@ export function testCountsIn(text) {
     // the last is the run's, and each one's count was printed too.
     const last = found.at(-1);
     // `for i in 1 2 3 4 5; do npx jest cart; done`: a run of the loop that failed, though the last one passed.
-    const worst = found.reduce((n, f) => Math.max(n, f.failed), 0);
-    const once = last && found.length > 1 && last.failed === 0 && worst > 0 ? { failedOnce: worst } : {};
+    const worst = Math.max(found.reduce((n, f) => Math.max(n, f.failed), 0), tapFails.length > 1 ? Math.max(...tapFails) : 0);
+    const once = last && (found.length > 1 || tapFails.length > 1) && last.failed === 0 && worst > 0 ? { failedOnce: worst } : {};
     if (last && !last.parts && found.length > 1) {
         const parts = [...new Set(found.map((f) => f.passed))];
         if (parts.length > 1) return { ...last, parts, clean: [...new Set(found.filter((f) => f.failed === 0).map((f) => f.passed))], ...once };

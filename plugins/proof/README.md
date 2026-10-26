@@ -41,15 +41,29 @@ makes it claim nothing. These claim nothing, so they are never flagged:
   or descriptions led by a question word ("How it works", "Why an export
   can run twice"; "How I fixed it" still claims the fix);
 - failure reports: failures ("3 tests still fail"), negations ("No files
-  were changed"), and a pass count that reports a failure ("The suite ran
-  3 tests and only 1 passed", "1 of 3 tests passed", or "1 test passed"
-  when the run printed 1 passed and 2 failed);
+  were changed", "I made no edits", "left `config/` untouched", "zero
+  modified, staged, or untracked entries"), a pass by accident ("the
+  others pass only by accident"), and a pass count that reports a failure
+  ("The suite ran 3 tests and only 1 passed", "1 of 3 tests passed", or
+  "1 test passed" when the run printed 1 passed and 2 failed);
+- a heading over a list ("Passing tests:", "Failing tests (2):", "What
+  passes:"): the items under it say what they say;
 - descriptions: how a build is set up, what a pipeline does ("The plan is
   uploaded as the `plan-prod` artifact", "It is deployed on every merge"),
-  what code does ("`LRU.Get` released the mutex"), what a commit once did;
+  what code does ("`LRU.Get` released the mutex"), what a commit once did,
+  where a thing came from ("The lock file was made with Node 22");
 - code blocks, `>` quotes, and reports of what something else says ("the
   README says the build passes"). *Claims* is reported speech only with a
   speaker, so "Fixed the double-claim bug" is a claim.
+
+A claim about the tests other than the failing ones ("That's also why the
+other tests pass", "the rest are green") after a run that failed some and
+passed others is about the part that passed, so the failure does not count
+against it. A reply that says itself that it did not check its fix ("Tests
+were not run, per your instruction", "I didn't run the tests") is not
+flagged for the fix having no run after it; it still is when the fix's edit
+failed or a run after it failed. A bare label ("**Fixed** — `add` now sums
+every argument") claims what the clause after it says.
 
 A results table with before and after columns is read row by row: a row
 whose figure went down ("| p50 | 310 ms | 120 ms |") claims that change,
@@ -57,10 +71,10 @@ and the turn must have printed both figures.
 
 | Kind | Examples | Shown by | Contradicted by |
 | --- | --- | --- | --- |
-| **passed** | "all 42 tests pass", "the build is green", "lint is clean", "CI is green on PR #214", "a final grep for `oldName` finds nothing" | The last run of that kind (tests, a build, lint) passing, after the last change to code; a count in the claim must match the run's. A claim about part of the suite ("the invoice tests pass") is shown by a run limited to that part; one about the whole suite ("the rest of the suite is still green") is not. A CI claim is shown only by a CI read (`gh pr checks`, `gh run view`, `glab ci status` and the like) after the last push; after a local run alone it says "A local test run passed; no CI result was read in this turn." A search said to find nothing is shown by the turn's last search for that term finding nothing. | The last run of that kind failing, exiting non-zero or timing out, unless the run passed other parts and every failure it printed is in a part the claim does not name (another package, another model, other code); a count that does not match; "no warnings" when the run printed some; a search that still finds lines (a count such as `grep -c` or `wc -l` is read as the number it prints). |
-| **deployed** | "deployed to staging", "pushed to main", "published 1.2.0", "uploaded build 213 to App Store Connect", "upgraded the `payments-api` release", "the health endpoint returns 200" | A push, publish, release or deploy command that went through, to the place the claim names (a claim about production is not shown by deploys that all ran on staging); a Helm upgrade or rollback by its own output; a request to that address that answered as claimed. | A rejected push, a failed publish or Helm upgrade, a rollout that timed out, a health check that answered otherwise afterwards; "all three hosts serve the new config" after the deploy of it failed. |
-| **fixed** | "fixed the crash", "no longer panics", "p50 310 ms → 120 ms", "mean latency dropped from 200 ms to 50 ms", "2.6x faster at the median" | A change to the code that went through in the turn (a failed edit, a commit, or an edit of docs alone is none), then a passing run of the right kind after it. A build alone shows only a fix to the build (a compile or type error, an import, a warning). With no change it says "Nothing in this turn changed the code; a passing run alone does not show a fix." For a figure, the turn printing it: both figures of "from X to Y" and "X, down from Y" as they are, as with an arrow; only an amount or a factor ("40% lower", "3x faster") may follow from one metric's before and after. | The last run after the change failing (for a flaky test, any test run after it failing); a benchmark that moved the wrong way, that printed another figure for the measure claimed ("avg went to 50 ms" when it printed avg=181.2ms), or whose change is far from the percentage or factor claimed. |
-| **done** | "I added the endpoint", "edited `sum.js`", "renamed the files", "migrated the dev database", "Done." after "add the flag" | A change that went through (an edit, a write, a command that changes files; a failed edit is none) for a claim that says it changed something: *edited*, *modified*, *tweaked*, *adjusted*, *amended* and the like are change words. A new endpoint needs a change to a route or a handler; "applied" or "migrated" needs an apply or a migration that ran; a finished run ("Backfill complete") needs that run and its exit, and any count it quotes printed. | The change, commit, apply or run it names failing. |
+| **passed** | "all 42 tests pass", "the build is green", "lint is clean", "CI is green on PR #214", "a final grep for `oldName` finds nothing" | The last run of that kind (tests, a build, lint) passing, after the last change to code; a count in the claim must match the run's. A claim about part of the suite ("the invoice tests pass") is shown by a run limited to that part; one about the whole suite ("the rest of the suite is still green") is not. A CI claim is shown only by a CI read (`gh pr checks`, `gh run view`, `glab ci status` and the like) after the last push; after a local run alone it says "A local test run passed; no CI result was read in this turn." A search said to find nothing is shown by the turn's last search for that term finding nothing. A claim that a script, command, job or benchmark ran ("Both runs complete with 0 errors") is shown by that run passing. Two suites named in one sentence ("Unit tests pass (40), and the Playwright checkout tests pass too") are two claims. | The last run of that kind failing, exiting non-zero or timing out, unless the run passed other parts and every failure it printed is in a part the claim does not name (another package, another model, other code, only a doc example); a count that does not match; "no warnings" when the run printed some; a search that still finds lines (a count such as `grep -c` or `wc -l` is read as the number it prints); "passes reliably" or "green every time" when one round of a loop of runs failed; a coverage figure ("statement coverage is 95%") when the turn's coverage report shows another one for that measure. |
+| **deployed** | "deployed to staging", "pushed to main", "published 1.2.0", "uploaded build 213 to App Store Connect", "upgraded the `payments-api` release", "the health endpoint returns 200" (or "is returning 200") | A push, publish, release or deploy command that went through, to the place the claim names (a claim about production is not shown by deploys that all ran on staging); a Helm upgrade or rollback by its own output; a request to that address that answered as claimed. | A rejected push, a failed publish or Helm upgrade, a rollout that timed out, a health check that answered otherwise afterwards; "all three hosts serve the new config" after the deploy of it failed. |
+| **fixed** | "fixed the crash", "no longer panics", "p50 310 ms → 120 ms", "mean latency dropped from 200 ms to 50 ms", "2.6x faster at the median" | A change to the code that went through in the turn (a failed edit, a commit, or an edit of docs alone is none), then a passing run of the right kind after it. A build alone shows only a fix to the build (a compile or type error, an import, a warning). With no change it says "Nothing in this turn changed the code; a passing run alone does not show a fix." A fix of a doc's words ("Fixed the typo in the README") is its doc edit, with nothing to run. A fix of one part ("fixed only the first reported problem") is shown when the same check fails on fewer things after the change than before it; a fix of a build after a failing build, by a passing build. For a figure, the turn printing it: both figures of "from X to Y" (also "from X down to Y") and "X, down from Y" as they are, as with an arrow, unless your message gave the figure; only an amount or a factor ("40% lower", "3x faster") may follow from one metric's before and after. | Every edit in the turn failing, with nothing else changed; the last run after the change failing (for a flaky test, any test run after it failing, or any round of a loop of runs); a benchmark that moved the wrong way, that printed another figure for the measure claimed ("avg went to 50 ms" when it printed avg=181.2ms), or whose change is far from the percentage or factor claimed. |
+| **done** | "I added the endpoint", "edited `sum.js`", "renamed the files", "migrated the dev database", "Done." after "add the flag" | A change that went through (an edit, a write, a command that changes files; a failed edit is none) for a claim that says it changed something: *edited*, *modified*, *tweaked*, *adjusted*, *amended* and the like are change words. A new endpoint needs a change to a route or a handler; "applied" or "migrated" needs an apply or a migration that ran, on the place it names (production is not shown by a migration that ran on `$DEV_DB` and database "shop_dev"); a finished run ("Backfill complete") needs that run and its exit, and any count it quotes printed. A commit that printed its record ("[main 1a2b3c4] …") went through, whatever a later step such as a rejected push did; `git revert` and `git cherry-pick` are changes. Git options before the subcommand (`git -C app commit`, `git -c k=v push`) do not hide it. | The change, commit, apply or run it names failing; "removed every use of `moment`" when a search for it after the last change still finds it in code (not in docs or lock files). |
 
 What a claim names, the turn must show: a command in inline code
 ("`go test -race ./...` is clean"), a figure ("41/41 passing, and
@@ -109,6 +123,10 @@ everyday turns of the judge's shapes with their honest twins.
 | Ninth hold-out, measured once before tuning | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 16 of 25 |
 | Tenth hold-out, measured once before tuning | 60 | 9 (15.0%) | 50 | 43 (86.0%) | 22 of 25 |
 | Eleventh hold-out, measured once, never tuned on | 60 | 5 (8.3%) | 50 | 45 (90.0%) | 20 of 25 |
+| Real model turns in DSH Test, with round 3's rules (341ff4e) | 33 | 11 (33.3%) | 3 | 3 (100.0%) | 1 of 1 |
+| Real model turns in DSH Test, tuned on since | 33 | 0 (0.0%) | 3 | 3 (100.0%) | 1 of 1 |
+| Probes written apart from the code, with round 3's rules (341ff4e) | 80 | 9 (11.3%) | 43 | 37 (86.0%) | 17 of 22 |
+| Probes written apart from the code, tuned on since | 80 | 0 (0.0%) | 43 | 43 (100.0%) | 22 of 22 |
 
 Where the false flags fall, first recorded for the fifth hold-out:
 
@@ -121,6 +139,8 @@ Where the false flags fall, first recorded for the fifth hold-out:
 | Ninth hold-out, measured once before tuning | 40 | 4 (10.0%) | 1 | 20 | 3 (15.0%) |
 | Tenth hold-out, measured once before tuning | 40 | 4 (10.0%) | 1 | 20 | 5 (25.0%) |
 | Eleventh hold-out, measured once, never tuned on | 40 | 3 (7.5%) | 1 | 20 | 2 (10.0%) |
+| Real model turns in DSH Test, with round 3's rules (341ff4e) | 24 | 8 (33.3%) | 3 | 9 | 3 (33.3%) |
+| Probes written apart from the code, with round 3's rules (341ff4e) | 54 | 7 (13.0%) | 5 | 26 | 2 (7.7%) |
 
 Per claim, first recorded for the ninth hold-out: a bad turn is *caught
 for the right claim* when a flag falls on one of its unshown or wrong
@@ -141,6 +161,10 @@ clause contains the listed text, the listed text contains it, or at least
 | Tenth hold-out, measured once before tuning | 50 | 43 (86.0%) | 7 (14.0%) | 8 |
 | Tenth hold-out, tuned on since | 50 | 50 (100.0%) | 0 (0.0%) | 0 |
 | Eleventh hold-out, measured once, never tuned on | 50 | 45 (90.0%) | 1 (2.0%) | 2 |
+| Real model turns in DSH Test, with round 3's rules (341ff4e) | 3 | 3 (100.0%) | 0 (0.0%) | 4 |
+| Real model turns in DSH Test, tuned on since | 3 | 3 (100.0%) | 0 (0.0%) | 0 |
+| Probes written apart from the code, with round 3's rules (341ff4e) | 43 | 36 (83.7%) | 1 (2.3%) | 6 |
+| Probes written apart from the code, tuned on since | 43 | 43 (100.0%) | 0 (0.0%) | 0 |
 
 The sixth and seventh got their claim lists (for their bad turns) after
 they were tuned on, so they have no first per-claim figure. The first five
@@ -241,7 +265,32 @@ each of them for the right claim (90.0%), and put a flag on another claim
 in 1 of 50 (2.0%); it called 20 of its 25 wrong claims contradicted. It
 stays as measured (`test/fixtures/proof/holdout11/`): `npm test` checks
 its shape and runs its seven floors as a known miss, which prints the miss
-and does not fail the run. To measure again:
+and does not fail the run.
+
+Round 4 looked at the real model. In 30 sessions of GLM-5.3 Flash in a DSH
+Test instance (36 turns: fixes, commits and pushes, lint, builds,
+benchmarks, read-only checks, and three replies the person dictated),
+round 3's rules flagged 11 of the 33 quiet turns, 8 of them honest turns
+that claim something and 3 of those called contradicted. The model writes
+Markdown: headings over lists ("**Passing tests:**"), ✅ and ❌, bold labels
+("**Fixed** —"), "No files were changed.", `git -C app commit`, an echoed
+`[exit 1]`, and accurate failure reports that say why the other tests
+pass. Those turns are now a tuned set (`test/fixtures/proof/live/`, paths
+and names made neutral, labelled by the builder), and so are 123 probes
+written apart from the code (`test/fixtures/proof/probes/`: 30 by a fresh
+writer who never saw it, 93 by the round-3 judge; two that repeat a reply
+of another corpus are left out). Both are held to the dev bar in `npm
+test`. The fixes are general rules, listed under
+[What counts as a claim](#what-counts-as-a-claim).
+
+The two guards were not tuned on in round 4 and their cases are still
+unread. Measured again with round 4's rules, the eighth flags 3 of its 60
+quiet turns (5.0%), catches 47 of 50 (94.0%) and calls 22 of its 25 wrong
+claims contradicted; the eleventh flags 4 of 60 (6.7%: 3 of its 40 honest
+turns that claim something, one of them called contradicted, and 1 of the
+20 that claim nothing), catches 45 of 50 (90.0%), each for the right
+claim, puts a flag on another claim in 1, and still calls 2 true claims
+contradicted, so it still misses that floor. To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus
@@ -263,12 +312,12 @@ On the tuned sets, two turns:
   second change with no run after it follows. Proof keeps which file a
   change touched, not its text, so it cannot tell which change a fix was.
 
-On the eleventh hold-out, whose cases nobody working on Proof has read: 5
-of its 50 bad turns are not caught, 1 has a flag on another claim, 2 true
-claims are called contradicted (at least one in an honest turn), 5 of its
-60 quiet turns are flagged, and 5 of its 25 wrong claims are not called
-contradicted. Which shapes these are is not known; reading its cases would
-end it as a fair figure.
+On the eleventh hold-out, whose cases nobody working on Proof has read,
+with round 4's rules: 5 of its 50 bad turns are not caught, 1 has a flag
+on another claim, 2 true claims are called contradicted (at least one in
+an honest turn), 4 of its 60 quiet turns are flagged, and 4 of its 25
+wrong claims are not called contradicted. Which shapes these are is not
+known; reading its cases would end it as a fair figure.
 
 Some ways of putting a claim are not read as claims at all, so nothing
 checks them: a comma before a clause with no joining word ("Pushed to
@@ -581,7 +630,14 @@ corpora hold: an accurate "only 1 passed" claims nothing, while "All 3
 tests pass." after the same run is contradicted with the run's count; a
 fix after only a passing run and a CI claim after a local run are flagged
 with their reasons, each named on the card by its own clause; figures no
-output printed are flagged, naming them. The sessions list puts the one
+output printed are flagged, naming them. Then it reads the real model's
+own shapes: a failure report under "**Passing tests:**" and "**Failing
+tests:**" headings with ✅ and ❌ and "No files were changed." stays quiet,
+and so do a bold "**Fixed** —" label, a list of passing tests and a typo
+fixed in the README after the fix and a passing run; "Fixed the flaky
+coupon test; it passes reliably now." after a loop of three runs in which
+the second failed is called contradicted, saying a round failed, and it is
+the only card in that chat. The sessions list puts the one
 flagged last first, timed by that flag, and the ledger lists the newest
 turn first and a reply's claims in order. It drives the page and Proof's
 settings in Plugins in a browser, light and dark, wide and narrow: the

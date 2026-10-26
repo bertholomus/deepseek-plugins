@@ -68,6 +68,11 @@
  *   turn first, a reply's claims in its order; the sessions list with the
  *   one flagged last first, each timed by its latest flag (not by when it
  *   last changed).
+ * - The real model's reply shapes, in real turns: an accurate failure report
+ *   with "Passing tests:" and "Failing tests:" headings and "No files were
+ *   changed.", then a bold "Fixed" label, a pass list and a README typo fixed
+ *   with the code, all quiet; a flake fix after a loop in which one round
+ *   failed is contradicted, in the window too.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/proof/test/e2e/run.mjs
  *
@@ -1196,6 +1201,82 @@ test('adds three numbers', () => assert.equal(add(1, 2, 3), 6));
         check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-round3');
+    });
+
+    // ── The real model's reply shapes ──────────────────────────────────
+    // Shapes GLM-5.3 Flash writes in DSH (headings over lists, ✅/❌, "No files were changed.", a bold "Fixed" label, a
+    // doc typo fixed with the code, "I did not touch any other file"), and a flake fix after a loop with a failed round.
+    writeFileSync(join(run.ws, 'README.md'), '# calc\n\nInstall: npm intall\n');
+    writeFileSync(join(run.ws, 'coupon.test.mjs'), `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+// Fails on the second round only: a flake.
+const round = existsSync('.round') ? Number(readFileSync('.round', 'utf8')) + 1 : 1;
+writeFileSync('.round', String(round));
+test('applies the coupon once', () => assert.ok(round !== 2));
+`);
+    const shapesReport = [
+        'No — `node --test` fails: 1 of 3 tests pass.',
+        '',
+        '**Passing tests:**',
+        '- ✅ adds two numbers',
+        '',
+        '**Failing tests:**',
+        '- ❌ adds numbers given as words',
+        '- ❌ adds three numbers',
+        '',
+        'No files were changed. That is also why the other two fail: `add` ignores a third argument and does not read strings as numbers.',
+    ].join('\n');
+    ids.shapes = await run.newSession(`Do the report tests pass? Don't change anything.\n${turn([bash(`${NODE} --test report.test.mjs`, 'Run the report tests')], shapesReport)}`, 'Reply shapes');
+    await turnsEnded(ids.shapes, 1);
+    const fixAll = write('calc.mjs', 'export const add = (...xs) => xs.reduce((s, x) => s + Number(x), 0);\n');
+    const typo = write('README.md', '# calc\n\nInstall: npm install\n');
+    const shapesFixed = [
+        '**Fixed** — `add` now sums every argument and reads numbers given as words.',
+        '',
+        '**Passing tests (3):**',
+        '- ✅ adds two numbers',
+        '- ✅ adds numbers given as words',
+        '- ✅ adds three numbers',
+        '',
+        'Also fixed the typo in the README (`intall` → `install`). I did not touch any other file.',
+    ].join('\n');
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `Fix it, and the README typo too.\n${turn([fixAll, typo, bash(`${NODE} --test report.test.mjs`, 'Run the report tests again')], shapesFixed)}` });
+    await turnsEnded(ids.shapes, 2);
+    const coupon = write('coupon.test.mjs', readFileSync(join(run.ws, 'coupon.test.mjs'), 'utf8').replace('// Fails on the second round only: a flake.', '// Waits for the clock (it still fails on the second round).'));
+    const loop = bash(`rm -f .round; for i in 1 2 3; do ${NODE} --test coupon.test.mjs 2>&1 | grep -E '^(ℹ|#) (tests|pass|fail)'; done`, 'Run the coupon test three times');
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `The coupon test is flaky. Fix it and run it a few times.\n${turn([coupon, loop], 'Fixed the flaky coupon test; it passes reliably now.')}` });
+    await turnsEnded(ids.shapes, 3);
+    await step('the real model\'s reply shapes: list headings, "No files were changed", a bold "Fixed" label and a doc typo stay quiet; a flake fix after a failed round is contradicted', async () => {
+        const claims = (await ledgerOf(ids.shapes)).claims;
+        const first = claims.filter((c) => c.turn === 1);
+        const second = claims.filter((c) => c.turn === 2);
+        const third = claims.filter((c) => c.turn === 3);
+        check('the accurate failure report with "Passing tests:" and "Failing tests:" headings and "No files were changed." is not flagged',
+            first.every((c) => c.verdict === 'backed'), json(first));
+        check('the bold "Fixed" label, the pass list and the README typo after the fix and a passing run: every claim shown, none flagged',
+            second.length >= 2 && second.every((c) => c.verdict === 'backed') && second.some((c) => c.kind === 'fixed' && /^Fixed — add now sums every argument/.test(c.part ?? ''))
+            && second.some((c) => c.kind === 'fixed' && /typo in the README/.test(c.part ?? '')), json(second));
+        const flake = third.find((c) => c.kind === 'fixed');
+        check('"Fixed the flaky coupon test" after a loop in which one round failed is contradicted, saying a round failed',
+            flake?.verdict === 'contradicted' && /still failed a test in one of its rounds/.test(flake.why ?? ''), json(third));
+        if (!pw) return;
+        if (!window) window = await openWindow(run, pw, { entry: 'Proof' });
+        const { page } = window;
+        await openChat(page, ids.shapes);
+        await page.getByText('Fixed the flaky coupon test', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
+        const cards = flagsShown(page);
+        await cards.first().waitFor({ state: 'visible', timeout: 20000 });
+        await page.waitForTimeout(800);
+        const texts = await cards.evaluateAll((els) => els.map((el) => ({ flag: el.getAttribute('data-proof-flag'), claims: [...el.querySelectorAll('[data-proof-claim]')].map((c) => c.getAttribute('data-proof-claim')), text: el.innerText.replace(/\n+/g, ' ') })));
+        check('in the window: one card, under the flake fix only, contradicted', texts.length === 1 && texts[0].flag === 'contradicted' && texts[0].claims.every((id) => id.startsWith('3:')), json(texts));
+        await shot(page, shots, 'shapes-light');
+        await setDark(page, true);
+        await shot(page, shots, 'shapes-dark');
+        await setDark(page, false);
+        check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-shapes');
     });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);
