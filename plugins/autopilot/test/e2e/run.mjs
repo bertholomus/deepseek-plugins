@@ -516,7 +516,8 @@ try {
             // above it are moved. The choice is kept, the focus comes back to it, and Enter still applies it.
             const orderOf = () => page.locator('[data-autopilot-sessions] [data-autopilot-session]').evaluateAll((els) => els.map((el) => el.getAttribute('data-autopilot-session')));
             const orderBefore = await orderOf();
-            const lower = orderBefore.slice(orderBefore.indexOf(ids.off) + 1).find((id) => [ids.question, ids.progress, ids.ask].includes(id));
+            // Sessions with nothing left open, so the turn gives Autopilot nothing to do later.
+            const lower = orderBefore.slice(orderBefore.indexOf(ids.off) + 1).find((id) => [ids.ask, ids.progress].includes(id));
             if (lower) await run.bridge('POST', `/sessions/${encodeURIComponent(lower)}/prompt`, { text: 'Thanks. One more check, please.' });
             const moved = lower ? await waitFor(async () => {
                 const order = await orderOf();
