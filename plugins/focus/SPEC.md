@@ -1,23 +1,15 @@
-# Focus — plugin spec (v1)
+# Focus — plugin spec (v2, 0.2.0)
 
-A pomodoro / countdown timer for DeepSeek Harness Desktop. Glass-styled, zero network
-calls, zero keys, zero new dependencies. State lives host-side with an **absolute
-`endAt`**, so the countdown stays correct across page reloads and DSH restarts.
+A pomodoro / countdown timer for DeepSeek Harness Desktop. No network calls but its own route, no
+keys, no new dependencies. State lives host-side with an **absolute `endAt`**, and the host ends a
+timer itself, so the countdown and the count are right across reloads, restarts and with no window.
 
-Reference implementation for every pattern in here: `~/.dsh-plugins/wallpaper/`
-(`lib/impl.js` host, `lib/client.js` client). Read both before writing code.
+v2 changes the v1 contract in five places, each marked **(v2)** below: the host ends timers itself
+and `complete` only asks it to check; `start` and `set` are refused while a timer runs; minutes are
+whole; the answers carry `rev` and `problems`; the client is drawn with DSH's own parts and tokens,
+as DESIGN.md asks, instead of v1's glass recipe.
 
-## File ownership
-
-| File | Owner |
-| --- | --- |
-| `lib/impl.js`, `lib/impl.test.mjs` | host thread |
-| `lib/client.js` | client thread |
-| `package.json`, `cordis.patch.yml`, `icon.svg`, `locale/en.json`, `lib/index.js`, `README.md` | coordinator |
-
-Do not edit files you do not own.
-
-## Host contract — `lib/impl.js`
+## Host contract — `lib/impl.js` (loaded by `lib/index.js` with a fresh URL on every enable)
 
 ```js
 export const name = 'focus';
@@ -25,114 +17,85 @@ export const inject = [];
 export async function apply(ctx, config) { ... }
 ```
 
-- `config`: `{ dataDir }`, default `<DSH_HOME>/focus` where
-  `DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')`. A test DSH keeps its
-  own copy. Files: `state.json`, `focus.log`. Write state atomically (tmp + rename).
-- Register routes exactly like wallpaper does:
-
-```js
-ctx.inject(['connection'], (c) => {
-  const connection = c.get?.('connection') ?? c.connection;
-  c.effect(() => connection.fetch.register({
-    path: `/api/focus/state`, methods: ['GET', 'POST'], requestBody: 'buffered',
-    fetch: async (req) => { /* dispatch on req.method, wrap errors → { error } + status */ },
-  }), 'focus: state');
-});
-```
-
-- `GET /api/focus/state` → `Response.json({ settings, timer, sessions })`, `cache-control: no-store`.
-- `POST /api/focus/state` body is `{ settings?, op? }`.
-  - `settings` patch, only known keys: `{ focusMin: 25, shortMin: 5, longMin: 15, chime: true }`.
-    Minutes clamped to 1–180.
-  - `op` (applied after the settings patch, one op per request):
+- `config`: `{ dataDir }`, checked by `checkConfig(raw, env)` **(v2)**: default
+  `<DSH_HOME>/focus` (`DSH_HOME = env.DSH_HOME || ~/.dsh`); a value that is not a full path (or `~/…`)
+  keeps the default and is said in words (`problems`), never thrown. `lib/index.js` declares
+  `Config = z.object({ dataDir: z.any() })`, so DSH takes any value and Focus checks it.
+- Files: `state.json` (tmp + rename), `focus.log` (ISO stamp per line; past 1 MB renamed to
+  `focus.log.1`) **(v2)**. A folder that cannot be made or written is a `problems` entry; the timer
+  keeps working in memory.
+- Route: `connection.fetch.register({ path: '/api/focus/state', methods: ['GET', 'POST'], requestBody: 'buffered', fetch })`
+  inside `ctx.inject(['connection'], …)` and `c.effect(…)`, so it goes with the plugin.
+- `GET` → `{ settings, timer, sessions, rev, problems }`, `cache-control: no-store`.
+- `POST` body `{ settings?, op? }`. Everything is validated first; a refused request changes nothing.
+  - `settings` patch: `focusMin`, `shortMin`, `longMin` (numbers; **(v2)** rounded to whole minutes,
+    clamped 1–180), `chime` (boolean). Only changed keys count as a change.
+  - `op`, after the patch:
 
 | op | effect |
 | --- | --- |
-| `{ op:'start', kind, durationMs }` | `timer = { kind, durationMs, endAt: now+durationMs, running: true }` (durationMs clamped 10 000–10 800 000) |
-| `{ op:'pause' }` | `running:false`, `remainingMs = max(0, endAt-now)`, `endAt:null` |
-| `{ op:'resume' }` | `endAt = now+remainingMs`, `running:true` |
-| `{ op:'reset' }` | `running:false`, `remainingMs = durationMs`, `endAt:null`, `doneAt:null` |
-| `{ op:'set', kind, durationMs }` | idle set: new kind/duration, `remainingMs = durationMs`, `running:false` |
-| `{ op:'complete' }` | client fires at 0: `running:false`, `endAt:null`, `remainingMs = durationMs`, `doneAt: now`; if kind === 'focus', `sessions.focus += 1` |
+| `{ op:'start', kind, durationMs }` | new running timer, `endAt = now + durationMs` (clamped 10 000–10 800 000). **(v2)** 409 while one runs. |
+| `{ op:'pause' }` | `remainingMs = max(0, endAt − now)`, `endAt: null`, `running: false`; nothing when idle |
+| `{ op:'resume' }` | `endAt = now + remainingMs`, `running: true`, `doneAt: null`; nothing when running |
+| `{ op:'reset' }` | idle, `remainingMs = durationMs`, `doneAt: null` |
+| `{ op:'set', kind, durationMs }` | idle timer of that kind and length. **(v2)** 409 while one runs. |
+| `{ op:'complete' }` | **(v2)** ends the timer only if `endAt ≤ now + 1500 ms`, as of `endAt`; otherwise nothing |
 
+- **(v2) The host's own end.** While a timer runs the host holds a timer for `endAt` (+25 ms). At
+  the end: `running: false`, `endAt: null`, `remainingMs = durationMs`, `doneAt = endAt`; a `focus`
+  kind adds one to `sessions.focus` if `endAt`'s local day is today; the end is logged once (with how
+  late, past 5 s). At start a timer whose end has passed ends the same way. Every read and write first
+  ends a due timer, so `complete` from two windows, a reload or a restart can count only once.
 - Canonical `timer`: `{ kind: 'focus'|'short'|'long'|'custom', durationMs, remainingMs, endAt: number|null, running: boolean, doneAt: number|null }`.
-  Invariant: running → `endAt` authoritative (`remainingMs` is a stale cache); idle → `remainingMs` authoritative.
-- `remainingOf(timer, now)` = `timer.running ? Math.max(0, timer.endAt - now) : timer.remainingMs`. **Export it** — the offline test uses it.
-- `sessions`: `{ date: 'YYYY-MM-DD' (server-local day), focus: n }` — reset `focus` when the stored date is not today.
-- Default state on first run: settings defaults + `timer = { kind:'focus', durationMs: 25*60_000, remainingMs: 25*60_000, endAt:null, running:false, doneAt:null }`, `sessions = { date: today, focus: 0 }`.
-- Malformed body / unknown op / bad values → `{ error: '…' }` with status 400, never an unhandled throw.
-- Log meaningful actions to `focus.log` (one line, ISO timestamp) like wallpaper does.
+  Running → `endAt` is the truth; idle → `remainingMs` is (never more than `durationMs`).
+- `sessions`: `{ date: 'YYYY-MM-DD' (server-local day), focus: n }`; a read on a new day resets it
+  (a change, so `rev` moves).
+- **(v2)** `rev`: +1 per change (saved with the state); `problems`: the setting's and the folder's
+  problems, in words.
+- Errors are answers: 400 (bad JSON, not an object, unknown op or kind, wrong types) and 409 with a
+  sentence that says what to do; 405 with `Allow: GET, POST`; anything else 500 with the reason, and
+  the log has it. No throw reaches DSH.
+- `createFocus({ dataDir, problems, now, day, setTimer, clearTimer, say, logMaxBytes })` holds the
+  working parts with its clock and timers handed in, so the tests run time forward by hand.
 
-### Offline test — `lib/impl.test.mjs`
+## Client contract — `lib/client.js` (v2: DESIGN.md)
 
-`node lib/impl.test.mjs` exits 0 with no DSH running. Use node:test. Approach:
-fake the `ctx`: an object whose `inject(deps, fn)` calls `fn({ effect: () => {}, get: () => fakeConnection })`,
-where `fakeConnection.fetch.register(def)` captures the route definition. Then call
-`apply(ctx, { dataDir: <mkdtemp> })`, grab the captured handler, and drive it with real
-`Request` objects (`new Request('http://x/api/focus/state', { method:'POST', body: JSON.stringify(...) })`).
-Cover: first-run defaults; start→GET shows endAt in the future; pause→resume preserves remaining;
-reset; set; complete increments sessions for focus only (not short/long); date rollover resets
-focus count (test via `remainingOf`/session-roll helper — export it if needed, e.g. `rollSessions(state, dateStr)`);
-bad op → 400. Clean up temp dirs.
+Hand-written React, no build step: `window.__ModuleLoader__.load({ id: "dsh-plugin-focus", factory })`,
+`require("react")` and `require("@deepseek-ai/dsh-client-ui-primitives")` (listed in
+`package.json` `dsh.client.inject`). Returns `{ name: "dsh-plugin-focus", inject: ["slots", "locale"], apply }`.
 
-## Client contract — `lib/client.js`
+- Slots: `sidebar.footer.action` id `dsh-plugin-focus:open` order 91 (the footer button);
+  `shell.overlay` id `dsh-plugin-focus:overlay` order 41 (the panel and the toast).
+- Parts: DSH's `Modal` (title "Focus timer", the main button marked `data-modal-autofocus`), `Button`,
+  `Switch`, `Input`, `Toast` and `Tooltip`; a part is used when present (a part may be an object).
+- Data: GET on apply and when the panel opens; then every 5 s while the window is visible and on
+  `visibilitychange`; a new state is taken only when `rev` (or `problems`) moved. A 1 s local tick
+  draws the countdown. At zero the window POSTs `complete` once per `endAt`, as a nudge.
+- The end: a `timer.doneAt` not seen before (never the one found at the first read) is said in DSH's
+  toast — focus: "Focus session done. Time for a break.", breaks: "Break over. Ready to focus?",
+  custom: "Timer done." — and chimed (two sine notes, 659.25 Hz and 987.77 Hz; the AudioContext is
+  made on the first click in the window and closed on cleanup) if `settings.chime`. A `doneAt` more
+  than 60 s old is said with its time, without the chime.
+- States in words at the top of the panel: `<Kind> · ready, 25:00`, `· running, ends at 10:25 AM`,
+  `· paused, 12:40 left`, `· done at 10:25 AM`. The footer button's name says the minutes left; its
+  tooltip the exact time.
+- Errors: no state at all → "Focus can't reach its timer: <why>. Check that the Focus plugin is on in
+  Plugins, then try again." with Try again; a later failed read keeps the state with a note; a refused
+  op → a toast "Not changed: <the host's words>"; the host's `problems` at the bottom of the panel.
+- Focus: opens on the main button; Escape (DSH's Modal) closes; the focus goes back to the footer button.
+- Style: one `<style data-plugin="dsh-plugin-focus" data-plugin-css="dsh-plugin-focus/client.css">`,
+  put in inside a try and removed on cleanup; classes `fc-` only, on Focus's own elements; DSH's
+  tokens (`--dsw-*`, `--ds-*`) for every colour, font, corner and duration, nothing on `:root`,
+  `html` or `body`; DSH's focus ring; tabular figures for times; no layer, backdrop or z-index of its
+  own. Of Wallpaper's contract only `body.wp-still` is read: under it, and under
+  `prefers-reduced-motion: reduce`, every animation and transition of Focus's elements and their
+  pseudo-elements stops.
+- Only network access: `/api/focus/*` (`window.__FOCUS_API__` overrides the base for a test page).
 
-Hand-written React, no build step, loaded by DSH's module loader:
+## Tests
 
-```js
-window.__ModuleLoader__.load({
-  id: "dsh-plugin-focus",
-  factory: (require) => {
-    const React = require("react");
-    const ReactDOM = require("react-dom");
-    const h = React.createElement;
-    // …
-    return { name: "dsh-plugin-focus", inject: ["slots", "locale"], apply };
-  }
-});
-```
-
-- `apply(ctx)`:
-
-```js
-ctx.effect(() => refresh.state(), "focus: settings");
-const reg = (slot, opts, comp) => ctx.slots.inject(slot, () => ctx.slots.register({ name: slot, locale: NS, ...opts }, comp));
-reg("sidebar.footer.action", { id: "fc-open", order: 91 }, FocusButton);
-reg("shell.overlay", { id: "fc-overlays", order: 41, inject: () => ({ ctx }) }, (props) => h(Fragment, null, h(FocusPanel, props), h(Toast, null)));
-```
-
-  `ctx.effect(fn, label)`: if `fn` returns a function, DSH calls it as cleanup (wallpaper relies on this).
-- `const API = (typeof window !== "undefined" && window.__FOCUS_API__) || "/api/focus/";`
-- Behaviour:
-  - Store timer state in a module-level store (`useSyncExternalStore`) shared by button and panel.
-    Fetch `state` on mount and after every op; a 1000 ms interval recomputes the countdown from
-    `remainingOf`-equivalent logic locally (do not re-fetch to tick).
-  - When `running && endAt - Date.now() <= 0` and not yet fired: fire once — POST `{op:'complete'}`,
-    refresh, show toast "Focus session complete — take a break", and if `settings.chime`, play a
-    short synthesized WebAudio chime (two sine notes; AudioContext created lazily on the first user
-    click; never on page load).
-  - `FocusButton` (footer): timer SVG icon, same size/behaviour as wallpaper's `.wp-footbtn`
-    (32×32 hit area, own class `fc-footbtn`); a small dot (own class `fc-dot`) shown while
-    `timer.running`; static dot when `body.wp-still`, gentle pulse otherwise.
-  - `FocusPanel`: modal exactly like wallpaper's panel pattern (`.fc-modal-wrap` backdrop click closes,
-    Escape closes with a capture listener + `stopPropagation`, `role="dialog"`, `aria-modal`).
-    Contents: label ("Focus" / "Short break" / "Long break" / "Custom"); big SVG progress ring
-    (~180 px, stroke `fc-accent`, background track faint) with the remaining time centered in
-    `'Geist Mono', ui-monospace` at ~40 px, updating every tick; preset pills Focus 25 · Short 5 ·
-    Long 15 (active pill highlighted, op `set`); a custom minutes input (1–180) with Apply;
-    Start / Pause / Resume, Reset; a muted "N focus sessions today" line.
-  - Only network access is `/api/focus/*`. No Google Fonts link (wallpaper already loads Geist;
-    when wallpaper is absent the font stack falls back to system-ui). No external assets.
-- Glass aesthetic — mirror wallpaper's contract exactly (it publishes `--wp-blur`, `--wp-tint`
-  and the `wp-still` class on `<body>`):
-  - Panel/card backgrounds:
-    dark (`body` default): `background: rgba(14,18,17,var(--wp-tint,.55)); backdrop-filter: blur(var(--wp-blur,22px)) saturate(140%);` (plus `-webkit-` prefix)
-    light (`body:not([data-ds-dark-theme])`): `rgba(250,250,246,var(--wp-tint,.55))`
-  - `border: 1px solid rgba(255,255,255,.09)` dark / `rgba(0,0,0,.1)` light; `border-radius: 22px`;
-    `box-shadow: 0 30px 60px rgba(0,0,0,.45)` dark / `0 30px 60px rgba(0,0,0,.16)` light.
-  - Text: `color: var(--wp-text, #ECEAE4)` dark, `var(--wp-text, #191E1B)` light; muted text
-    `var(--wp-meta, #A9AEA8)` / `#55605A`; accent `var(--wp-accent, #7FA7F5)` / `#3F6FD8`.
-  - Font stack: `Geist, system-ui, sans-serif`; mono: `'Geist Mono', ui-monospace, monospace`.
-  - All classes prefixed `fc-`. Never style DSH's own elements. Put the CSS in a
-    `<style data-plugin="dsh-plugin-focus">` appended to `<head>` inside an effect whose cleanup removes it.
-  - Motion: no CSS animation when `body.wp-still` and honour `@media (prefers-reduced-motion: reduce)`.
+- `test/focus.test.js` (the repo's `npm test`): the host on a hand-moved clock, its refusals, its
+  setting, storage failures, the log bound, `apply`'s wiring; the client drawn with stand-in parts;
+  the style sheet and source held to DESIGN.md; README held to the code; runs `lib/impl.test.mjs`.
+- `lib/impl.test.mjs`: the host through a fake `ctx` with real `Request`s, in a temporary folder.
+- `test/e2e/run.mjs` (`node scripts/e2e.mjs focus`): a real DSH and a real window, as the README says.

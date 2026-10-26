@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Focus",
-    "description": "A pomodoro and countdown timer behind frosted glass."
+    "description": "A pomodoro and countdown timer that keeps time on the host, in DSH’s own dialog."
   }
 }

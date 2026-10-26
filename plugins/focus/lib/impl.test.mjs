@@ -74,9 +74,12 @@ test('first run: defaults served, state.json + focus.log written', async () => {
     settings: { focusMin: 25, shortMin: 5, longMin: 15, chime: true },
     timer: { kind: 'focus', durationMs: 1_500_000, remainingMs: 1_500_000, endAt: null, running: false, doneAt: null },
     sessions: { date: today(), focus: 0 },
+    rev: 0,
+    problems: [],
   });
   const saved = JSON.parse(readFileSync(join(dataDir, 'state.json'), 'utf8'));
-  assert.deepEqual(saved, body, 'state.json on disk matches what GET serves');
+  const { problems, ...kept } = body;
+  assert.deepEqual(saved, kept, 'state.json on disk matches what GET serves');
   assert.ok(existsSync(join(dataDir, 'focus.log')));
 });
 
@@ -132,32 +135,43 @@ test('set: new kind/duration while idle', async () => {
   assert.deepEqual(set.body.timer, { kind: 'long', durationMs: 900_000, remainingMs: 900_000, endAt: null, running: false, doneAt: null });
 });
 
-test('complete: sessions.focus counts focus only; doneAt set; timer back to idle', async () => {
+test('complete: before the end it changes nothing; a timer that ended while DSH was closed ends at the next start, counted once, focus only', async () => {
   const { fetch } = await setup();
   await call(fetch, POST({ op: { op: 'start', kind: 'focus', durationMs: 60_000 } }));
-  const done = await call(fetch, POST({ op: { op: 'complete' } }));
-  assert.equal(done.body.sessions.focus, 1);
-  assert.equal(done.body.timer.running, false);
-  assert.equal(done.body.timer.endAt, null);
-  assert.equal(done.body.timer.remainingMs, 60_000);
-  assert.ok(Number.isFinite(done.body.timer.doneAt));
-  for (const kind of ['short', 'long', 'custom']) {
-    await call(fetch, POST({ op: { op: 'start', kind, durationMs: 60_000 } }));
-    const d = await call(fetch, POST({ op: { op: 'complete' } }));
-    assert.equal(d.body.sessions.focus, 1, `${kind} must not add a focus session`);
-    assert.ok(Number.isFinite(d.body.timer.doneAt));
+  const early = await call(fetch, POST({ op: { op: 'complete' } }));
+  assert.equal(early.status, 200);
+  assert.equal(early.body.changed, false, 'a complete before the end is not one');
+  assert.equal(early.body.timer.running, true);
+  assert.equal(early.body.sessions.focus, 0);
+  const ended = Date.now() - 5_000;
+  for (const [kind, counted] of [['focus', 1], ['short', 0], ['long', 0], ['custom', 0]]) {
+    const { fetch: f2, dataDir } = await setup({ timer: { kind, durationMs: 60_000, remainingMs: 60_000, endAt: ended, running: true, doneAt: null }, sessions: { date: today(), focus: 0 } });
+    const got = await call(f2, GET());
+    assert.equal(got.body.timer.running, false, `${kind}: ended`);
+    assert.equal(got.body.timer.doneAt, ended, `${kind}: done as of its end, not of the start`);
+    assert.equal(got.body.timer.remainingMs, 60_000);
+    assert.equal(got.body.sessions.focus, counted, `${kind}: ${counted ? 'counted' : 'not a focus session'}`);
+    const again = await call(await start(dataDir), GET());
+    assert.equal(again.body.sessions.focus, counted, `${kind}: a second start counts nothing more`);
+    const late = await call(f2, POST({ op: { op: 'complete' } }));
+    assert.equal(late.body.changed, false, `${kind}: a window's complete after the end counts nothing more`);
+    assert.equal(late.body.sessions.focus, counted);
   }
 });
 
-test('durations clamp to 10 s – 3 h; minutes clamp to 1–180; unknown settings keys dropped', async () => {
+test('durations clamp to 10 s – 3 h; minutes round and clamp to 1–180; unknown settings keys dropped', async () => {
   const { fetch } = await setup();
   let r = await call(fetch, POST({ op: { op: 'start', kind: 'custom', durationMs: 500 } }));
   assert.equal(r.body.timer.durationMs, 10_000);
   r = await call(fetch, POST({ op: { op: 'set', kind: 'custom', durationMs: 99_999_999 } }));
+  assert.equal(r.status, 409, 'a running timer is never thrown away by choosing another length');
+  assert.match(r.body.error, /Pause or reset it first/);
+  await call(fetch, POST({ op: { op: 'reset' } }));
+  r = await call(fetch, POST({ op: { op: 'set', kind: 'custom', durationMs: 99_999_999 } }));
   assert.equal(r.body.timer.durationMs, 10_800_000);
   r = await call(fetch, POST({ settings: { focusMin: 0, shortMin: 999, longMin: 15.5, chime: false, bogus: 'dropped' } }));
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.settings, { focusMin: 1, shortMin: 180, longMin: 15.5, chime: false });
+  assert.deepEqual(r.body.settings, { focusMin: 1, shortMin: 180, longMin: 16, chime: false }, 'whole minutes');
 });
 
 test('one request can patch settings and run an op (patch applies first)', async () => {
