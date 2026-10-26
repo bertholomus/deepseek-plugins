@@ -36,15 +36,16 @@ or a plugin raising the same question again, does not start it over.
 One decision makes one card. A thread's handback, the thread's own last
 reply, and the coordinating chat's reply to that handback (the chat relays
 it to you) are one card, the thread's, one per thread turn: from its first
-sight, whichever comes first. A thread's question shows at once, and when
-its chat takes the handback later (a chat busy in a turn of its own takes
-it when that turn ends), the same card shows the handback's words: one
-*new* line in *What happened*, one note elsewhere, one wait, and the pick
-the thread's reply gave stays. The coordinator notifies you of a handback
-itself, so Decisions does not; a thread's question with no handback in its
-turn is Decisions' to notify, after five seconds (the coordinator nudges
-such a thread to hand back at once, and the handback that follows is the
-card). A recommendation in any of them shows under *Recommended*, with
+sight, whichever comes first. A thread's question in a turn that handed
+back shows at once, and when its chat takes the handback later (a chat
+busy in a turn of its own takes it when that turn ends), the same card
+shows the handback's words: one *new* line in *What happened*, one note
+elsewhere, one wait, and the pick the thread's reply gave stays. The
+coordinator notifies you of a handback itself, so Decisions does not. A
+thread's question in a turn that did not hand back is listed after five
+seconds, and Decisions notifies you of it (the coordinator nudges such a
+thread to hand back at once, and the handback that follows is the card).
+A recommendation in any of them shows under *Recommended*, with
 **Go with the recommendation**, and a link in the question
 (`[Port pick](.dsh-thread/t1)`) reads as its words.
 A handback's pick counts wherever it is said (`Recommend 9090 for the status
