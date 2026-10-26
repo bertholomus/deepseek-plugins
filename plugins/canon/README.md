@@ -5,10 +5,10 @@ it: an Obsidian vault of canon notes. Canon reads the vault (and, by
 default, writes nothing to it):
 
 - **Recall**: when a turn starts from your prompt, Canon finds the few
-  active notes that fit the prompt and the session's folder and adds them
-  to the turn as one short block, after your prompt, that cites each note
-  by its path in the vault. It is bounded (3 notes and 2,000 characters by
-  default), and you can turn it off for one session.
+  active notes that bear on the prompt and the session's folder and adds
+  them to the turn as one short block, after your prompt, that cites each
+  note by its path in the vault. It is bounded (3 notes and 2,000
+  characters by default), and you can turn it off for one session.
 - **Capture**: when you allow drafts, agents get a tool that saves
   something worth keeping (a decision, a checked fact, a how-to, a gotcha)
   as a **draft** note in the vault's drafts folder. Drafts are never added
@@ -49,27 +49,68 @@ database…" in the glossary). Words are lightly stemmed ("listens" finds
 read as the whole word ("certs", "DB", "auth", "config", "k8s"), and a few
 words people use in operations as the notes' own ("revert" and "undo" as
 roll back, "reboot" as restart, "RAM" as memory, "TTL" as expiry). Words
-that say nothing ("please", "thanks", "looks good", "called") are left out.
-So are a prompt's words about the vault and about answering from it
+that say nothing ("please", "thanks", "looks good", "called") are left out,
+and so are a prompt's words about the vault and about answering from it
 ("answer from the team's shared notes and cite the note"): they say where
 to look, not what about.
 
-Canon tells a question from a coding request, and each has its rule. A
-prompt is a coding request when a sentence of it starts with a verb that
-asks for work ("Write…", "Add…", "Fix…", "Can you check…"), it speaks of
-code in front of the person ("this function", "my regex"), or it pastes
-output that says where in the code it was (a stack trace's
-`writer.go:57`, a traceback's `File "report.py", line 57`). Any other
-prompt is a question, and so is a request to be told ("Run me through a
-release", "Read me the restore steps").
+A block is only worth its place when a note truly bears on the prompt, so
+Canon first tells what kind of prompt it is, and each kind has its rule.
+
+### Questions, coding requests and decisions
+
+A prompt is a **coding request** when:
+
+- a sentence of it starts with a verb that asks for work ("Write…",
+  "Add…", "Fix…", "Can you check…"), it speaks of code in front of the
+  person ("this function", "my regex"), or it pastes output that says where
+  in the code it was (a stack trace's `writer.go:57`, a traceback's
+  `File "report.py", line 57`);
+- it asks for a thing to be made without a verb: "need a bash loop that…",
+  "looking for a script to…", "one-liner to…", or it starts with what to
+  make ("query for the biggest tables", "chi middleware that sets…",
+  "script that restarts quartz on every node…");
+- or it has code-shaped words: a tool's or a language's name ("redis",
+  "docker", "postgres", "git"), a file name
+  (`utils.py`), a flag (`--force`), an error (`TypeError`, "permission
+  denied"), a code word (backticks, `useEffect`, `retry_count`,
+  `time.Now`), a language's version ("go 1.23"), a custom header's name
+  ("X-Request-ID").
+
+Code-shaped words do not make a coding request of a question about how the
+team or its systems work ("Why did we move the job queue off Redis?", "Who
+do I ask for a Docker licence?", "Is it ok to run a postgres migration
+during the close?", "background jobs still go through redis right"), or of
+a question for a fact ("When is the `newCheckout` flag supposed to come
+out?", "Which port does redis listen on in staging?"; "What does `fatal:
+…` mean?" stays one). Nor is a request to be told one ("Run me through a
+release", "Read me the restore steps", "Check how long API keys last").
+Any other prompt is a **question**.
+
+A **decision statement** says a decision or a lesson, or asks to keep what
+it says, and asks nothing else: "we decided…", "we agreed…", "decision:
+…", "lesson learned: …", "lesson from tonight: …", or a statement with
+"save that", "record it", "put it in the notes", "update the notes", "fyi
+…", "for the record". A question about a decision is a question, and "write
+a helper and add it to the docs" is work. A decision's words that say it
+was decided and should be recorded are left out of what it is about; it is
+read by a coding request's rules, but brings the note in force on its
+subject without saying that note's title: "decision: quartz keys now expire
+after 10 minutes instead of 15. save it to the vault" gets the eviction
+policy decision it changes.
+
+### When a note fits a question
 
 A question fits a note that shares two words with it; a project's name
-counts as one, and a note needs a word beyond it. When that word is only
-in the note's body, it must be in few of the vault's notes or twice in the
-body. An everyday request word ("run", "test", "file") beside a project's
-name is enough only when it is all the prompt asks: "How do I run
-lantern-web?" gets its local-run note, "Why is this useEffect running
-twice?" in lantern-web's folder gets none. One word is also enough:
+counts as one, and a note needs a word beyond it. When that word is only in
+the note's body, it must be in few of the vault's notes or twice in the
+body. Words every project uses ("port", "deploy", "build", "request",
+"cache", "job", "health"), tools' names and numbers fit a question on their
+own only for a note of a project the prompt or the session names. An
+everyday request word ("run", "test", "file") beside a project's name is
+enough only when it is all the prompt asks: "How do I run lantern-web?"
+gets its local-run note, "Why is the dashboard running twice?" in
+lantern-web's folder gets none. One word is also enough:
 
 - when it is all the prompt asks beyond everyday request words, and it is
   in the note's title, aliases, tags, path or headings, in few notes, or
@@ -81,15 +122,19 @@ twice?" in lantern-web's folder gets none. One word is also enough:
 
 A question that names a thing no note has (a word it writes with a capital
 inside a sentence, or in capitals) fits only a note of a project it or the
-session names, or one that shares three words with it: "How do I run Kafka
-locally?" gets no note, though the local-run notes share "run" and
-"locally". The page names the word.
+session names, or one that shares three words with it: "How do I run
+Mailpit locally?" gets no note, though the local-run notes share "run" and
+"locally", and the try-out names "Mailpit".
 
-A coding request leaves its everyday request words ("write", "add", "fix",
-"test", "function", "file", "small") out of the words in common: they say
-what to do, not what about. Each word of the prompt weighs as much as it is
-rare in the vault (a word no note has weighs most; everyday request words
-weigh too), and the words a note shares must carry:
+### When a note fits a coding request
+
+Most coding requests are everyday work that no note answers, and a note
+added to them costs the model's attention and the person's trust. A coding
+request leaves its everyday request words ("write", "add", "fix", "test",
+"function", "file", "small") out of the words in common: they say what to
+do, not what about. Each word of the prompt weighs as much as it is rare in
+the vault (a word no note has weighs most; everyday request words weigh
+too), and the words a note shares must carry:
 
 - a third of that weight when one of them is in the note's title, aliases,
   tags or headings, and two of them (a project's name can be one) must say
@@ -98,6 +143,25 @@ weigh too), and the words a note shares must carry:
 - 45% of it when they are only in its body; a single word in its body fits
   only beside a project that the prompt or the session names, in a prompt
   that asks more than that word.
+
+Words every project uses never carry a fit on their own. And the request
+must say what the note is about: at least half of the words of its title or
+of one of its aliases, a project's name aside, each word once ("JetStream"
+is one word); or share a value of the note's (a port, a number of two
+digits or more, a tool's command such as `deployctl`), four words that say
+what the note is about, or 40% of the request's weight. "Add a header to
+every response in the handler." in lantern-api's folder shares only words
+every project uses with its notes and gets none; "add a background job that
+sends the weekly usage digest email… the same way we queue the invoice
+jobs" there says "job" and "queue" of "Lantern job queue on NATS
+JetStream" and gets that decision.
+
+A request that says, in the person's own words, all of a note's title of
+two words or more (a project's name aside) fits it whatever else it says:
+"Write a script that restarts every node after a config push." in
+`~/Projects/quartz-cache` gets "Restarting a quartz-cache node". Words in
+pasted code or output do not count for that: a pasted
+`Warn("rate limited")` is not the rate limits note.
 
 A coding request also fits a note of a project the prompt or the session
 names, whatever its share, when the note's title names what the request
@@ -111,29 +175,45 @@ common. "acme keeps hitting 429s on their nightly sync. bump their key
 gets the rate limits note; a pasted build log that says "no space left on
 device", with "can you clean it up", gets the runbook for a full disk.
 
-So most everyday coding requests get no note, though notes share a word or
-two with them: "Write a small helper that checks whether a request has a JSON
-body." in `~/Projects/lantern-api` shares "request" and "body" with the
-rate limits note, but "JSON", the rarest word it asks, is in no note. Three
-rules keep a project's notes to the prompts about them:
+So "Write a small helper that checks whether a request has a JSON body." in
+`~/Projects/lantern-api` gets no note, though the rate limits note shares
+"request" and "body".
+
+### Projects and folders
 
 - A project's name counts as one word, however many parts it has
   (`lantern-api` is "lantern" and "api"), and a note needs a word beyond
   it: "Does the lantern API support websockets?" gets no note, though
-  every lantern note shares the name.
+  every lantern note shares the name. In a coding request, a part of a
+  name that every project uses ("cache", "web") does not name the project
+  alone: "the dns cache" is not quartz-cache's.
 - A session in a project's folder, or in a folder inside it
   (`~/Projects/lantern-api/internal/auth`), names that project for its own
   notes, and "this repo", "this service" or "this app" there say its name:
   "Which ports does this service listen on?" in `~/Projects/quartz-cache`
   gets quartz-cache's ports note, and "Who owns this repo?" in
   `~/Projects/tide-ledger` the owners note.
-- A note that belongs to a project (its `project` or `repo` field, or its
-  folder under `Projects/`) stays out when the session's folder or the
-  prompt points at other projects and not at its own: "the lantern API"
-  names lantern-api, not lantern-web.
+- A note belongs to a project by its `project` or `repo` field or its
+  folder under `Projects/`; a note with neither and one known project's tag
+  (`tags: [runbook, quartz-cache]`) belongs to that project, and one tagged
+  with several projects (the on-call note) to none of them alone. A
+  project's note stays out when the session's folder or the prompt points at
+  other projects and not at its own: "How do I restart a node after changing
+  its config?" gets the quartz node runbook in quartz-cache's folder and no
+  note in lantern-web's. In the folder of a project the vault does not
+  know, another project's note fits only when the prompt names its project.
+- Notes that belong to the session's folder count for more: a note whose
+  path, `project`/`repo` field or tags name the folder's project
+  (`~/Projects/harbor-gateway` → `harbor-gateway`), and a little more for
+  the folder above.
+
+A year or a number of one or two digits says nothing on its own (a pasted
+log's timestamp, a dated decision's file name).
+
+### The block
 
 Of the notes that fit and score above a small floor, a turn gets the best
-one and those that score at least half as well; a prompt that asks two
+one and those that score at least 60% as well; a prompt that asks two
 things ("…, and how do I roll out a new build?") also gets the note that
 best answers each question asked alone, which needs to carry enough of its
 own question, not of the whole prompt. A coding request that asks a
@@ -143,10 +223,7 @@ or the session names: "Add a created_by field to the /v2/projects response.
 Does that need a v3, or can it go into v2?" in `~/Projects/lantern-api`
 gets the versioning decision. "Write a function that pages through
 /v2/projects. Any idea what is wrong?" there gets none: the note its
-question fits, the vault's home note, is no project's. Notes that belong to
-the session's folder count for more: a note whose path, `project`/`repo`
-field or tags name the folder's project (`~/Projects/harbor-gateway` →
-`harbor-gateway`), and a little more for the folder above.
+question fits, the vault's home note, is no project's.
 
 Only a turn that starts from a person's prompt gets notes, and only once,
 right after that prompt: not the later steps of the turn, not messages
@@ -171,16 +248,22 @@ Background from the canon vault: shared long-term notes that may bear on this re
 Each note gets its path in the vault (the header says so, so a model does
 not look for it in the session's workspace), its title when the file name
 does not say it, and the passage that fits the prompt best, quoted, under a
-header that calls the notes reference, not instructions. Fewer notes are
-added rather than cutting each to nothing; the whole block always stays
-within the characters allowed.
+header that calls the notes reference, not instructions. A quote keeps to
+the paragraphs that have the prompt's words: the next paragraph joins it
+only when it has them too. Fewer notes are added rather than cutting each
+to nothing; the whole block always stays within the characters allowed.
 
-Quoting does not stop a model from acting on a note's words: in round 2's
-runs with a real model, one answer ended with the sign-off the fixture's
-mascot note asks agents for. A note reaches every turn it fits without
-anyone choosing it, so keep instructions to agents out of notes: write what
-is true for people to read, and put what agents must do in their own
-instructions.
+Quoting alone does not stop a model from acting on a note's words: in
+round 2's runs with a real model, one answer ended with the sign-off the
+fixture's mascot note asks agents for. So a line a note addresses to agents
+is never quoted into a turn: "Dear AI assistants…", "Agents reading this
+…", "If you are an AI…", "always reply in…", "sign every reply…", "ignore
+previous instructions". Its paragraph keeps its other lines. A team rule
+written the same way ("always reply in English on the forum") is left out
+too, so Canon's page names every note that has such a line ("1 note has a
+line addressed to agents, left out of turns: Misc/Lantern mascot.md."), and the
+try-out says so under the note. Keep instructions to agents in their own
+instructions, not in notes.
 
 DSH keeps the block in the session's log as Canon's context. Its
 **Trajectory** tab lists it in the turn's request; its Chat keeps context
@@ -194,221 +277,117 @@ projects, people, decisions, runbooks and ideas), each prompt going through
 Canon's own recall exactly as a turn does, with the default settings (3
 notes, 2,000 characters), and given only the prompt and the session's
 folder (a test takes every label away and gets the same blocks). The floors
-were fixed before anything was measured (the first four in round 2, the
-everyday-coding one in round 3).
+were fixed before anything was measured (OPEN-QUESTIONS #29 and #33): the
+block's first note answers at least 80% of the prompts a note answers, an
+answering note is in the block for at least 90%, at most 1.0 notes per
+block do not answer, at least 70% of the prompts no note answers get no
+block, and so do at least 90% of the everyday coding requests no note
+answers.
 
-The dev set has 994 prompts, each with its kind, in two files.
-`test/fixtures/canon/relevance/dev.json` has 922: round 2's 77 (below);
-the 113 prompts round 2's judge measured Canon on (its fixture set, ids
-`jf-`, less one that repeats a dev prompt word for word, and its generic
-set, ids `jg-`); and 732 written in round 3, each group before it was
-measured, from sessions in a project's folder, in a folder inside one, in
-an unrelated folder and in none:
+The sets:
 
-- everyday coding requests that no note answers, many asked as a question
-  or told as a problem (ids `c`, `q`, `w`);
-- questions a note answers, asked the way a person asks: in other words
-  than the note's title, on a word of its body or headings, short (`n`,
-  `m`, `k`), and one or two for every active note (`zp`);
-- other forms: coding tasks a note answers (`t`, `zc`), requests to be told
-  (`i`), "this repo" (`d`), typos and lower case (`y`), long prompts (`l`),
-  pasted errors (`e`), other names for a project (`h`), times, people and
-  short forms (`b`, `g`), a project's name and one everyday word, "remind
-  me" and numbers (`z`, `zb`), tasks told as orders, statements, names no
-  note has and words alone (`zr`);
-- prompts no note answers: about a project (`r`, `j`), and in each of those
-  forms (`o`, `x`, `zx`, `zy`, `zd`, `zq`, `zs`).
+- **The dev set** (tuned on; 1,213 prompts, 647 that a note answers, 566
+  that none does, 445 of those everyday coding requests): `dev.json` (922,
+  rounds 2 and 3, from sessions in a project's folder, in a folder inside
+  one, in an unrelated folder and in none, in many forms), `dev-fresh.json`
+  (72 by two fresh writers in round 3), `dev-judge.json` (the round-3
+  judge's 129, casually typed coding requests among them) and
+  `dev-casual.json` (round 4's 90 casually typed prompts and decisions to
+  record).
+- **The probe sets** (`probes.json`, tuned on, kept apart from the dev set;
+  220 prompts, 96 that a note answers, 110 everyday coding requests): two
+  fresh writers who read only the fixture vault and never saw Canon wrote
+  them in round 5, one typing as people type to a coding agent in a hurry
+  (`w1-`: "postgres: total of entries per account per month, include months
+  with nothing in them") and one with care (`w3-`). They were measured at
+  53646c8 and 341ff4e before any rule changed for them.
+- **The first hold-out** (`holdout.json`, 48 prompts, 24 that a note
+  answers; no kinds): a guard. Its prompts and misses are never read and no
+  rule is chosen on it; only its figures print.
+- **The second hold-out** (`holdout2.json`, 72 prompts with kinds, 24 that a
+  note answers, 40 everyday coding requests): measured once at 638044e,
+  tuned on from round 4 (OPEN-QUESTIONS #41).
 
-`test/fixtures/canon/relevance/dev-fresh.json` has 72 more (ids `he-`,
-`hf-`), by two fresh writers who read only the fixture vault and never saw
-Canon: 24 that a note answers, 40 everyday coding requests (pasted errors
-and logs among them), 4 about a project, 2 of chat and 2 about the vault.
-They came in as dev data during round 3 (OPEN-QUESTIONS #38) and were
-measured once, with the rules as they stood, before any rule changed for
-them:
+The figures, with round 3's frozen rules (638044e, as in 341ff4e), with
+round 4's unchecked work (53646c8), and now (the rules frozen at 41b4130):
 
-| Figure | First measured, with d4cd038's rules | Now | Floor |
+| Dev set | Round 3 | Round 4's work | Now |
 | --- | --- | --- | --- |
-| The block's first note answers | 19 of 24 (79.2%): missed | 23 of 24 (95.8%) | at least 80% |
-| An answering note is in the block | 19 of 24 (79.2%): missed | 23 of 24 (95.8%) | at least 90% |
-| Notes per block that do not answer | 0.45 (9 in 20 blocks) | 0.39 (9 in 23 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 43 of 48 (89.6%) | 46 of 48 (95.8%) | at least 70% |
-| No block, for an everyday coding request no note answers | 36 of 40 (90.0%) | 39 of 40 (97.5%) | at least 90% |
+| The block's first note answers | 599 of 647 (92.6%) | 595 (92.0%) | 595 (92.0%) |
+| An answering note is in the block | 614 (94.9%) | 609 (94.1%) | 610 (94.3%) |
+| Notes per block that do not answer | 0.38 (233 in 620 blocks) | 0.36 (219 in 615) | 0.26 (159 in 616) |
+| No block, for a prompt no note answers | 478 of 566 (84.5%) | 531 (93.8%) | 533 (94.2%) |
+| No block, for an everyday coding request | 383 of 445 (86.1%) | 430 (96.6%) | 432 (97.1%) |
 
-The rules were then tuned on them too, so their figure now is a dev figure,
-not a fair one. All five misses were coding requests whose words in common
-carried too little of a long prompt (two pasted build logs, a request full
-of values, a question beside the work, a problem told before the work), and
-three of the five blocks for prompts no note answers came to pasted stack
-traces read as questions; the rules for pasted output, many words in common
-and a coding request's own question (above) came from them. The first
-figure is on record in the suite's `PROGRESS.md` (ec6d005).
+| Probe sets (tuned on) | Round 3 | Round 4's work | Now |
+| --- | --- | --- | --- |
+| The block's first note answers | 74 of 96 (77.1%) | 70 (72.9%) | 71 (74.0%) |
+| An answering note is in the block | 81 (84.4%) | 76 (79.2%) | 76 (79.2%) |
+| Notes per block that do not answer | 0.59 (49 in 83 blocks) | 0.52 (41 in 79) | 0.38 (30 in 78) |
+| No block, for a prompt no note answers | 74 of 124 (59.7%) | 105 (84.7%) | 113 (91.1%) |
+| No block, for an everyday coding request | 71 of 110 (64.5%) | 94 (85.5%) | 101 (91.8%) |
 
-In the whole dev set a note answers 586 prompts; of the 408 that none
-does, 295 are everyday coding requests, 68 name a project but ask what no
-note says, 19 are chat filler, 10 are words about the vault and 16 are
-others. Canon's rules were tuned on it, so new prompts may do worse than
-these figures (see the hold-outs below). On `dev.json`'s 922:
+| Second hold-out | Round 3 (measured once) | Round 4's work | Now |
+| --- | --- | --- | --- |
+| The block's first note answers | 20 of 24 (83.3%) | 20 (83.3%) | 20 (83.3%) |
+| An answering note is in the block | 20 (83.3%): missed | 20 (83.3%): missed | 20 (83.3%): missed |
+| Notes per block that do not answer | 0.35 (7 in 20 blocks) | 0.30 (6 in 20) | 0.15 (3 in 20) |
+| No block, for a prompt no note answers | 37 of 48 (77.1%) | 46 (95.8%) | 48 (100%) |
+| No block, for an everyday coding request | 29 of 40 (72.5%): missed | 38 (95.0%) | 40 (100%) |
 
-| Figure | Round 2's rules | Round 3's first rule (14893d8) | Now | Floor |
-| --- | --- | --- | --- | --- |
-| The block's first note answers | 447 of 562 (79.5%) | 390 of 562 (69.4%) | 517 of 562 (92.0%) | at least 80% |
-| An answering note is in the block | 461 of 562 (82.0%) | 403 of 562 (71.7%) | 531 of 562 (94.5%) | at least 90% |
-| Notes per block that do not answer | 0.36 (173 in 474 blocks) | 0.25 (104 in 415 blocks) | 0.37 (198 in 537 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 245 of 360 (68.1%) | 346 of 360 (96.1%) | 321 of 360 (89.2%) | at least 70% |
-| No block, for an everyday coding request no note answers | 153 of 255 (60.0%) | 250 of 255 (98.0%) | 235 of 255 (92.2%) | at least 90% |
+| First hold-out (guard) | Round 3 | Round 4's work | Now |
+| --- | --- | --- | --- |
+| The block's first note answers | 22 of 24 (91.7%) | 18 (75.0%): missed | 18 (75.0%): missed |
+| An answering note is in the block | 24 (100%) | 19 (79.2%): missed | 19 (79.2%): missed |
+| Notes per block that do not answer | 0.71 (17 in 24 blocks) | 0.60 (12 in 20) | 0.37 (7 in 19) |
+| No block, for a prompt no note answers | 21 of 24 (87.5%) | 21 (87.5%) | 21 (87.5%) |
 
-And on the whole dev set now, as `npm test` holds it: the block's first
-note answers 540 of 586 (92.2%), an answering note is in the block for 554
-(94.5%), 0.37 notes per block do not answer (207 in 560 blocks), and 367 of
-the 408 prompts no note answers get no block (90.0%). By kind, those with
-no block: everyday coding requests 274 of 295 (92.9%); chat filler 19 of
-19; words about the vault 9 of 10; a project named, but nothing a note
-says, 51 of 68; others 14 of 16.
+So round 4's rules keep notes off everyday coding requests (on the probe
+sets about one in three got a block with round 3's rules, one in twelve
+now), at a cost in recall: on the guard, two of its floors are missed since
+53646c8, and nothing chosen since on the other sets moved it. `npm test`
+holds the guard to no worse than that, with the floors it meets, and runs
+its four floors as a known miss (a `todo` test, the way OPEN-QUESTIONS #40
+set for the second hold-out). The builder also kept a hold-out of their
+own, a third writer's 55 prompts on the fixture vault with a sixth project
+added (not in the repo), measured once when the rules were frozen: the
+block's first note answered 9 of 21 (42.9%), an answering note was in the
+block for 10 (47.6%), 0.50 notes per block did not answer, and 28 of 34
+prompts no note answers got no block (82.4%; everyday coding requests 26
+of 29, 89.7%). With round 3's rules the same prompts got 11 of 21 (52.4%)
+first and 21 of 34 (61.8%) without a block. On prompts in words unlike the
+notes', Canon still misses many notes that bear on them.
 
-Round 3's first rule weighed the words a note shares against all that the
-prompt asks, for every prompt. That kept notes off everyday coding
-requests, but a person asks in other words than a note's title, so most of
-a question's weight sat in words no note has, and its words in common
-carried too little of it. The rules now tell questions from coding
-requests (above). Each later group of round 3's was measured once before
-any rule changed for it; as first measured (as written, before repeats of
-earlier prompts were left out), the block's first note answered 38 of 45
-(`z`), 31 of 35 (`zb`), 22 of 25 (`zc`), 58 of 69 (`zp`) and 37 of 44
-(`zr`).
-
-`npm test` holds the dev set to the figures it reached. To measure again,
-with each prompt that got a wrong note, an extra one or a block it should
-not have:
+To measure again, with each prompt that got a wrong note, an extra one or a
+block it should not have:
 
 ```sh
 node scripts/canon-relevance.mjs --set dev --misses
+node scripts/canon-relevance.mjs --set probes --misses
 ```
 
-What it still misses (dev, now):
+What it still misses, by the dev set and the probe sets:
 
-- One common word of a note's body beside its project's name: "What Node
-  version does lantern-web need?" and "Running lantern-web locally", which
-  says "Node 20 is required", but "node" is in six notes. Letting such a
-  word fit, as round 2's rules did, put 9 more answering notes in blocks,
-  and added 54 notes that do not answer and a block to 12 more prompts that
-  no note answers.
 - Words a note says another way: "Who looks after lantern-web?" and the
   owners note; "How do I ship a new build of this service to production?"
   in harbor-gateway's folder and "Deploying the gateway" (it says "deploy"
   and "roll out", never "ship" or "production").
-- Tasks told as orders whose words in common carry too little of them:
-  "Add an index on entries.created_at in tide-ledger." and "Schema
-  migrations"; "Set up the VPN for a new hire." and the onboarding note.
+- Questions told as a situation, with code-shaped words: "local dev, every
+  /api call fails with dial tcp 127.0.0.1:7311: connect: connection
+  refused" in lantern-web's folder and the local-run note; "merged a min ago
+  but prod still serves the old js bundle" and lantern-web's deploy note.
+- Tasks whose words in common carry too little of them: "docker compose
+  file with a local postgres, same major version as prod" in tide-ledger's
+  folder and the decision that names the version.
 - A note that shares more of the prompt's words before the one that
-  answers: "Cluster layout" ("node", "losing", "data") before "Restarting a
-  quartz-cache node" for "How do I restart a quartz node without losing
-  data?"; "Release checklist" before the rollback runbook for "We shipped a
-  bad lantern-api release and users are seeing errors."
-- A name no note has, beside two words in common: "Do we page people
-  through PagerDuty or our own tool?" gets no note, though the on-call note
-  answers it.
-- Everyday coding requests that share a rare word or two with a note: "Add
-  a timeout so the fetch call gives up after 10 seconds." gets the on-call
-  note ("call", "10", "seconds"); "How do I add a column with a default
-  value in SQL?" in tide-ledger's folder gets the Postgres decision, the
-  one note with "SQL".
-- A coding request that tells its problem first and shares only a word or
-  two with the note: "quartz reads block for like 2s whenever one of the
-  cache nodes goes down. add a timeout and retrys around the quartz calls…"
-  and quartz-cache's client settings, which say "give up on a read after
-  50 ms" and "retry", never "timeout". A long request spreads its weight
-  over many words; ask the question on its own.
-- A request with no work verb read as a question: "postgres: get each
-  user's most recent order…" gets the schema migrations note ("get" asks
-  for work in it, but most often it does not).
-
-### Round 2
-
-Round 2's dev set had 77 prompts (now part of the dev set above): 47 that a note
-answers, and 30 that none does (8 that name a project but ask what no note
-says, 8 of chat filler, 8 of words about the vault, 6 others), from
-sessions in a project's folder, in an unrelated folder and in none.
-Round 2's rules were tuned on it.
-
-| Figure | Before tuning | Now | Floor |
-| --- | --- | --- | --- |
-| The block's first note answers | 40 of 47 (85.1%) | 43 of 47 (91.5%) | at least 80% |
-| An answering note is in the block | 45 of 47 (95.7%) | 45 of 47 (95.7%) | at least 90% |
-| Notes per block that do not answer | 1.04 (48 in 46 blocks) | 0.33 (15 in 45 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 8 of 30 (26.7%) | 25 of 30 (83.3%) | at least 70% |
-
-Round 2 still missed a note that shares only one word with the prompt, in
-its body ("What does bastion mean?" and the glossary), and notes that share
-two common words with a prompt no note answers.
-
-### The hold-outs
-
-The fair figures are the hold-outs'. The first hold-out's 48 prompts
-(`test/fixtures/canon/relevance/holdout.json`: 24 that a note answers, 24
-that none does) were written by two writers who never saw Canon's code or
-the dev set, on the fixture vault as it is, and measured once, on October
-17 at 5:20 PM, with the rules frozen at 9a8a4c9. It was never tuned on, and
-`npm test` holds Canon to the floors on it.
-
-| Figure | Measured once, at 9a8a4c9 (round 2's rules) | At 9876265 (round 3's first build) | At 638044e (round 3's frozen rules) | Floor |
-| --- | --- | --- | --- | --- |
-| The block's first note answers | 22 of 24 (91.7%) | 18 of 24 (75.0%): missed | 22 of 24 (91.7%) | at least 80% |
-| An answering note is in the block | 23 of 24 (95.8%) | 20 of 24 (83.3%): missed | 24 of 24 (100.0%) | at least 90% |
-| Notes per block that do not answer | 0.54 (13 in 24 blocks) | 0.85 (17 in 20 blocks) | 0.71 (17 in 24 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 22 of 24 (91.7%) | 21 of 24 (87.5%) | 21 of 24 (87.5%) | at least 70% |
-
-The first column is round 2's rules' figures, as first measured. The
-second is round 3's first build, measured from a clean copy of 9876265.
-The third is round 3's frozen rules, as `npm test` printed them in the run
-that measured the second hold-out. Round
-3's first rule (14893d8) had already fallen short of the same two floors
-there; the rules were then reworked on prompts of round 3's own (the dev
-set above), never on the hold-out, whose figures were not used to choose
-between rules. Both columns stay as they are. OPEN-QUESTIONS #37 then let
-the first hold-out be tuned on, but reading it for tuning was not allowed
-in round 3 (#38), so it was not tuned on in round 3: no rule was chosen on
-its prompts, its misses or its figures, and `npm test` keeps it as a guard
-on its four floors. With round 3's frozen rules that guard passes (the
-third column). While the rules were tuned, their builder saw only the
-guard's pass or fail line in test runs and, once, by accident, two of its
-floor lines (at about 8:45 PM); never its prompts. To measure it by hand:
-`node scripts/canon-relevance.mjs --set holdout`.
-
-That hold-out has no coding request among its 24 prompts that no note
-answers (they are chat, questions about the vault and project switches),
-and coding requests are the commonest turn. Round 2's judge measured
-prompts of its own on the same vault with the same code (at f341843): of
-89 everyday coding requests that no note answers ("Write a small Python
-function that checks whether a string is a palindrome", "Add a health
-check endpoint to the Express server"), 26 got a block, so 70.8% got
-none, and at least 23 of those blocks held nothing that bears on the
-request: a note fits on any two shared words, however common.
-
-The fair figure for round 3's rules is the second hold-out's
-(`test/fixtures/canon/relevance/holdout2.json`: 72 prompts by two writers
-who never saw Canon's code or the dev set, a kind for every prompt; 24 that
-a note answers and 48 that none does, 40 of them everyday coding requests),
-measured once, on October 17 at 11:07 PM, with the rules frozen at 638044e.
-It was never tuned on, and it missed two of its five floors:
-
-| Figure | Measured once, at 638044e | Floor |
-| --- | --- | --- |
-| The block's first note answers | 20 of 24 (83.3%) | at least 80% |
-| An answering note is in the block | 20 of 24 (83.3%): missed | at least 90% |
-| Notes per block that do not answer | 0.35 (7 in 20 blocks) | at most 1.0 |
-| No block, for a prompt no note answers | 37 of 48 (77.1%) | at least 70% |
-| No block, for an everyday coding request no note answers | 29 of 40 (72.5%): missed | at least 90% |
-
-So on prompts nobody tuned on, Canon still adds notes to about one everyday
-coding request in four (the 11 that got a block got 19 notes between them),
-and for one prompt in six that a note answers, no answering note is in the
-block. The project, chat and vault prompts that no note answers (8) got no
-block. There is no further hold-out this round (OPEN-QUESTIONS #38) and the
-misses stand: `npm test` holds its shape as a plain test and runs its five
-floors as a known miss (a `todo` test that prints them on every run,
-OPEN-QUESTIONS #40). To measure it by hand: `node
-scripts/canon-relevance.mjs --set holdout2`.
+  answers: "Cluster layout" before "Restarting a quartz-cache node" for
+  "How do I restart a quartz node without losing data?".
+- Everyday coding requests that say a note's title in other senses: "ts
+  permission bit flags as an enum" and lantern-web's feature flags note;
+  "postgres: total of entries per account per month" and the decision that
+  the ledger stays on Postgres; "tanstack query invalidate the account
+  cache after the save mutation instead of reloading the page" in
+  lantern-web's folder and the on-call note.
 
 ## On the turn
 
@@ -426,23 +405,28 @@ Canon has its own entry in the sidebar. Its page shows:
 
 - **The header**: which vault Canon reads and what it holds ("The vault
   ~/Obsidian/Canon holds 35 active notes and 2 drafts."), when it was read
-  (**Read again** reads it now), the notes left out, what Canon may write,
+  (**Read again** reads it now), the notes left out, the notes with a line
+  addressed to agents (left out of turns, by name), what Canon may write,
   how much a turn gets, and **Settings**. While a read is under way it says
   "Reading the vault ~/Obsidian/Canon…". A vault folder that is missing, a
   file, or one DSH may not read (its permissions, or a Mac's privacy rules)
-  says so, what to do and when it was tried, and What happened notes it;
-  no turn gets notes until the folder can be read. A folder inside the
-  vault that DSH may not list is named under the header ("1 folder Canon
-  may not read: Projects/osprey-mobile. Its notes are never added to
-  turns: give DSH access to it, then read the vault again."), and What
-  happened notes it once, and again when every folder reads.
+  says so, what to do and when it was tried, with **Read again** and **Open
+  Canon's settings** beside it, and What happened notes it; no turn gets
+  notes until the folder can be read. A folder with no Markdown file in it
+  asks whether it is your vault. A folder inside the vault that DSH may not
+  list is named under the header, as a warning ("1 folder Canon may not
+  read: Projects/osprey-mobile. Its notes are never added to turns: give
+  DSH access to it, then read the vault again."); What happened notes it
+  when the set of such folders changes, and once when every folder reads
+  again, not at every start (the set last said is kept in `state.json`).
 - **Try a prompt**: type a prompt and, if you like, a session's folder (a
   full path, or one starting with `~/`, as a session has it; anything else
   is refused and says why), and see which notes a turn in that folder would
   get, why each fits ("Shares the words “port” and “gateway”. It belongs to
-  this folder's project, so it counts for more."), the near misses and why
-  each stayed out, and **the exact text the turn gets**. It says which
-  folder it used, and sends nothing to any session.
+  this folder's project, so it counts for more."), the near misses with a
+  short reason under each (and under "No note fits this prompt"), the rules
+  behind them once each behind **Why**, and **the exact text the turn
+  gets**. It says which folder it used, and sends nothing to any session.
 - **Sessions that got notes**, newest first: each with its last turns'
   notes and a switch that turns Canon off or on for that session (a screen
   reader hears it as "Add notes to <the session's title>"). The title opens
@@ -451,16 +435,17 @@ Canon has its own entry in the sidebar. Its page shows:
   was saved (the session and turn) and **Promote**, and a line that says
   whether Promote does anything now.
 - **What happened**: drafts saved and refused, drafts promoted and
-  refused, sessions switched off and on, setting changes and vault
+  refused, sessions switched off and on, setting changes (with a switch's,
+  a number's or a choice's new value: *“Add notes to turns” off*) and vault
   problems, newest first.
 
-While a setting is wrong, the page says which one, what it must be and
-where to change it, and shows What happened. A number or true/false
-written in quotes in the profile (`maxNotes: "3"`) is text, which DSH's
-settings form shows as if it were right; when it would be right without
-the quotes, the page offers **Save it as 3**, which saves it so through
-DSH's own settings call, and then says "Saved “Notes a turn, at most” as
-3, without quotes. Canon works again."
+While a setting is wrong, the page names every wrong setting, what each
+must be and where to change it, and shows What happened. A number or
+true/false written in quotes in the profile (`maxNotes: "3"`) is text;
+when it would be right without the quotes, the page offers **Save it as
+3**, which saves it so through DSH's own settings call, says "Saved “Notes
+a turn, at most” as 3, without quotes." (and "One more setting is still
+wrong." while another is), and puts the focus on that line.
 
 Every empty state says what to do next, and every refusal says why in
 words: "Not promoted: promoting is off (“Allow promoting drafts” in
@@ -473,9 +458,13 @@ moves to the line that says what happened.
 
 With **What Canon may write** set to **Drafts**, agents are offered
 `canon_capture` (title, body, kind, tags). In the default **Read only**, the
-model is never offered it. A capture writes one new file,
-`<drafts folder>/<YYYY-MM-DD> <title>.md` (the title's letters, digits,
-spaces, - and _, cut after the last whole word within 80 characters):
+model is never offered it, and neither is an agent whose session's files
+are **Read Only** (DSH's tool mask for that agent, set again when the agent
+starts, when its session's mode changes, and when Canon offers or takes
+back the tool); a capture from such a session is refused. A capture writes
+one new file, `<drafts folder>/<YYYY-MM-DD> <title>.md` (the title's
+letters, digits, spaces, - and _, cut after the last whole word within 80
+characters, never on a small word such as "a", "the" or "of"):
 
 ```markdown
 ---
@@ -500,8 +489,7 @@ Set the harbor gateway's upstream keepalive to 30 seconds. …
 Canon never writes over a note (a name already taken gets " 2", " 3"),
 never outside the drafts folder, and never through a link: the drafts
 folder and every folder on the way to it must be plain folders inside the
-vault. A session whose files are **Read Only** saves nothing. Every save
-and refusal goes in What happened.
+vault. Every save and refusal goes in What happened.
 
 **Promote** works only from Canon's page, only when a person presses it,
 and only while **What Canon may write** is **Drafts** and **Allow promoting
@@ -527,11 +515,12 @@ did not ask for.
 ## Settings
 
 Plugins → Canon shows the settings you can change while it runs, in DSH's
-own settings form: change a value, then **Save**. They apply at once, and
-What happened notes each save (*Settings changed: “What Canon may write”*).
-**Use the default** clears one. The form will not save a value out of range,
-the whole disk or your home folder as the vault, or a promote folder inside
-the drafts folder, and says what fits instead.
+own settings form: change a value, then **Save**. They apply at once, the
+focus goes to the line that says it was saved, and What happened notes each
+save (*Settings changed: “What Canon may write” Drafts*). **Use the
+default** clears one. The form will not save a value out of range, the
+whole disk or your home folder as the vault, or a promote folder inside the
+drafts folder, and says what fits instead.
 
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |
@@ -549,14 +538,17 @@ A folder inside the vault is letters, digits, spaces and `- _ ( ) . , ' & +`,
 parts joined by `/`, none starting with a dot and none `..`.
 
 A wrong value never stops Canon from starting, whatever its type: it adds
-and writes nothing, and its page says which setting is wrong, what it must
-be, and **Open Canon's settings** puts the cursor in it. A number, or true
-or false, in quotes in the profile is text, and the page says so:
-"Characters a turn, at most (maxChars) must be a whole number of characters
-from 400 to 8000, written without quotes (it is “900”, which is text)." Once
-you fix it, Canon works again at once. A vault folder that cannot be read is
-not a wrong setting: the page says what is wrong with the folder, and Canon
-tries it again at the next turn, or when you press **Read again**.
+and writes nothing, and its page says which settings are wrong, what each
+must be, and **Open Canon's settings** puts the cursor in the first. A
+number, or true or false, in quotes in the profile is text, and both the
+page and the settings form say so in Canon's words: "Characters a turn, at
+most (maxChars) must be a whole number of characters from 400 to 8000,
+written without quotes (it is “900”, which is text)." The form holds the
+value Canon would take, and its **Save** writes it as a number or a switch.
+Once you fix it, Canon works again at once. A vault folder that cannot be
+read is not a wrong setting: the page says what is wrong with the folder,
+and Canon tries it again at the next turn, or when you press **Read
+again**.
 
 ## Files
 
@@ -567,7 +559,7 @@ mode 600:
 | --- | --- |
 | `canon/recall.jsonl` | Each block added: session, turn, the notes and their size (the last 300). |
 | `canon/events.jsonl` | What happened: drafts, promotes, refusals, switches, settings, vault problems. It keeps the last 400 entries and rewrites itself past 1 MB. |
-| `canon/state.json` | The sessions turned off. |
+| `canon/state.json` | The sessions turned off, and the folders inside the vault Canon may not read as What happened last said them. |
 
 Which notes each session's latest recall cited also lives in the session's
 own state in DSH (the `canonRecall` projection), for the card after the
@@ -624,12 +616,13 @@ Security → Files and Folders. The page says so when it cannot read it.
 
 ## Rollback
 
-DSH runs Canon from its folder in your clone (the profile links it). To go
-back to a release, restore that folder from the release's tag and restart
-DSH Desktop:
+DSH runs Canon from its folder in your clone (the profile links it). Canon
+has no release tag yet; to go back to an earlier version, restore that
+folder from the commit you want (`git -C ~/.dsh-plugins/deepseek-plugins
+log --oneline -- plugins/canon` lists them) and restart DSH Desktop:
 
 ```bash
-git -C ~/.dsh-plugins/deepseek-plugins restore --source canon-v1.0.0 -- plugins/canon
+git -C ~/.dsh-plugins/deepseek-plugins restore --source <commit> -- plugins/canon
 ```
 
 To remove it, follow [Remove a plugin](../../README.md#remove-a-plugin) for
@@ -641,8 +634,10 @@ promoted to. Earlier turns keep the blocks they got in their logs.
 ## Limits
 
 - Canon matches words, not meaning: a note that says "listener" for a
-  prompt that says "port" is not found. Titles, aliases, tags and the terms
-  a list defines in bold are the way to make a note easy to find.
+  prompt that says "port" is not found, and on fresh prompts in words
+  unlike the notes' it misses many notes that bear on them (How well it
+  picks notes). Titles, aliases, tags and the terms a list defines in bold
+  are the way to make a note easy to find.
 - It reads the vault on this computer. A vault that syncs (iCloud,
   Obsidian Sync) is read as it is on disk at the moment.
 - One block per prompt: a long turn does not get new notes at later steps,
@@ -666,15 +661,18 @@ notes for five projects, people, decisions, runbooks and ideas; active
 notes, superseded decisions, an archived runbook, ideas that are proposed
 or drafts, drafts in and out of the drafts folder, notes with no
 frontmatter, `.obsidian`, `.trash` and an attachment) and always work on a
-copy of it in a temporary folder. They cover a vault folder DSH may not
-list and a folder inside it that DSH may not list, the try-out's `~/`
-folder, numbers in quotes in the profile and the page's fix for them, the
-form's promote-folder check, and where the focus goes after each switch,
-Read again and Promote. `test/canon-relevance.test.js` holds the dev set
-(`dev.json` and `dev-fresh.json`) to the figures it reached, the first
-hold-out to its four floors, and the second hold-out's shape, with its
-five floors run as a known miss (a `todo` test, OPEN-QUESTIONS #40); a
-hold-out's test prints its figures only, never its prompts.
+copy of it in a temporary folder. They cover what makes a coding request,
+a decision statement, a question about the team or for a fact, the fit
+rules above with prompts of each kind, a vault folder DSH may not list and
+a folder inside it that DSH may not list, the try-out's `~/` folder,
+numbers in quotes in the profile and the page's fix for them, the form's
+promote-folder check, lines addressed to agents, and where the focus goes
+after each switch, Read again and Promote. `test/canon-relevance.test.js`
+holds the dev set and the probe sets to the figures they reached, the first
+hold-out to no worse than measured and to the floors it meets (its four
+floors run as a known miss), and the second hold-out's shape, with its five
+floors run as a known miss (OPEN-QUESTIONS #40); a hold-out's test prints
+its figures only, never its prompts.
 
 The real-DSH test (about one minute a build) starts DSH from each
 `.e2e/dsh-<version>` install and from the installed app's own DSH, each in
@@ -698,10 +696,13 @@ note the next turn gets; the focus goes to the line that says so), and
 switches Canon off and on in Plugins (its card, entry and style go and
 come back; a turn in between gets nothing). It restarts DSH (a session
 switched off stays off), runs without Session Watch (the page still
-follows), with sessions on Read Only (notes, but no draft), with a number
-in quotes in the profile (`maxChars: "900"`: named with its range and as
-text, and fixed by saving a good value), with a copy of the vault made
-unreadable (`chmod 000` in its own folder: the page says DSH may not read
-it, What happened notes it and a turn gets nothing; readable again,
-**Read again** reads it and keeps the focus) and with `enabled: false`, and
-checks Canon's file modes. Pictures go to `.e2e/shots/canon/<build>/`.
+follows), with sessions on Read Only (notes, but no draft), with two
+numbers in quotes in the profile (both named as text; **Save it as 3** and
+the form's **Save** each put the focus on the line that says what was
+saved), with a copy of the vault made unreadable (`chmod 000` in its own
+folder: the page says DSH may not read it, What happened notes it and a
+turn gets nothing; readable again, **Read again** reads it and keeps the
+focus), with a folder inside the vault DSH may not read (named on the page,
+said once in What happened and not again after a restart) and with
+`enabled: false`, and checks Canon's file modes. Pictures go to
+`.e2e/shots/canon/<build>/`.
