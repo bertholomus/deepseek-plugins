@@ -13,17 +13,24 @@
  * @module dsh-plugin-coordinator/config
  */
 
-/** The defaults of the settings checked here; index.js's schema gives DSH the same ones. */
+/**
+ * DSH's data folder as the plugin's paths spell it. A path under it lives in
+ * $DSH_HOME when that is set, as DSH's own data does (store.js dataPath), so
+ * a second DSH with its own DSH_HOME keeps its own store, notes and log.
+ */
+export const DSH_HOME_DIR = '~/.dsh';
+
+/** The defaults of the settings checked here; index.js's schema gives DSH the same ones (a test holds them equal). */
 export const DEFAULTS = Object.freeze({
     enabled: true,
     autoHandback: 'idle',
     maxHandbacksPerHour: 30,
     maxThreadsPerHour: 20,
     approvalNoticeSeconds: 0,
-    storeFile: '~/.dsh/coordinator/coordinator.json',
-    memoryDir: '~/.dsh/coordinator/memory',
+    storeFile: `${DSH_HOME_DIR}/coordinator/coordinator.json`,
+    memoryDir: `${DSH_HOME_DIR}/coordinator/memory`,
     maxMemoryBytes: 65536,
-    logFile: '~/.dsh/coordinator/coordinator.log',
+    logFile: `${DSH_HOME_DIR}/coordinator/coordinator.log`,
 });
 
 /** The ranges of the number settings: [lowest, highest, unit]. */

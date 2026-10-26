@@ -69,9 +69,9 @@ export const Config = z.object({
     /** Seconds a thread may wait on a permission prompt before its chat is told. 0 (the default) tells it at once. */
     approvalNoticeSeconds: z.any().default(DEFAULTS.approvalNoticeSeconds),
     /** Durable state: the coordinating chats and their threads. */
-    storeFile: z.any().default(DEFAULTS.storeFile),
+    storeFile: z.any().default('~/.dsh/coordinator/coordinator.json'),
     /** Folder for each coordinating chat's shared notes. */
-    memoryDir: z.any().default(DEFAULTS.memoryDir),
+    memoryDir: z.any().default('~/.dsh/coordinator/memory'),
     /** Largest memory file the tools will write. */
     maxMemoryBytes: z.any().default(DEFAULTS.maxMemoryBytes),
     /**
@@ -98,7 +98,7 @@ export const Config = z.object({
      */
     trustedHosts: live(z.any().default([])),
     /** Action log, mode 600, never prompt text. Empty turns it off. */
-    logFile: z.any().default(DEFAULTS.logFile),
+    logFile: z.any().default('~/.dsh/coordinator/coordinator.log'),
 });
 
 export function apply(ctx, given) {

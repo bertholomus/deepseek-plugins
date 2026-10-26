@@ -41,8 +41,9 @@
  * @module dsh-plugin-coordinator/store
  */
 import { readFileSync, renameSync, writeFileSync, mkdirSync, chmodSync, statSync, existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { DSH_HOME_DIR } from './config.js';
 
 /** Resolve a '~'-prefixed path. */
 export function expand(p) {
@@ -51,8 +52,8 @@ export function expand(p) {
 
 /** DSH's own data folder: `$DSH_HOME`, else ~/.dsh, as DSH resolves it. */
 export function dshHome() {
-    const env = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
-    return env === '' ? join(homedir(), '.dsh') : resolve(expand(env));
+    const DSH_HOME = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
+    return DSH_HOME === '' ? expand(DSH_HOME_DIR) : resolve(expand(DSH_HOME));
 }
 
 /**
@@ -61,7 +62,7 @@ export function dshHome() {
  * own projects instead of sharing the main one's.
  */
 export function dataPath(p) {
-    if (p === '~/.dsh' || p.startsWith('~/.dsh/')) return `${dshHome()}${p.slice('~/.dsh'.length)}`;
+    if (p === DSH_HOME_DIR || p.startsWith(`${DSH_HOME_DIR}/`)) return `${dshHome()}${p.slice(DSH_HOME_DIR.length)}`;
     return expand(p);
 }
 

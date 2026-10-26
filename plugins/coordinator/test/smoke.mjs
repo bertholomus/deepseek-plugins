@@ -4744,6 +4744,24 @@ test('config: wrong values never stop the plugin; each falls back to its default
     assert.match(String(await thread.ctx.call('thread_handback', { status: 'done', summary: 'All done.' }).catch((error) => error.message)), /handback limit reached \(30 per hour\)/);
 });
 
+test('config: the schema DSH reads gives the defaults the plugin checks against; a path under ~/.dsh follows DSH_HOME', async () => {
+    const { DEFAULTS, DSH_HOME_DIR } = await import('../lib/config.js');
+    const given = plugin.Config({});
+    for (const [key, value] of Object.entries(DEFAULTS)) assert.deepEqual(given[key], value, key);
+    const before = process.env.DSH_HOME;
+    try {
+        process.env.DSH_HOME = '/tmp/dsh-second';
+        assert.equal(dataPath(DEFAULTS.storeFile), '/tmp/dsh-second/coordinator/coordinator.json');
+        assert.equal(dataPath(`${DSH_HOME_DIR}`), '/tmp/dsh-second');
+        assert.equal(dataPath('~/.dshfoo/x'), join(homedir(), '.dshfoo/x'), 'only DSH\'s own folder moves');
+        process.env.DSH_HOME = '';
+        assert.equal(dshHome(), join(homedir(), '.dsh'));
+    } finally {
+        if (before === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = before;
+    }
+});
+
 test('config: a fixed list of hosts or tools may be one name; YAML\'s bare off turns the nudges off', async () => {
     const { host, dir } = setup({ trustedHosts: 'nas.local', guardedTools: 'lane-catalog', autoHandback: false });
     await host.coordinated;
