@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 3:46 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 3:55 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -30,5 +30,5 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Session Watch | 8.5 (round 1) | 2741f21 | goal95/session-watch | NOT YET | deliveries live only in memory, so a note queued before a quit is taken back as not delivered after the restart; *waiting for your answer* reaches listeners late |
 | Wallpaper | 8.4 (round 1) | 29329f7 | goal95/wallpaper (redesign repo) | NOT YET | at the default tint DSH's own text is unreadable over a picture of the other tone, and an opaque band shows behind the glass composer in every open chat |
 
-Live DSH: pid 43210, started Mon Oct 26 07:14:47, unchanged at every check until 3:35:11 PM, when every DeepSeek Harness process on the Mac (DSH Test instances included) ended at once and only the live app came back (pid 64099, launched normally, profile unchanged); no command from this work aimed at it was found, and Albert was told at once. Its patch sha moved at 9:00 AM (a scheduled context job) and at
+Live DSH: pid 43210, started Mon Oct 26 07:14:47, unchanged at every check until 3:35:11 PM, when Albert restarted it himself ("that was me", 3:42 PM); every DeepSeek Harness process on the Mac, DSH Test instances included, ended with it, and the live app came back as pid 64099 with its profile unchanged. Its patch sha moved at 9:00 AM (a scheduled context job) and at
 9:06, 9:31 and 9:45 AM (MiniMe's direct edits of Fleet Shell's `runnerRev`), never from this work; f240a78d… from 9:45 AM; cb6b0fd7… since 3:15 PM (MiniMe's runnerRev 35 to 36 for Fleet Shell, diffed against its own backup).
