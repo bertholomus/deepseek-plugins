@@ -139,13 +139,65 @@ test('categories: the window\'s endpoints, as DSH\'s gateway finds them', async 
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-categories');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginCategoriesRemote');
     assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['list', 'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace']);
-    assert.deepEqual(plain(await remote.list()), { categories: [] });
-    // Off: no endpoints, nothing written.
+    assert.deepEqual(plain(await remote.list()), { categories: [], problems: [] });
+    // Off in its settings: the list says so (the window draws DSH's list as it is, and the page says why), a change is
+    // refused in words, and nothing is written.
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
     const off = setup({ enabled: false }, dir);
-    assert.equal(off.remote, undefined);
+    assert.deepEqual(plain(await off.remote.list()), { categories: [], off: true, problems: [] });
+    await assert.rejects(off.remote.createCategory('Lab'), (error) => error.code === 'categories/off'
+        && error.message === 'Categories are switched off in the plugin\'s settings (enabled: false in its row of the profile\'s cordis.patch.yml).');
+    await assert.rejects(off.remote.fileWorkspace('ws:/work/a', 'lab'), (error) => error.code === 'categories/off');
     await tick();
     assert.equal(existsSync(join(dir, 'categories')), false);
+});
+
+test('settings: a wrong type never stops the plugin; it counts as its default, the log warns, and the list names it', async () => {
+    const { checkConfig, DEFAULTS } = await import('../lib/config.js');
+    // Each wrong value in words: the key, what it must be, what it was, and what it counts as meanwhile.
+    const { config, problems } = checkConfig({ enabled: 'no', storeFile: 12, logFile: '', projectsStoreFile: ['x'] });
+    assert.deepEqual(config, { ...DEFAULTS, logFile: '' });
+    assert.deepEqual(problems.map((p) => p.key), ['enabled', 'storeFile', 'projectsStoreFile']);
+    assert.equal(problems[0].text, 'enabled must be true or false, but it is "no"; it counts as true until you change it');
+    assert.equal(problems[1].text, 'storeFile must be a file path, but it is 12; ~/.dsh/categories/categories.json is used until you change it');
+    assert.equal(problems[2].text, 'projectsStoreFile must be a file path, or empty to skip the move from the projects plugin, but it is ["x"]; ~/.dsh/projects/projects.json is used until you change it');
+    assert.equal(checkConfig({ storeFile: '  ' }).problems[0]?.text, 'storeFile must be a file path, but it is "  "; ~/.dsh/categories/categories.json is used until you change it');
+    assert.deepEqual(checkConfig(undefined), { config: { ...DEFAULTS }, problems: [] });
+    // In a running plugin: it starts and works, DSH's log warns once per setting, and the window's list names them.
+    const dir = mkdtempSync(join(tmpdir(), 'categories-'));
+    const warnings = [];
+    const host = fakeHost();
+    host.logger = { info() {}, warn: (...parts) => { warnings.push(parts.slice(1).join(' ')); } };
+    plugin.apply(host, plugin.Config({ enabled: 'yes', storeFile: join(dir, 'categories', 'categories.json'), logFile: join(dir, 'categories', 'categories.log'), projectsStoreFile: '' }));
+    const remote = host.provided.get('dshPluginCategoriesRemote');
+    await tick();
+    assert.deepEqual(warnings, ['categories: a setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it']);
+    const list = plain(await remote.list());
+    assert.deepEqual(list.problems, [{ key: 'enabled', text: 'enabled must be true or false, but it is "yes"; it counts as true until you change it' }]);
+    assert.equal((await remote.createCategory('Lab')).category, 'lab');
+});
+
+test('endpoints: a failure that is not a refusal is answered in words and logged, never thrown as it came', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'categories-'));
+    const { remote, host } = setup({}, dir);
+    const warnings = [];
+    remote.warn = (text) => warnings.push(text);
+    await tick();
+    host.workspaceRegistry.insertBefore = async () => { throw new Error('the registry is closed'); };
+    host.workspaceRegistry.add('/work/z');
+    await remote.createCategory('Z');
+    const failed = await remote.fileWorkspace('ws:/work/z', 'z').then(() => null, (error) => error);
+    // The store took it (DSH's order is kept in step later), or the call says why in words: never a bare throw.
+    if (failed) {
+        assert.equal(failed.code, 'categories/failed');
+        assert.match(failed.message, /^Categories could not do that: /);
+        assert.ok(warnings.some((w) => w.startsWith('categories: a call failed: ')));
+    }
+    remote.manager.listCategories = () => { throw new Error('broken store'); };
+    const listed = await remote.list().then(() => null, (error) => error);
+    assert.equal(listed?.code, 'categories/failed');
+    assert.equal(listed?.message, 'Categories could not do that: broken store');
+    assert.deepEqual(warnings.at(-1), 'categories: a call failed: broken store');
 });
 
 test('categories: named sets of workspaces in their order, kept in step with DSH\'s own workspace order', async () => {
@@ -415,7 +467,7 @@ test('move: no projects store is nothing to move, done once; one that can\'t be 
         const dir = mkdtempSync(join(tmpdir(), 'categories-'));
         const { host, raw, remote } = setup({}, dir);
         await tick();
-        assert.deepEqual(plain(await remote.list()), { categories: [] });
+        assert.deepEqual(plain(await remote.list()), { categories: [], problems: [] });
         const store = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
         assert.deepEqual({ ...store.imports.projects, at: 'x' }, { at: 'x', file: raw.projectsStoreFile, from: 'none', categories: 0, workspaces: 0 });
         assert.equal(existsSync(join(dir, 'categories', 'from-projects.json')), false);
@@ -423,7 +475,7 @@ test('move: no projects store is nothing to move, done once; one that can\'t be 
         // A projects store that turns up later doesn't move anything: the move ran.
         mkdirSync(join(dir, 'projects'));
         writeFileSync(raw.projectsStoreFile, JSON.stringify(projectsStoreWithCategories()));
-        assert.deepEqual(plain(await (await restart(host, raw)).list()), { categories: [] });
+        assert.deepEqual(plain(await (await restart(host, raw)).list()), { categories: [], problems: [] });
 
         // Unreadable (not JSON): logged, nothing written, tried again at the next start.
         const dir2 = mkdtempSync(join(tmpdir(), 'categories-'));

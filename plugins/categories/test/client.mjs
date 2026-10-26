@@ -101,12 +101,12 @@ const byHook = (tree, hook) => elementsOf(tree).find((e) => e.props?.[hook] !== 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 /** A facts store for a view: the categories as `categories()` gives them, and what the views ask of it. */
-function factsOf(categories, { failed = () => false, answer = () => ({ ok: true, value: {} }) } = {}) {
+function factsOf(categories, { failed = () => false, answer = () => ({ ok: true, value: {} }), off = () => false, problems = () => [] } = {}) {
     const calls = [];
     return {
         calls,
         subscribe: () => () => {}, getSnapshot: () => 0, watch: () => () => {},
-        categories, listFailed: failed,
+        categories, listFailed: failed, off, problems,
         list: async (maxAge) => { calls.push(['list', maxAge]); },
         act: async (method, args) => { calls.push([method, plain(args)]); return answer(method, args); },
     };
@@ -507,6 +507,55 @@ test('browser half: the Categories page is headed Categories, each row says what
     assert.deepEqual(facts.calls.at(-1), ['list', 0]);
     // The note on imported names lists them as a sentence does.
     assert.deepEqual([listText([]), listText(['A']), listText(['A', 'B']), listText(['A', 'B', 'C'])], ['', 'A', 'A and B', 'A, B and C']);
+});
+
+test('browser half: switched off in its settings, the page says so and how to switch it on; a wrong setting is named', () => {
+    const { client, react } = loadClient();
+    const { CategoriesPage, SidebarTree } = client.internals;
+    const workspaces = workspacesOf([{ workspaceId: 'w-a', title: 'a', path: '/w/a', sessionIds: [] }]);
+    let off = true;
+    let problems = [];
+    const facts = factsOf(() => [], { off: () => off, problems: () => problems });
+    const props = {
+        useSessions: (select) => select({ byId: {} }), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces),
+        plugin: { facts, openSession: () => {} },
+    };
+    const draw = mount(react, () => CategoriesPage(props));
+    let page = draw();
+    const offState = byHook(page, 'data-categories-off');
+    assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'h2')), 'Categories are switched off');
+    assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'p')), 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and they come back as they were.');
+    // Nothing to make while off, no tree, and no error.
+    assert.equal(byHook(page, 'data-categories-new'), undefined);
+    assert.equal(elementsOf(page).some((e) => e.props?.role === 'tree'), false);
+    assert.equal(elementsOf(page).some((e) => e.props?.role === 'alert'), false);
+    // The session list draws DSH's as it is: no header, not even Other workspaces.
+    const sidebar = mount(react, () => SidebarTree({ useWorkspaces: (select) => select(workspaces), useSessionStatus: (select) => select(new Map()), plugin: { facts } }))();
+    assert.equal(elementsOf(sidebar).some((e) => e.props?.['data-categories-sb'] !== undefined), false);
+    // On, with a wrong setting: the note names it, says what it counts as and where to fix it, as an alert.
+    off = false;
+    problems = [{ key: 'enabled', text: 'enabled must be true or false, but it is "yes"; it counts as true until you change it' }];
+    page = draw();
+    const note = byHook(page, 'data-categories-problems');
+    assert.equal(note.props.role, 'alert');
+    assert.equal(textIn(note), 'A setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it. Change it in the categories row of the profile\'s cordis.patch.yml; the plugin restarts with it.');
+    assert.equal(byHook(page, 'data-categories-off'), undefined);
+});
+
+test('browser half: the facts keep what the list says about the settings, and a change\'s answer leaves it', async () => {
+    const { client } = loadClient();
+    const { categoryFacts } = client.internals;
+    let answer = { ok: true, value: { categories: [], off: true, problems: [{ key: 'logFile', text: 'logFile must be a file path, or empty for no log, but it is 3; ~/.dsh/categories/categories.log is used until you change it' }, 'junk'] } };
+    const facts = categoryFacts({ call: async (method) => (method === 'list' ? answer : { ok: true, value: { category: 'x', categories: [{ id: 'x', name: 'X', workspaces: [] }] } }) });
+    assert.deepEqual([facts.off(), plain(facts.problems())], [false, []]);
+    await facts.list();
+    assert.equal(facts.off(), true);
+    assert.deepEqual(plain(facts.problems()).map((p) => p.key), ['logFile']);
+    answer = { ok: true, value: { categories: [], problems: [{ key: 'logFile', text: 'still' }] } };
+    await facts.list();
+    assert.equal(facts.off(), false);
+    await facts.act('createCategory', { name: 'X' });
+    assert.deepEqual(plain(facts.problems()), [{ key: 'logFile', text: 'still' }]);
 });
 
 test('browser half: the Categories page shows DSH\'s dot on a session, names what was imported, and a chevron folds a workspace', () => {

@@ -101,6 +101,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-pg-heading .dshc-pg-new{margin-left:auto;align-self:center}',
             '.dshc-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
             '.dshc-pg-note>svg{flex:none}',
+            '.dshc-pg-note.dshc-pg-problems{align-items:flex-start;padding:8px 12px;color:var(--dsw-alias-label-primary)}',
+            '.dshc-pg-problems>svg{margin-top:3px}',
+            '.dshc-pg-problems strong{font-weight:500}',
             '.dshc-pg-note>span{flex:1;min-width:0}',
             // The note's ×: a small icon button, its ring drawn inset.
             '.dshc-pg-dismiss{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--dshc-glyph);cursor:pointer}',
@@ -285,6 +288,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** The categories as last answered (null until an answer came), and whether the last read failed. */
             let listed = null;
             let failed = false;
+            /** Switched off in the plugin's settings (the host said so), and the settings that were wrong, in words. */
+            let off = false;
+            let problems = EMPTY;
             let reading = null;
             let again = false;
             let last = 0;
@@ -299,6 +305,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const take = (value) => {
                 failed = false;
                 listed = value.categories.filter((c) => isObject(c) && typeof c.id === 'string');
+                // The list's answer says both (a change's answer says neither, and leaves them as they were).
+                if ('problems' in value || 'off' in value) {
+                    off = value.off === true;
+                    problems = Array.isArray(value.problems) ? value.problems.filter((p) => isObject(p) && typeof p.text === 'string') : EMPTY;
+                }
                 emit();
             };
             /**
@@ -344,6 +355,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 categories: () => listed,
                 /** Whether the last read failed. */
                 listFailed: () => failed,
+                /** Whether the plugin is switched off in its settings (then the window draws DSH's list as it is). */
+                off: () => off,
+                /** The plugin's settings that were wrong, each `{key, text}` in words (each counts as its default). */
+                problems: () => problems,
                 list,
                 /** Keep the list read while the returned function has not been called. */
                 watch() {
@@ -465,6 +480,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             moveTo: 'Move to',
             noCategories: 'No categories yet',
             newWithIt: 'New category with it…',
+            offTitle: 'Categories are switched off',
+            offText: 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and they come back as they were.',
+            problemsTitle: 'A setting is wrong',
+            problemsFix: 'Change it in the categories row of the profile\'s cordis.patch.yml; the plugin restarts with it.',
             imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
             dismiss: 'Dismiss',
         };
@@ -873,6 +892,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             useWatch(plugin.facts);
             const listed = plugin.facts.categories();
             const failed = plugin.facts.listFailed();
+            const off = plugin.facts.off?.() === true;
+            const problems = plugin.facts.problems?.() ?? EMPTY;
             const sessions = useSessions((state) => state);
             const statuses = useSessionStatus((value) => value);
             const items = useWorkspaces((state) => state.items);
@@ -960,7 +981,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 },
             };
             let content;
-            if (listed === null && failed) {
+            if (off) {
+                // Switched off in its settings: what that means and how to switch it on, never an error.
+                content = h('div', { className: 'dshc-pg-empty', 'data-categories-off': '' },
+                    h('span', { className: 'dshc-pg-empty-glyph' }, h(CategoriesIcon, { size: 28 })),
+                    h('h2', null, PAGE.offTitle),
+                    h('p', null, PAGE.offText));
+            } else if (listed === null && failed) {
                 content = h('div', { className: 'dshc-pg-state dshc-pg-error', role: 'alert' }, TEXT.unreachable, ' ',
                     h('button', { type: 'button', className: 'dshc-pg-retry', onClick: () => { void plugin.facts.list(0); } },
                         h(ui.IconRefreshOutlineRegular, { size: 12 }), TEXT.retry));
@@ -1032,10 +1059,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h('div', { className: 'dshc-pg-heading' },
                             h('h1', null, PAGE.title),
                             count > 0 ? h('span', { className: 'dshc-pg-count' }, plural(count, 'category', 'categories')) : null,
-                            listed !== null ? h(ui.Button, {
+                            listed !== null && !off ? h(ui.Button, {
                                 variant: 'outline', size: 'sm', className: 'dshc-pg-new', icon: h(ui.IconPlusOutlineRegular, { size: 14 }),
                                 onClick: () => setDialog({ kind: 'new' }), 'data-categories-new': '',
                             }, SIDEBAR.newTitle) : null),
+                        // A setting that was wrong: which, what it must be and counts as meanwhile, and where to fix it.
+                        problems.length > 0 ? h('div', { className: 'dshc-pg-note dshc-pg-problems', role: 'alert', 'data-categories-problems': '' },
+                            h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
+                            h('span', null, h('strong', null, `${PAGE.problemsTitle}: `), problems.map((p) => `${p.text}.`).join(' '), ' ', PAGE.problemsFix)) : null,
                         // What came from the old sidebar, and what didn't, said once, until dismissed.
                         imported.length > 0 && !notes.has('imported') ? h('div', { className: 'dshc-pg-note', 'data-categories-imported': '' },
                             h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
@@ -1911,7 +1942,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [said, setSaid] = React.useState('');
             // The folded workspaces' dots, each in its seat in the workspace's row (markWorkspaceDots).
             const [seats, setSeats] = React.useState(EMPTY);
-            const categories = plugin.facts.categories();
+            // Switched off in its settings, the list is DSH's as it is: no headers, not even Other workspaces.
+            const categories = plugin.facts.off?.() === true ? null : plugin.facts.categories();
             const groups = React.useMemo(() => sidebarGroups(categories, items, dragging), [categories, items, dragging]);
             const css = React.useMemo(() => (groups === null ? '' : sidebarRules(groups, folded)), [groups, folded]);
             const byId = React.useMemo(() => new Map((Array.isArray(items) ? items : EMPTY).map((ws) => [ws?.workspaceId, ws])), [items]);

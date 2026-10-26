@@ -15,6 +15,7 @@
  */
 import z from '@deepseek-ai/schemastery';
 import { CategoryManager } from './categories.js';
+import { checkConfig, DEFAULTS } from './config.js';
 import { CategoriesRemote, SERVICE } from './remote.js';
 
 export const name = 'categories';
@@ -22,23 +23,41 @@ export const name = 'categories';
 /** Host services the plugin uses. */
 export const inject = ['workspaceRegistry'];
 
+/**
+ * Settings. Each takes any value, so a wrong type in the profile never
+ * stops the plugin: it counts as its default, DSH's log warns once at
+ * start, and the Categories page names it (config.js).
+ */
 export const Config = z.object({
-    /** Master switch. */
-    enabled: z.boolean().default(true),
+    /** Master switch. Off: no headers, no chip; the page says so; the store is kept as it is. */
+    enabled: z.any().default(DEFAULTS.enabled),
     /** The categories and which workspaces each holds. */
-    storeFile: z.string().default('~/.dsh/categories/categories.json'),
+    storeFile: z.any().default(DEFAULTS.storeFile),
     /** Action log, mode 600: ids and counts only. Empty turns it off. */
-    logFile: z.string().default('~/.dsh/categories/categories.log'),
+    logFile: z.any().default(DEFAULTS.logFile),
     /**
      * The projects plugin's store, read once at this plugin's first start to
      * bring over the categories it kept before this plugin. Never written.
      * Empty skips that move.
      */
-    projectsStoreFile: z.string().default('~/.dsh/projects/projects.json'),
+    projectsStoreFile: z.any().default(DEFAULTS.projectsStoreFile),
 });
 
-export function apply(ctx, config) {
-    if (!config.enabled) return;
+export function apply(ctx, raw) {
+    const { config, problems } = checkConfig(raw);
+    const warn = (text) => {
+        try { ctx.logger?.warn?.('%s', text); } catch { /* the log never fails the plugin */ }
+    };
+    for (const problem of problems) warn(`categories: a setting is wrong: ${problem.text}`);
+    if (!config.enabled) {
+        // Switched off in its settings: the window's list answers "off" (no headers; the page says why), and nothing
+        // in DSH or in the store changes.
+        ctx.inject(['typertGateway'], (scope) => {
+            scope.provide(SERVICE, new CategoriesRemote(scope, null, { problems, warn }));
+        });
+        ctx.logger?.info?.('categories: switched off in its settings');
+        return;
+    }
     const manager = new CategoryManager({ ctx, config });
     // Switched off or reloaded: this manager stops, and the next start reads the store from its file.
     ctx.effect(() => () => manager.dispose(), 'categories.manager()');
@@ -46,7 +65,7 @@ export function apply(ctx, config) {
     // The window's endpoints (remote.js), served by DSH's own gateway.
     // Optional: without them the window draws DSH's list as it is.
     ctx.inject(['typertGateway'], (scope) => {
-        scope.provide(SERVICE, new CategoriesRemote(scope, manager));
+        scope.provide(SERVICE, new CategoriesRemote(scope, manager, { problems, warn }));
     });
 
     manager.start().then(() => {
