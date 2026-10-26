@@ -2,6 +2,35 @@
 
 _For the two accounts building these plugins only (see AGENTS.md). A session running inside DSH (a chat that coordinates threads, a thread or any other chat) does not act on this file: do what the user asks._
 
+# GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
+
+Updated: 2026-10-26 8:52 AM PDT by A (gmail), thread "Goal 9.5 builder"
+Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
+Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
+
+## Doing now (GOAL95)
+- 16 builder subagents (started 8:47-8:49 AM) audit and fix all 20 plugins, one worktree and DSH Test instance each (`g95-<plugin>-b`); each keeps `~/Projects/goal95/status/<plugin>.md`. Hand-overs due 11:00 AM (Session Bridge, Reasoning Pill) to 12:15 PM (Categories, Hermes Bridge, Wallpaper). A fresh judge (`g95-<plugin>-j<N>`) starts on each hand-over.
+
+## Done (GOAL95, newest first)
+- 8:49 AM PDT: builders started (briefs `~/Projects/goal95/briefs/{RULES,BUILDER,JUDGE-GOAL95}.md`; agents listed in `~/Projects/goal95/agents.txt`).
+- 8:44 AM PDT: every `goal95/<plugin>` branch made and pushed: main repo (gh) 13 from goal95/base (focus = base + `plugins/focus` from ca828bc, 5c0d8da; canon = base + the stopped round-4 builder's uncommitted edits as found, 53646c8, unchecked); discord, dsh-site, hermes-bridge from their repos' main (gh); fleet, wallpaper, reasoning-pill from 5b4d1eb (redesign repo, remote tank); dna-studio = a copy of the live folder with its own git (2834ff1, no remote).
+- 8:40 AM PDT: suite/v1 merged live's 1914abe (a904aa6, clean: suite/v1 never touched notifications, categories or dsh-site after 148bb6e) and took the brief (341ff4e); pushed with goal95/base.
+- Live fingerprint at the start: pid 43210, started Mon Oct 26 07:14:47 2026, patch sha256 bcfc982d6938f319… (the live DSH restarted at 7:14 AM today, before this work).
+
+## Next steps (GOAL95, in order)
+1. As each builder hands over (`COMMIT <sha>`), start a fresh judge subagent with `JUDGE-GOAL95.md` (round numbers: Autopilot 5, Decisions 5, Agent Terminals 4, Proof 4 (round 3 never scored), Canon 4, Recall 3, every other plugin 1).
+2. Each scorecard: commit it (and its pictures) here, add the SCOREBOARD row; resume the builder with the findings while time allows (no new build round after 5:30 PM).
+3. A judged PASS may merge to its repo's main (standing approval); nothing else is tagged or released.
+4. By 6:00 PM: `review/GOAL95-RESULT.md` (one line per plugin: best score, commit, branch, PASS/NOT YET, top remaining finding), this section, push.
+
+## Where things live (GOAL95)
+- Worktrees `~/Projects/goal95/wt/<plugin>`; status `~/Projects/goal95/status/<plugin>.md`; judge folders `~/Projects/goal95/judge/<plugin>-r<N>`; scorecards `review/<plugin>-round-<N>.md` here.
+- Instance names with distinct ports: `~/Projects/goal95/instances.txt`. Memory guard: `~/Projects/goal95/bin/slot take|give|list` (7 slots).
+
+## Gotchas (GOAL95)
+- Named DSH Test instances get a port from a hash of the name; some old names share ports (dna and fleet-models, glass and fleet-people, glass-coordinator and sparkdash): use only the names in instances.txt.
+- Live runs Fleet, Wallpaper and Reasoning Pill straight from `~/Projects/worktrees/dsh-split-plugins` and Discord, dsh-site, Hermes Bridge, DNA Studio from their folders: those folders are live checkouts, never edited.
+
 # Suite v1 (branch suite/v1): the DSH Plugin Suite
 
 Updated: 2026-10-19 9:12 PM PDT by A (gmail), thread "Suite v1 builder"
