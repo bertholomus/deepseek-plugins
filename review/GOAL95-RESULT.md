@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 3:16 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 3:18 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -24,7 +24,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Hermes Bridge | 8.9 (round 1) | 717b595 | goal95/hermes-bridge (dsh-plugin-hermes-bridge) | NOT YET | UX 8.5: the first read of a window terminal takes the person's control, the icon vanishes in dark, the window never says the bridge is down |
 | Notifications | 8.0 (round 1) | b7836d2 | goal95/notifications | NOT YET | news is dropped while DSH's window is in front with nobody at it; a window that cannot show notifications drops the queue; round 2 building |
 | Proof | being judged (round 4; earlier best 7.5) | 7cc66ef | goal95/proof | NOT YET | judge working |
-| Reasoning Pill | 7.5 (round 1); round 2 being judged (the last) | d24800a | goal95/reasoning-pill (redesign repo) | NOT YET | round 2 at d24800a being judged |
+| Reasoning Pill | **9.5 (round 2)** | d24800a | goal95/reasoning-pill (redesign repo) | **PASS** | nits only; not merged: the redesign repo's main is 101 commits behind claude/split-plugins, which the live DSH runs, so MiniMe takes it from the branch after Albert's OK |
 | Recall | being judged (round 3; earlier best 8.8, round 2, 2e6de4d) | 7e3cd3f | goal95/recall | NOT YET | judge working |
 | Session Bridge | 8.0 (round 1); round 2 being judged (the last) | 8b7b6ab | goal95/session-bridge | NOT YET | round 2 at 8b7b6ab being judged |
 | Session Watch | being judged (round 1) | 2741f21 | goal95/session-watch | NOT YET | judge working |
