@@ -248,9 +248,31 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     // ── One open request per window, for every suite plugin ───────────
     const HUB_KEY = 'dsh-plugin-session-watch/hub/v1';
     const HUB_NS = 'dsh-plugin-session-watch';
+    /** How often a window looks at DSH's plugin list while Session Watch is not running. */
+    const HUB_DOWN_MS = 4000;
+
+    /**
+     * Whether Session Watch runs, from DSH's own list of plugins (what its
+     * Plugins page reads): 'on'; 'off' (switched off, starting, stopping,
+     * failed, or not installed); or 'unknown' when this DSH gives no list.
+     * Asking the list rather than Session Watch's own endpoint keeps the
+     * window's console free of failed requests while it is off.
+     */
+    async function watchRuns(c) {
+        let result;
+        try {
+            result = await c.rpc.call('/api', 'pluginManager/listPlugins', { args: {} });
+        } catch {
+            return 'unknown';
+        }
+        if (!isRecord(result) || result.ok !== true || !Array.isArray(result.value)) return 'unknown';
+        const rows = result.value.filter((row) => isRecord(row) && row.moduleName === HUB_NS);
+        if (rows.length === 0) return 'off';
+        return rows.some((row) => row.enabled !== false && row.fiberPhase === 'active') ? 'on' : 'off';
+    }
 
     function createHub() {
-        const state = { providers: new Set(), subs: new Set(), since: undefined, running: false, failures: 0 };
+        const state = { providers: new Set(), subs: new Set(), since: undefined, running: false, failures: 0, down: false, watch: 'unknown' };
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const hidden = () => Boolean(doc && doc.visibilityState === 'hidden');
         const visible = () => new Promise((resolve) => {
@@ -294,6 +316,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         await sleep(1000);
                         continue;
                     }
+                    if (state.down) {
+                        // Session Watch did not answer: DSH's plugin list says whether it runs, so the window never
+                        // asks an endpoint that is not there. While it is off, nothing else is asked.
+                        state.watch = await watchRuns(c);
+                        if (state.watch === 'off') {
+                            state.failures = 0;
+                            await sleep(HUB_DOWN_MS);
+                            continue;
+                        }
+                        // It runs but did not answer, or this DSH has no list: ask again after a few seconds (at most 10).
+                        if (state.failures > 0) await sleep(Math.min(10000, 2000 * 2 ** Math.min(state.failures, 3)));
+                    }
                     let result;
                     try {
                         result = await c.rpc.call('/api', `${HUB_NS}/wait`, { args: { since: state.since, timeoutMs: 25000 } });
@@ -303,9 +337,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     if (isRecord(result) && result.ok === true && isRecord(result.value)) {
                         const next = result.value;
                         const prev = state.since;
+                        const wasDown = state.down;
                         state.since = next;
                         state.failures = 0;
-                        if (!prev || prev.epoch !== next.epoch) notify('all');
+                        state.down = false;
+                        state.watch = 'on';
+                        // Back after a stop (or the first answer): every page reads again.
+                        if (!prev || prev.epoch !== next.epoch || wasDown) notify('all');
                         else {
                             const changed = new Set();
                             const was = prev.versions ?? {};
@@ -314,11 +352,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         }
                         continue;
                     }
-                    // The watcher is not running (or failed): read again every few seconds (at most 10), so a page that
-                    // says so comes back soon after it runs again.
+                    // The watcher stopped (or did not answer): pages read once, so each can say what it needs (a page
+                    // that opened before any answer has read already); then the loop above waits for it to run.
                     state.failures += 1;
-                    notify('all');
-                    await sleep(Math.min(10000, 2000 * 2 ** Math.min(state.failures, 3)));
+                    if (!state.down) {
+                        state.down = true;
+                        if (state.since) notify('all');
+                    }
                 }
             } finally {
                 state.running = false;
@@ -338,6 +378,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 return () => state.subs.delete(sub);
             },
             get since() { return state.since; },
+            /** What the hub last knew of Session Watch: 'on', 'off' (DSH's plugin list says it is not running) or 'unknown'. */
+            get watch() { return state.down ? state.watch : state.since ? 'on' : state.watch; },
         };
     }
 
@@ -619,6 +661,17 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     const WATCH_PACKAGE = 'dsh-plugin-session-watch';
     const watchLink = link(WATCH_PACKAGE, { name: 'Session Watch' });
 
+    /** Whether Session Watch runs: DSH's plugin list first (no request to an endpoint that is not there), else its status. */
+    async function watchRunning() {
+        const c = connections.current ?? await whenConnected();
+        if (c) {
+            const runs = await watchRuns(c);
+            if (runs !== 'unknown') return runs === 'on';
+        }
+        const result = await watchLink.call('status');
+        return result.ok || result.error?.code !== 'not-running';
+    }
+
     /**
      * What the page shows when its plugin cannot be read: not running (with
      * why: the Session Watch it needs is off, or the plugin itself stopped)
@@ -630,7 +683,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         React.useEffect(() => {
             if (code !== 'not-running' || !needsWatch) return undefined;
             let alive = true;
-            void watchLink.call('status').then((result) => { if (alive) setWatchUp(result.ok || result.error?.code !== 'not-running'); });
+            void watchRunning().then((up) => { if (alive) setWatchUp(up); }, () => {});
             return () => { alive = false; };
         }, [code, needsWatch, text]);
         const button = (label, target) => (typeof nav.current?.openBundle === 'function'
@@ -694,15 +747,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const whole = (text) => (/^\d+$/.test(text) ? Number(text) : undefined);
         // A stored value of the wrong kind shows as it is, so the form can flag it rather than show it as empty.
         const raw = (v) => (v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
+        // Where text is the wrong kind (a number, a list or a switch saved in quotes), it shows with its quotes: the
+        // form flags it as it opens, and the value typed without them counts as a change, so Save stores it.
+        const quoted = (v) => (typeof v === 'string' ? JSON.stringify(v) : raw(v));
         switch (f.kind) {
             case 'switch':
-                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : raw(v)), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
+                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : quoted(v)), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
             case 'choice':
                 return { field: f.name, format: raw, parse: (t) => (t === '' ? clear : f.options.some((o) => o.value === t) ? { kind: 'set', value: t } : undefined) };
             case 'number':
                 return {
                     field: f.name,
-                    format: (v) => (Number.isFinite(v) ? String(v) : raw(v)),
+                    format: (v) => (Number.isFinite(v) ? String(v) : quoted(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -713,7 +769,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'numbers':
                 return {
                     field: f.name,
-                    format: (v) => (Array.isArray(v) ? v.join(', ') : raw(v)),
+                    format: (v) => (Array.isArray(v) && v.every((n) => Number.isFinite(n)) ? v.join(', ') : Array.isArray(v) ? JSON.stringify(v) : quoted(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -735,8 +791,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
     }
 
-    /** The words under a value that does not fit: what does. */
-    function invalidWords(f) {
+    /** Whether a setting's text is a value saved in quotes (text where a number or a list of numbers belongs). */
+    const inQuotes = (text) => typeof text === 'string' && text.length >= 2 && text.startsWith('"') && text.endsWith('"');
+
+    /** The words under a value that does not fit: what does (and, for one saved in quotes, that the quotes are what is wrong). */
+    function invalidWords(f, text) {
+        if (inQuotes(text) && (f.kind === 'number' || f.kind === 'numbers')) {
+            const what = f.kind === 'number' ? `a whole number from ${f.min} to ${f.max}` : `up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them`;
+            return `It is saved as text, in quotes. Type ${what}, without the quotes, then save.`;
+        }
         if (f.invalid) return f.invalid;
         if (f.kind === 'number') return `A whole number from ${f.min} to ${f.max}, or empty for the default (${f.default}).`;
         if (f.kind === 'numbers') return `Up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them, or empty for the default (${(f.default ?? []).join(', ')}).`;
@@ -840,7 +903,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-set-text` },
                     h('div', { className: `${P}-set-title`, id: `${id}-label` }, f.title),
                     h('div', { className: `${P}-set-hint` }, f.hint),
-                    state.invalid ? h('p', { className: `${P}-set-error`, role: 'alert' }, invalidWords(f)) : null),
+                    state.invalid ? h('p', { className: `${P}-set-error`, role: 'alert' }, invalidWords(f, state.text)) : null),
                 h('div', { className: `${P}-set-control` }, reset,
                     f.kind === 'switch'
                         ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
@@ -857,7 +920,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     invalid: state.invalid,
                     overriddenLabel: 'Changed',
                     resetLabel: 'Use the default',
-                    invalidLabel: invalidWords(f),
+                    invalidLabel: invalidWords(f, state.text),
                     disabled,
                     numeric: f.kind === 'number',
                     onEdit: edit,
