@@ -11,7 +11,7 @@
  * @module dsh-plugin-session-bridge/bridge
  */
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, constants as fsc, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, constants as fsc, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
@@ -683,13 +683,11 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         return r;
     }
 
-    async function workspaceFor(body) {
-        const registry = host.workspaceRegistry();
+    /** The workspace a body names, checked in words: `{ id }` or `{ path }` (a folder that exists). Asks DSH nothing. */
+    function folderOf(body) {
         if (body.workspaceId !== undefined && body.workspaceId !== null) {
             if (typeof body.workspaceId !== 'string' || !body.workspaceId) throw bad('workspaceId must be a string (GET /workspaces lists them).');
-            const ws = registry.get(body.workspaceId);
-            if (!ws) throw new BridgeError(404, 'workspace/not-found', `No workspace ${body.workspaceId} (GET /workspaces lists them).`);
-            return ws;
+            return { id: body.workspaceId };
         }
         if (body.workspacePath !== undefined && body.workspacePath !== null) {
             if (typeof body.workspacePath !== 'string' || !body.workspacePath.trim()) throw bad('workspacePath must be a folder path, as a string.');
@@ -698,9 +696,29 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
             let st;
             try { st = statSync(path); } catch {}
             if (!st?.isDirectory()) throw bad(`workspacePath ${shown(body.workspacePath)} is not a folder on this computer; make it first.`);
-            return registry.create(resolve(path));
+            return { path: resolve(path) };
         }
         throw bad('workspacePath (a folder) or workspaceId (from GET /workspaces) is required.');
+    }
+
+    async function workspaceFor(body) {
+        const registry = host.workspaceRegistry();
+        const want = folderOf(body);
+        if (want.id !== undefined) {
+            const ws = registry.get(want.id);
+            if (!ws) throw new BridgeError(404, 'workspace/not-found', `No workspace ${want.id} (GET /workspaces lists them).`);
+            return ws;
+        }
+        return registry.create(want.path);
+    }
+
+    /** Whether a body names the workspace a create made its session in (by id, or by folder however it is spelt). */
+    function sameWorkspace(body, workspace) {
+        const want = folderOf(body);
+        if (want.id !== undefined) return want.id === workspace?.id;
+        if (typeof workspace?.path !== 'string') return false;
+        const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+        return want.path === workspace.path || real(want.path) === real(workspace.path);
     }
 
     // ── Creates: one session per request id, even when retried after a timeout or a restart ──
@@ -769,9 +787,9 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
 
     /** A create retried with its request id: the session it made, with the steps it did not finish done now, once. */
     async function carryOn(known, body, own) {
-        const ws = await workspaceFor(body);
-        if (ws.id !== known.workspace?.id) {
-            throw new BridgeError(409, 'request/conflict', `Request id ${own} already made session ${known.sessionId} in ${known.workspace?.path ?? 'another folder'}; use a new request id for a session in ${ws.path}.`, { sessionId: known.sessionId });
+        if (!sameWorkspace(body, known.workspace)) {
+            const asked = folderOf(body);
+            throw new BridgeError(409, 'request/conflict', `Request id ${own} already made session ${known.sessionId} in ${known.workspace?.path ?? 'another folder'}; use a new request id for a session in ${asked.path ?? `workspace ${asked.id}`}.`, { sessionId: known.sessionId });
         }
         let read;
         try {

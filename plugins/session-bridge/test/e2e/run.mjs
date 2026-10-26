@@ -78,6 +78,9 @@ const ownDir = join(base, 'own');
 run.sock = join(ownDir, 'bridge.sock');
 const logFile = join(run.root, 'logs', 'bridge.log');
 const MARK = `e2e-secret-${randomUUID().slice(0, 8)}`;
+/** A prompt sent again after a cut-off turn, and the scripted model's answer to it (a todo list written, then a reply). */
+const AGAIN = 'E2E:todos [{"content":"Sent again after the restart","status":"completed"}]';
+const REPLIED = /^(Done with todo_write\. Working through the list\.|MISSING TOOL todo_write)$/;
 const TITLE = `Bridge title ${randomUUID().slice(0, 8)}`;
 
 /** The bridge's row: its socket and log in the throwaway folder, a small body limit, and `extra` keys. */
@@ -358,10 +361,11 @@ try {
         const state = (await call('GET', `/sessions/${ids.restarted}/requests/${rid}`)).body;
         const expected = saved ? 'unfinished' : 'dropped';
         check(`what became of its prompt matches the log on disk: ${expected} (${saved ? 'DSH saved it before it quit' : 'DSH quit before it saved it'}), with the turn's interrupted end`, state.state === expected && state.end?.kind === 'interrupted', json({ state, saved }));
-        const retry = (await call('POST', `/sessions/${ids.restarted}/prompt`, { text: 'E2E:say Sent again after the restart', requestId: rid })).body;
+        // The cut-off turn's "E2E:slow" may still be in the model's view, so the retry asks for a tool call, which the scripted model puts first.
+        const retry = (await call('POST', `/sessions/${ids.restarted}/prompt`, { text: AGAIN, requestId: rid })).body;
         const answered = (await call('GET', `/sessions/${ids.restarted}/requests/${rid}?wait=60`)).body;
-        check('a retry with its request id is sent (nothing is lost) and answered', retry.accepted === true && !retry.alreadySent && answered.state === 'answered' && answered.reply?.text === 'Sent again after the restart', json({ retry, answered }));
-        const again = (await call('POST', `/sessions/${ids.restarted}/prompt`, { text: 'E2E:say Sent again after the restart', requestId: rid })).body;
+        check('a retry with its request id is sent (nothing is lost) and answered', retry.accepted === true && !retry.alreadySent && answered.state === 'answered' && answered.end?.kind === 'completed' && REPLIED.test(answered.reply?.text ?? ''), json({ retry, answered }));
+        const again = (await call('POST', `/sessions/${ids.restarted}/prompt`, { text: AGAIN, requestId: rid })).body;
         check('once answered, the same id is not sent a third time', again.alreadySent === true && again.state === 'answered', json(again));
         check('the log has the message once per attempt: the first only if DSH saved it, then the one sent again', (await sentWith(ids.restarted, rid)).length === saved + 1, json(await sentWith(ids.restarted, rid)));
         check('the restart sent nothing by itself: the first prompt is in its session\'s log once', (await sentWith(ids.first, ids.firstRid)).length === 1);
@@ -381,11 +385,11 @@ try {
         await waitFor(async () => (await run.session(ids.saved)).turns.ended >= 1, 'the interrupted turn to be closed', 30000, 300);
         const cut = (await call('GET', `/sessions/${ids.saved}/requests/${rid}?wait=30`)).body;
         check('after it: unfinished, the turn interrupted, and a wait ends on it at once', cut.state === 'unfinished' && cut.end?.kind === 'interrupted' && cut.timedOut === false && cut.seq === read.seq, json(cut));
-        const resent = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: 'E2E:say Done after the cut', requestId: rid })).body;
+        const resent = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: AGAIN, requestId: rid })).body;
         check('a retry with the same id is sent once more, as attempt 2', resent.accepted === true && !resent.alreadySent && resent.resent === true && resent.attempt === 2 && resent.requestId === rid, json(resent));
         const done = (await call('GET', `/sessions/${ids.saved}/requests/${rid}?wait=60`)).body;
-        check('attempt 2 is answered by a turn of its own', done.state === 'answered' && done.attempt === 2 && done.turn === 2 && done.reply?.text === 'Done after the cut', json(done));
-        const third = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: 'E2E:say Done after the cut', requestId: rid })).body;
+        check('attempt 2 is answered by a turn of its own, completed', done.state === 'answered' && done.attempt === 2 && done.turn === 2 && done.end?.kind === 'completed' && REPLIED.test(done.reply?.text ?? ''), json(done));
+        const third = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: AGAIN, requestId: rid })).body;
         check('a third try sends nothing', third.alreadySent === true && third.state === 'answered' && third.attempt === 2, json(third));
         await waitFor(() => savedWith(ids.saved, rid).length === 2, 'both attempts on disk', 10000, 100).catch(() => {});
         const disk = savedWith(ids.saved, rid).map((e) => e.data.source.rpcId);
