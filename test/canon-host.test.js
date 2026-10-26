@@ -1442,6 +1442,59 @@ test('plugin: a folder inside the vault Canon may not list is named on its page 
     dsh.stop();
 });
 
+test('plugin: the folders it may not list are said again only when they change: a restart or a fixed setting says nothing new', async (t) => {
+    await import('./fixtures/canon/stubs/hooks.mjs');
+    const canon = await import('../plugins/canon/lib/index.js');
+    process.env.CANON_TEST_DSH_HOME = tempDir('canon-dsh-closed-again');
+    const dir = vaultCopy('canon-closed-again');
+    const closed = join(dir, 'Projects', 'osprey-mobile');
+    mkdirSync(closed);
+    writeFileSync(join(closed, 'Releases.md'), '# Osprey releases\n\nThe app ships to the app stores on Thursdays.\n');
+    chmodSync(closed, 0o000);
+    t.after(() => chmodSync(closed, 0o755));
+    const config = { ...DEFAULTS, vault: dir };
+    const start = async () => {
+        const dsh = standInDsh();
+        canon.apply(dsh.ctx, config);
+        const remote = dsh.provided.get('dshPluginCanonRemote');
+        await remote.refresh();
+        return { dsh, remote };
+    };
+    const said = async (remote) => (await remote.state()).history.filter((e) => e.kind === 'vault').map((e) => e.text);
+    const once = ['1 folder Canon may not read: Projects/osprey-mobile'];
+    let { dsh, remote } = await start();
+    assert.deepEqual(await said(remote), once);
+    dsh.stop();
+    // A restart finds the same folder: nothing new.
+    ({ dsh, remote } = await start());
+    assert.deepEqual(await said(remote), once);
+    assert.deepEqual((await remote.state()).vault.closed, ['Projects/osprey-mobile'], 'the page still names it');
+    // A setting made wrong, then fixed: nothing new about the folder.
+    config.maxChars = 5;
+    await dsh.emit('loader/volatile-update', [['maxChars']]);
+    config.maxChars = 2000;
+    await dsh.emit('loader/volatile-update', [['maxChars']]);
+    await remote.refresh();
+    assert.deepEqual(await said(remote), once);
+    // Access given: said once, and not again after a restart.
+    chmodSync(closed, 0o755);
+    await remote.refresh();
+    const reads = ['Every folder in the vault can be read again', ...once];
+    assert.deepEqual(await said(remote), reads);
+    dsh.stop();
+    ({ dsh, remote } = await start());
+    assert.deepEqual(await said(remote), reads);
+    // Closed again: a change, said again.
+    chmodSync(closed, 0o000);
+    await remote.refresh();
+    assert.deepEqual(await said(remote), [...once, ...reads]);
+    dsh.stop();
+    // What state.json keeps: the set said last, and a broken one is dropped.
+    assert.deepEqual(parseSwitches({ v: 1, off: {}, closed: { vault: dir, names: ['A', 3], count: 2 } }), { v: 1, off: {}, closed: { vault: dir, names: ['A'], count: 2 } });
+    assert.deepEqual(parseSwitches({ v: 1, off: {}, closed: { vault: dir, names: 'A', count: 1 } }), { v: 1, off: {} });
+    assert.deepEqual(parseSwitches({ v: 1, closed: { vault: dir, names: [], count: 0 } }), { v: 1, off: {}, closed: { vault: dir, names: [], count: 0 } });
+});
+
 test('plugin: switched off in the profile, Canon reads no vault, offers no tool and says so', async () => {
     await import('./fixtures/canon/stubs/hooks.mjs');
     const canon = await import('../plugins/canon/lib/index.js');

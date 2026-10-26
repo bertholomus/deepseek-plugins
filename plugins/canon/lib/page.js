@@ -13,6 +13,8 @@ const SESSIONS = 30;
 const PER_SESSION = 3;
 /** Sessions whose switch is kept, at most. */
 const MAX_SWITCHES = 5000;
+/** Folders inside the vault kept by name (vault.js's MAX_CLOSED_NAMED). */
+const MAX_CLOSED = 20;
 
 const isRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -22,12 +24,20 @@ export const working = ({ config, check }) => config.enabled !== false && (check
 /** The switches as stored: `{ v: 1, off: { [sessionId]: at } }`; anything else starts empty. */
 export function parseSwitches(value) {
     const off = {};
-    if (isRecord(value) && value.v === 1 && isRecord(value.off)) {
-        for (const [id, at] of Object.entries(value.off).slice(-MAX_SWITCHES)) {
-            if (id && id.length <= 200 && Number.isFinite(at)) off[id] = at;
+    let closed;
+    if (isRecord(value) && value.v === 1) {
+        if (isRecord(value.off)) {
+            for (const [id, at] of Object.entries(value.off).slice(-MAX_SWITCHES)) {
+                if (id && id.length <= 200 && Number.isFinite(at)) off[id] = at;
+            }
+        }
+        // The folders inside the vault What happened named last, so a restart names none of them again.
+        const c = value.closed;
+        if (isRecord(c) && typeof c.vault === 'string' && Array.isArray(c.names) && Number.isSafeInteger(c.count) && c.count >= 0) {
+            closed = { vault: c.vault.slice(0, 4096), names: c.names.filter((n) => typeof n === 'string').slice(0, MAX_CLOSED).map((n) => n.slice(0, 1000)), count: c.count };
         }
     }
-    return { v: 1, off };
+    return { v: 1, off, ...(closed ? { closed } : {}) };
 }
 
 /** Recall switched off for single sessions, kept across restarts (a JsonStore of parseSwitches). */

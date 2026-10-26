@@ -72,22 +72,31 @@ export function folderProblem(error, display) {
 }
 
 /**
- * What happened when the folders inside the vault that Canon may not list
- * changed: which ones, and what to do; or that every folder reads again.
- * Undefined when nothing changed.
- * @param {{ vault?: string, closed?: string[], closedCount?: number } | undefined} before - the vault's state before the read.
- * @param {{ path: string, closed: string[], counts: { closed: number } }} after - its status after it.
+ * What What happened says about the folders inside the vault Canon may not
+ * list, against the set it said last (Canon keeps that set across
+ * restarts): nothing when the set is the same, so a restart, a fixed
+ * setting or another read that finds the same folders adds nothing; once
+ * when every folder reads again. `kept` is the set to keep from now on.
+ * @param {{ vault: string, names: string[], count: number } | undefined} last - the set said last.
+ * @param {object} after - the vault's status now (Vault.status()).
+ * @returns {{ kept: { vault: string, names: string[], count: number }, entry?: object } | undefined}
  */
-export function closedEntry(before, after) {
-    // Another vault starts with none named.
-    const same = before?.vault !== undefined && before.vault === after.path;
-    const was = same ? before.closed ?? [] : [];
-    const wasCount = same ? before.closedCount ?? 0 : 0;
+export function closedChange(last, after) {
+    const same = last?.vault !== undefined && last.vault === after.path;
+    const was = same ? last.names ?? [] : [];
+    const wasCount = same ? last.count ?? 0 : 0;
     const now = after.closed ?? [];
     const count = after.counts?.closed ?? now.length;
-    if (was.join('\n') === now.join('\n') && wasCount === count) return undefined;
-    if (count === 0) return wasCount > 0 ? { kind: 'vault', state: 'done', text: 'Every folder in the vault can be read again' } : undefined;
-    return { kind: 'vault', state: 'failed', text: closedText(now, count), why: closedWhat(count) };
+    const kept = { vault: after.path, names: now, count };
+    if (was.join('\n') === now.join('\n') && wasCount === count) return same || count > 0 ? undefined : { kept };
+    if (count === 0) return { kept, ...(wasCount > 0 ? { entry: { kind: 'vault', state: 'done', text: 'Every folder in the vault can be read again' } } : {}) };
+    return { kept, entry: { kind: 'vault', state: 'failed', text: closedText(now, count), why: closedWhat(count) } };
+}
+
+/** closedChange's entry, against the vault's state before a read (as Vault.read() keeps it). */
+export function closedEntry(before, after) {
+    const last = before?.vault !== undefined ? { vault: before.vault, names: before.closed ?? [], count: before.closedCount ?? 0 } : undefined;
+    return closedChange(last, after)?.entry;
 }
 
 /** "1 folder Canon may not read: Projects/osprey-mobile" (the first few named). */

@@ -34,7 +34,7 @@ import { KEY, canonProjection } from './projection.js';
 import { Recall } from './recall.js';
 import { CanonRemote, SERVICE } from './remote.js';
 import { captureTool } from './tools.js';
-import { Vault, closedEntry } from './vault.js';
+import { Vault, closedChange } from './vault.js';
 import { JsonStore } from './shared/files.js';
 import { Journal } from './shared/journal.js';
 import { errorText, guard } from './shared/safe.js';
@@ -121,10 +121,15 @@ export function apply(ctx, config) {
             } else if (kind === 'ok' && before?.state === 'error') {
                 events.add({ kind: 'vault', state: 'done', text: 'Reading the vault again', why: `${after.counts.active} active note${after.counts.active === 1 ? '' : 's'}, ${after.counts.drafts} draft${after.counts.drafts === 1 ? '' : 's'}.` });
             }
-            // Folders inside the vault it may not list, once each time they change.
+            // Folders inside the vault it may not list, once each time the set changes: the set said last is kept
+            // in state.json, so a restart or a fixed setting says nothing new.
             if (kind === 'ok' || kind === 'changed') {
-                const entry = closedEntry(before, after);
-                if (entry) events.add(entry);
+                const change = closedChange(store.data.closed, after);
+                if (change) {
+                    store.data.closed = change.kept;
+                    store.change();
+                    if (change.entry) events.add(change.entry);
+                }
             }
             bump();
         }),
