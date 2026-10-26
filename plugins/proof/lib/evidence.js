@@ -806,6 +806,34 @@ const GIT_RECORD_CMD = /\bgit\s+(?:commit|revert|cherry-pick)\b/;
 const GIT_OPTS = /\bgit((?:\s+(?:-C|-c)\s+(?:"[^"]*"|'[^']*'|\S+)|\s+--(?:git-dir|work-tree|namespace|exec-path)(?:=|\s+)\S+|\s+--no-pager|\s+--no-replace-objects|\s+--paginate|\s+-P)+)(?=\s)/g;
 export const plainGit = (command) => String(command ?? '').replace(GIT_OPTS, 'git');
 
+/** A run that failed on its coverage threshold (jest, nyc, c8, vitest, pytest-cov, coverage.py's fail-under). */
+const COVERAGE_GATE = /\bcoverage threshold for \w+ \([\d.]+%\) not met\b|\bCoverage for \w+ \([\d.]+%\) does not meet (?:global |per-file )?threshold\b|\bRequired test coverage of [\d.]+% not reached\b|\bCoverage failure: total of [\d.]+ is less than fail-under\b/i;
+/** A claim about the coverage or the run's exit, which a coverage threshold's failure does speak to. */
+const GATE_WORDS = /\b(?:coverage|covered|exit(?:s|ed)?|exit\s+code|ci|pipeline|checks?|the\s+run|green\s+build)\b/i;
+/** A line that names a test that passed: TAP's "ok 1 - name", "✔ name (0.4ms)", "✓ name", pytest's "::name PASSED", go's "--- PASS: Name", unittest's "name (mod.Case) ... ok". */
+const PASS_NAME = [
+    /^[ \t]*ok \d+ - (.+?)(?:[ \t]+#.*)?[ \t]*$/,
+    /^[ \t]*[✔✓√][ \t]+(.+?)(?:[ \t]+\(\d[\d.]*[ \t]*m?s\))?[ \t]*$/,
+    /::([\w.[\]-]+)[ \t]+PASSED\b/,
+    /^[ \t]*--- PASS: (\S+)/,
+    /^[ \t]*(\w+) \([\w.]+\) \.\.\. ok[ \t]*$/,
+];
+/** The names of the tests a run printed as passing, at most 24. */
+function passNamesIn(out) {
+    const names = [];
+    for (const line of out.split('\n')) {
+        if (names.length >= 24) break;
+        for (const re of PASS_NAME) {
+            const m = re.exec(line);
+            if (m && m[1].trim().length >= 3) {
+                names.push(clip(m[1].trim(), 80));
+                break;
+            }
+        }
+    }
+    return [...new Set(names)];
+}
+
 /**
  * An output with its long runs made short: blank lines, one character over and over (a rule of "=", padding, a
  * progress bar's updates), long numbers and long blank runs. They say nothing, and every reading stays quick on
@@ -854,6 +882,11 @@ export function itemOf({ name, args, text, isError = false }) {
         // The lines that name what failed, which the kept head and tail may not hold.
         const failLines = tests.failed > 0 ? out.split(/\r?\n/).filter((l) => FAIL_LINE.test(l)).slice(0, 6).map((l) => clip(l.trim(), 120)) : [];
         if (failLines.length) facts.failLines = failLines;
+        // Every test passed and the run failed on a coverage threshold: the tests are fine, the coverage is not.
+        if (tests.failed === 0 && tests.passed > 0 && COVERAGE_GATE.test(out)) facts.gate = true;
+        // And the tests it passed, by name: "`sum of an empty list is 0` — pass" is about one of them.
+        const passNames = tests.failed > 0 && tests.passed > 0 ? passNamesIn(out) : [];
+        if (passNames.length) facts.passNames = passNames;
     }
     if (hash) facts.hash = hash;
     // "[main 8c41d2e] install.sh: quote PREFIX paths": git made the commit, whatever a later step of the command did.
@@ -1493,7 +1526,9 @@ function passedFor(subject, claim, list) {
     const commands = (claim.commands ?? []).filter((c) => !several || !SUBJECT_CMD[subject] || SUBJECT_CMD[subject].test(c) || !kinds.some((re) => re.test(c)));
     // A CI claim is shown only by a CI read: a local test run says nothing about the checks on the PR.
     const fits = (i) => accept.includes(i.kind) || (i.tests && subject !== 'lint' && subject !== 'hash' && subject !== 'run' && subject !== 'ci') || (SUBJECT_CMD[subject]?.test(i.cmd ?? '') ?? false) || (subject !== 'ci' && commands.some((c) => ranCommand(i, c)));
-    const fitting = list.filter(fits);
+    // "The build passes now. The tests still fail": a build claim is shown by the build that ran, not by a test run after it.
+    const builds = subject === 'build' ? list.filter((i) => fits(i) && (i.kind === 'build' || BUILD_CMD.test(i.cmd ?? ''))) : [];
+    const fitting = builds.length ? builds : list.filter(fits);
     if (fitting.length === 0) {
         const local = subject === 'ci' ? list.filter((i) => i.kind === 'test' || i.tests).at(-1) : undefined;
         if (local && local.ok === true) return { verdict: 'unbacked', evidence: [said(local)], why: 'A local test run passed; no CI result was read in this turn.' };
@@ -1561,6 +1596,12 @@ function passedFor(subject, claim, list) {
     if (last.ok === false && docExampleOnly(last) && /\b(?:unit|integration|lib|library)\b/i.test(words) && !/\b(?:doc(?:umentation)?[-\s]?tests?|doctests?|doc\s+examples?|everything|whole|full|entire|overall|all\s+(?:the\s+)?tests|(?:the\s+)?suite)\b/i.test(words)) {
         const counts = [...words.matchAll(/\b(\d+)\b/g)].map((m) => Number(m[1]));
         if (counts.every((n) => (last.tests?.clean ?? []).includes(n))) return { verdict: 'backed', evidence: [said(last)], why: '' };
+    }
+    if (last.ok === false && (subject === 'tests' || subject === 'any')) {
+        // "All 14 tests pass, but coverage is below the bar": every test passed; the run failed on coverage.
+        if (last.gate && !GATE_WORDS.test(words)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+        const part = passedPart(claim, words, last);
+        if (part) return part;
     }
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${what} in this turn did not pass: ${last.text}.` };
     if (last.ok === null) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear how the last ${what} ended: ${last.text}.` };
@@ -1633,6 +1674,62 @@ function passedFor(subject, claim, list) {
     return { verdict: 'backed', evidence: relevant.slice(-3).map(said), why: '' };
 }
 
+/** A claim about every test, the whole suite or every failure: "all 12 pass", "the suite is green", "fixed the failing tests". */
+const WHOLE_CLAIM = /\b(?:all|every|everything|whole|full|entire|overall|suite|the\s+(?:failing|broken|red)\s+(?:tests?|specs?|cases?)|the\s+(?:failures|build\s+failures)|(?:fixed|green)\s+across)\b/i;
+/** "The tests pass", "tests are green", "unit tests pass": the tests with no part named. */
+const BARE_TESTS = /^\W*(?:and\s+|so\s+|now\s+)*(?:the\s+)?(?:(?:unit|integration|e2e|end-to-end|api|ui)\s+)?tests?\s+(?:now\s+|all\s+|still\s+)?(?:pass(?:es|ed)?|are\s+(?:green|passing)|is\s+green)\b/i;
+const wholeClaim = (words) => WHOLE_CLAIM.test(words) || BARE_TESTS.test(words) || partOfAll(words);
+/** Words that name nothing in particular, left out when a claim's words are held against a failing test's name. */
+const PLAIN_WORDS = new Set('test tests testing spec specs case cases check checks fail fails failed failing failure failures pass passes passed passing error errors expected actual should handles returns works with from that this when then into after before every their there which while about fixed fixes still green'.split(' '));
+const significant = (text) => new Set(String(text).toLowerCase().replace(/([a-z])([A-Z])/g, '$1 $2').split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !PLAIN_WORDS.has(w) && !/^\d+$/.test(w)));
+/** The names of the tests a run's failing lines name: TAP's "not ok 3 - name", "✖ name (1ms)", pytest's "FAILED a.py::name", go's "--- FAIL: Name". */
+function failNamesOf(last) {
+    const lines = (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string');
+    const names = [];
+    for (const l of lines) {
+        const m = /^\s*not ok \d+ - (.+?)(?:\s+#.*)?$/.exec(l) ?? /^\s*[✖✗✘×✕]\s+(.+?)(?:\s+\(\d[\d.]*\s*m?s\))?$/.exec(l) ?? /::([\w.[\]-]+)/.exec(l) ?? /--- FAIL: (\S+)/.exec(l) ?? /^\s*(?:FAIL(?:ED)?:?)\s+(\S.*?)\s*$/.exec(l);
+        if (m) names.push(m[1].trim());
+    }
+    return names;
+}
+/** Whether a failing test's line in the run shares a word with what the claim names ("empty input" and "✖ handles empty input"). */
+function failsOnClaim(last, claim) {
+    const said_ = significant(String(claim.part ?? claim.text ?? '').replace(/^\W*(?:fixed|repaired|resolved)\b/i, ''));
+    const lines = (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string');
+    return lines.some((l) => [...significant(l.replace(/\(\d[\d.]*\s*m?s\)/g, ''))].some((w) => said_.has(w)));
+}
+/**
+ * Whether the reply itself says what still fails, and it fits the run: the count it gives is the run's, and a test it names
+ * is among the run's failing lines ("One test still fails, `rounds totals`").
+ */
+function toldFails(claim, last) {
+    const told = claim.told?.fails;
+    if (!told) return false;
+    const failed = last.tests?.failed ?? failCount(last);
+    if (told.count !== undefined && failed !== undefined && told.count !== failed) return false;
+    const lines = (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string').map((l) => l.toLowerCase());
+    if ((told.names ?? []).length && lines.length && !told.names.some((n) => lines.some((l) => l.includes(String(n).toLowerCase())))) return false;
+    return true;
+}
+/**
+ * A pass claim about a part of a run that failed other tests: a test it printed as passing ("`sum of an empty list is 0` —
+ * pass"), as many as passed ("both green tests pass", "11 of 12"), or a part the reply tells apart from what still fails.
+ */
+function passedPart(claim, words, last) {
+    const t = last.tests;
+    if (!t || !(t.passed > 0) || !(t.failed > 0) || wholeClaim(words)) return undefined;
+    const lower = String(words).toLowerCase();
+    const hit = (n) => typeof n === 'string' && n.length >= 5 && lower.includes(n.toLowerCase());
+    // A test it names by its whole name: one the run passed, and none it failed.
+    if ((last.passNames ?? []).some(hit) && !failNamesOf(last).some(hit)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+    if (failsOnClaim(last, claim)) return undefined;
+    if (/\bboth\b/i.test(words) && t.passed === 2) return { verdict: 'backed', evidence: [said(last)], why: '' };
+    const of = /\b(\d+)\s+(?:of|out\s+of)\s+(\d+)\b/i.exec(words);
+    if (of && Number(of[1]) === t.passed && Number(of[2]) === (t.total ?? t.passed + t.failed)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+    if (toldFails(claim, last)) return { verdict: 'none', evidence: [], why: '' };
+    return undefined;
+}
+
 /** A workspace package's name: `@acme/api`. */
 const WORKSPACE_PACKAGE = /@[\w.-]+\/[\w.-]+/g;
 
@@ -1687,6 +1784,8 @@ const REMOTE_PLACE = /\b(staging|production|prod|deployed|https?:\/\/(?!localhos
 /** "Upgraded the `api` release", "rolled back the release": a Helm release's upgrade. */
 const HELM_RELEASE = /\b(?:upgraded|rolled\s+back)\s+(?:the\s+)?(?:\S+\s+){0,2}?(?:helm\s+)?release\b(?!\s+notes?\b)/i;
 
+/** A deploy claim that also says the thing is up: "deployed and live", "is up", "healthy", "serving". */
+const UP_WORDS = /\b(?:live|up|healthy|working|serving|available|reachable|responding|ok|green|200)\b/i;
 function judgeDeployed(claim, list) {
     const target = claim.target ?? 'any';
     const words = claim.part ?? claim.text;
@@ -1817,6 +1916,11 @@ function judgeDeployed(claim, list) {
         }
         // What ran after the deploy and says it is not well (pods crashing, a failed health check).
         const after = list.slice(list.indexOf(last) + 1).filter((i) => (i.kind === 'probe' && !i.registry && i.ok === false) || i.health === false);
+        // "Deployed v42 to staging. The health check answers 503 for now": the reply reports what the check said, and the
+        // claim itself does not say it is up.
+        const down = after.at(-1);
+        const reported = claim.told && ((down?.status !== undefined && (claim.told.codes ?? []).includes(down.status)) || (down?.status === undefined && claim.told.down));
+        if (after.length && reported && !UP_WORDS.test(words)) return { verdict: 'backed', evidence: deploys.slice(-2).map(said), why: '' };
         if (after.length) return { verdict: 'contradicted', evidence: [said(last), said(after.at(-1))], why: `After the ${tw.last}, a check in this turn says it is not up: ${after.at(-1).text}.` };
         if (last.health === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The ${tw.last} in this turn reports a failing health check: ${last.text}.` };
     }
@@ -1961,6 +2065,12 @@ function judgeFixed(claim, list, prompt = '') {
             if (later.length && !later.some((i) => lines(i).some((l) => name.test(l)))) return { verdict: 'backed', evidence: [said(filtered)], why: '' };
         }
         if (errorGone(claim, list, lastChange, last) || fewerFailures(claim, list, lastChange, last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+        // "Fixed the date parsing test. One test still fails, `rounds totals`, which failed before my change": the reply
+        // says what still fails, the run's failures are that, and none of them names what the fix is about.
+        const told = String(claim.part ?? claim.text ?? '');
+        if ((last.tests?.passed ?? 0) > 0 && toldFails(claim, last) && !wholeClaim(told) && !failsOnClaim(last, claim)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+        // Every test passed after the change and the run failed on a coverage threshold: the fix is shown, the coverage is not.
+        if (last.gate && !GATE_WORDS.test(told)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };

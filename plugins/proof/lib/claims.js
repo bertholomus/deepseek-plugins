@@ -767,6 +767,38 @@ const partOf = (clause) => clip(shown(clause).replace(/^(?:and|but|so|then|also|
 const PASS_COUNT = /\b(\d+)\s*\/\s*\1\b|\ball\s+(\d+)\b|\b(\d+)\s+(?:of|out\s+of)\s+\d+\b|\b(\d+)\s+(?:[\w-]+\s+){0,2}?(?:tests?|specs?|checks?|cases?)\b/i;
 const passCount = (clause) => shown(clause).match(PASS_COUNT)?.slice(1).find(Boolean);
 
+/** A reply's own word that something still fails: "One test still fails, `rounds totals`", "the tests still fail (2 of 14)". */
+const STILL_FAILS = /\b(?:still|also|continues\s+to|keeps)\s+(?:fail(?:s|ing)?|red|broken|erroring)\b|\b(?:is|are)\s+still\s+(?:failing|red|broken)\b|\b(?:failures?|failing\s+tests?)\s+(?:left|remain(?:s|ing)?)\b|\bremaining\s+failures?\b|\bpre-?existing\s+failures?\b|\bwas\s+(?:already\s+)?failing\s+before\b/i;
+const NONE_LEFT = /\b(?:no|none|nothing|zero|0)\s+(?:other\s+|more\s+)?(?:(?:tests?|specs?|failures?)\s+)?(?:still|remain|left)\b|\bno\s+(?:longer|more)\b/i;
+const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const TOLD_COUNT = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:other\s+|more\s+|unrelated\s+|remaining\s+)?(?:tests?|specs?|cases?|failures?)\b|\((\d+)\s+(?:of|out\s+of)\s+\d+\)/i;
+/** A status a check answered with, as a reply reports it: "answers 503", "returns a 404". */
+const TOLD_CODE = /(?<![\w.\/:-])([45]\d\d)(?![\w.\/:-])/g;
+const TOLD_DOWN = /\b(?:down|unhealthy|not\s+(?:healthy|up|ready|responding|serving)|crash(?:ing|looping|es)?|failing|erroring)\b/i;
+/**
+ * What a reply itself says is still wrong: tests that still fail (how many and which, when it says) and statuses or words
+ * that say a check found it down. A claim beside such a report is held against the rest of the run, not against what the
+ * reply already told.
+ */
+function toldIn(sentences) {
+    let fails;
+    const codes = new Set();
+    let down = false;
+    for (const s of sentences) {
+        const plainS = shown(s);
+        for (const m of plainS.matchAll(TOLD_CODE)) codes.add(Number(m[1]));
+        if (TOLD_DOWN.test(plainS)) down = true;
+        if (!STILL_FAILS.test(plainS) || NONE_LEFT.test(plainS)) continue;
+        const c = TOLD_COUNT.exec(plainS);
+        const n = c ? (c[2] ?? c[1]) : undefined;
+        const count = n === undefined ? undefined : WORD_NUMBERS[n.toLowerCase()] ?? Number(n);
+        const names = [...s.matchAll(new RegExp(`${OPEN}([^${CLOSE}\\n]{3,80})${CLOSE}`, 'g'))].map((m) => m[1]);
+        fails = fails ?? { ...(count !== undefined ? { count } : {}), ...(names.length ? { names: names.slice(0, 6) } : {}) };
+    }
+    if (!fails && !codes.size && !down) return undefined;
+    return { ...(fails ? { fails } : {}), ...(codes.size ? { codes: [...codes].slice(0, 8) } : {}), ...(down ? { down: true } : {}) };
+}
+
 /** A reply's own word that it did not check its work: "Tests were not run", "I didn't run the tests", "untested". */
 const UNTESTED = /\b(?:tests?|specs?|suite|it|this|the\s+(?:fix|change))\s+(?:was|were|is|are|has|have)\s*(?:not|n['’]t|never)\s+(?:been\s+|yet\s+)?(?:run|ran|executed|verified|tested|checked)\b|\b(?:I|we)\s+(?:did\s+not|didn['’]t|have\s+not|haven['’]t|never|could\s+not|couldn['’]t)\s+(?:yet\s+)?(?:run|ran|execute|test|verify|check)\b|\b(?:untested|unverified)\b|\bnot\s+(?:yet\s+)?(?:been\s+)?(?:tested|verified)\b|\bwithout\s+running\b|\bno\s+tests?\s+(?:were|was|have\s+been)\s+run\b/i;
 
@@ -787,6 +819,7 @@ export function claimsIn(text, { max = 8 } = {}) {
     const { sentences, plan } = markedWithPlans(text);
     // "Tests were not run, per your instruction": the reply says itself that its fix is not checked.
     const untested = UNTESTED.test(shown(String(text ?? '')));
+    const told = toldIn(sentences);
     for (const [at, sentence] of sentences.entries()) {
         const kinds = new Set();
         const counts = new Map();
@@ -839,6 +872,7 @@ export function claimsIn(text, { max = 8 } = {}) {
                 ...(found.beats ? { beats: true } : {}),
                 ...(found.completed ? { completed: true } : {}),
                 ...(untested && found.kind === 'fixed' ? { untested: true } : {}),
+                ...(told ? { told } : {}),
                 ...(found.allocs === 0 ? { allocs: 0 } : {}),
                 ...(commands.length ? { commands } : {}),
                 ...(metrics.length ? { metrics } : {}),
