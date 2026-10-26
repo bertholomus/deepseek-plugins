@@ -289,8 +289,8 @@ DSH sessions:
 | **All 260 searches** | | **31.1 ms** | **85.4 ms** | 30.7 ms |
 
 The target is a search in under 300 ms. In this run the slowest of the
-260 took 112 ms. How busy the computer is matters more than anything
-Recall does:
+260 took 112 ms. Other work on the computer moves these numbers more than
+this version's changes did:
 
 - **The version before this one**, run just before on the same machine,
   had a median of 30.6 ms (p95 94.5 ms). Finding words split between a
