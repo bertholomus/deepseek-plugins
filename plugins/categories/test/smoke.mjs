@@ -3,9 +3,10 @@
  * categories and their workspaces, DSH's workspace order kept in step, the
  * one-time move from the projects plugin's store, the old sidebar's import
  * and its preview. No DSH install needed; the peers
- * (@deepseek-ai/schemastery, @deepseek-ai/dsh-typert-protocol) must resolve.
+ * (@deepseek-ai/schemastery, @deepseek-ai/dsh-typert-protocol) come from the
+ * newest DSH runtime under the repository's .e2e/ (test/peers.mjs).
  *
- * Run:  node plugins/categories/test/smoke.mjs
+ * Run:  node --test plugins/categories/test/smoke.mjs   (npm test runs it too)
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,11 +15,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol';
-import * as plugin from '../lib/index.js';
+import { register } from 'node:module';
 import { dataPath } from '../lib/store.js';
 import { clipName, slugify, longestRun } from '../lib/categories.js';
 import { planFleetShellImport, planFromProjects } from '../lib/plan.js';
+
+// DSH's own packages (the plugin's peers) come from the newest DSH runtime under .e2e/ when nothing else provides them.
+register('./peers.mjs', import.meta.url);
+// Never the DSH you use: DSH's data folder is a fresh one for these tests (the old sidebar's file is read from
+// <DSH home>/fleet-shell, so without this the tests read your own and their results depend on this computer).
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'categories-home-'));
+process.once('exit', () => rmSync(process.env.DSH_HOME, { recursive: true, force: true }));
+const { remoteMethods } = await import('@deepseek-ai/dsh-typert-protocol');
+const plugin = await import('../lib/index.js');
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise((r) => setTimeout(r, 10));
