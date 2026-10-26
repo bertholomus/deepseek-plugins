@@ -2700,8 +2700,12 @@ try {
     });
 
     await step('text contrast, light and dark, without a wallpaper and over a mid-grey one', async () => {
+        // An event that has ended two days ago, in the week shown: the sweep reads one faded as past events are.
+        const before = addDays(today, -2);
+        const ended = (await api('createEvent', { input: { title: 'E2E Ended', start: `${before}T09:00`, end: `${before}T10:00`, timeZone: ZONE } })).value?.occurrence;
         await openPage();
-        await showDay(day1);
+        await page.locator('[data-calendar-view="week"]').click();
+        await showDay(before);
         const runs = {};
         for (const dark of [false, true]) {
             await setDark(page, dark);
@@ -2710,6 +2714,7 @@ try {
                 await page.waitForTimeout(400);
                 const name = `${dark ? 'dark' : 'light'} ${view}`;
                 runs[name] = await contrastSweep(page, '[data-calendar-page]');
+                runs[name].past = await page.locator('[data-calendar-main] [data-past]').count();
                 await wallpaperOn(page, '#808080');
                 runs[`${name}, grey wall`] = await contrastSweep(page, '[data-calendar-page]');
                 await wallpaperOff(page);
@@ -2717,12 +2722,16 @@ try {
         }
         await setDark(page, false);
         await page.locator('[data-calendar-view="week"]').click();
+        await shot(page, 'past-light');
+        await page.locator('[data-calendar-today]').click();
+        if (ended) await api('deleteEvent', { id: ended.id, scope: 'all' });
         const short = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.glass} on glass, lowest there ${r.glassMin}:1`]));
         console.log(`# contrast: ${JSON.stringify(short)}`);
-        // Over the grey wall the glass shows it: some text sits on glass all the way down to the wall.
-        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (k.endsWith('grey wall') && (!r.wall || r.glass < 10)));
-        check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, without a wallpaper and over a mid-grey one at the default tint',
-            bad.length === 0, JSON.stringify(Object.fromEntries(bad)));
+        // Over the grey wall the glass shows it: some text sits on glass all the way down to the wall. Week shows an ended event.
+        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (k.endsWith('grey wall') && (!r.wall || r.glass < 10))
+            || (/week$/.test(k) && !(r.past > 0)));
+        check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, events that have ended too, without a wallpaper and over a mid-grey one at the default tint',
+            Boolean(ended) && bad.length === 0, JSON.stringify(Object.fromEntries(bad)));
     });
 
     // 20. A narrow window.

@@ -1045,6 +1045,10 @@ test('corners, type and motion are DSH\'s (DESIGN.md sections 5 and 6): its radi
     assert.deepEqual(plain(moves.filter((a) => a.startsWith('animation:dshcal-in')).map((a) => /^animation:dshcal-in var\(--ds-transition-duration(-fast)?,\.[12]s\) var\(--ds-ease-in-out,/.test(a))), [true, true]);
     assert.deepEqual(plain(moves.filter((a) => !a.startsWith('animation:dshcal-in')).map((a) => a.split(' ')[0])).sort(), ['animation:dshcal-slide', 'animation:dshcal-spin']);
     assert.ok(!/transition:(?!none)/.test(css), 'no transitions of its own');
+    // An event that has ended fades without dimming its words: opacity only on its dot or bar.
+    const past = css.split('}').filter((rule) => rule.includes('[data-past]'));
+    assert.ok(past.length >= 4);
+    for (const rule of past.filter((r) => r.includes('opacity'))) assert.match(rule, /\[data-past\]>\.dshcal-(dot|pane-bar)\{opacity:[.\d]+$/, rule);
 });
 
 test('toasts are DSH\'s Toast: a done one with its green check, a failure holding longer with its warning glyph', () => {

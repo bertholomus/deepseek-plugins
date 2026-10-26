@@ -275,7 +275,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ':is(.dshcal-ev,.dshcal-bar)[data-look=outline]{background:var(--cal-chip-ground);color:var(--cal-text);box-shadow:inset 0 0 0 1.5px var(--ev)}',
             ':is(.dshcal-ev,.dshcal-bar)[data-look=struck]{background:color-mix(in srgb,var(--ev) 14%,var(--cal-chip-ground));color:var(--cal-meta);box-shadow:inset 3px 0 0 color-mix(in srgb,var(--ev) 50%,transparent)}',
             ':is(.dshcal-ev,.dshcal-bar)[data-look=struck] :is(.dshcal-ev-title,.dshcal-bar-title){text-decoration:line-through}',
-            ':is(.dshcal-ev,.dshcal-bar,.dshcal-line)[data-past]{opacity:.62}',
+            // An event that has ended fades and stays readable: a solid one takes its calendar's colour mixed into the
+            // ground, its words the soft text colour, and a line's dot pales (no opacity on the words).
+            ':is(.dshcal-ev,.dshcal-bar)[data-past][data-look=solid]{background:color-mix(in srgb,var(--ev) 36%,var(--cal-chip-ground))}',
+            ':is(.dshcal-ev,.dshcal-bar,.dshcal-line)[data-past]:not([data-look=struck]){color:var(--cal-soft)}',
+            '.dshcal-line[data-past]>.dshcal-dot{opacity:.5}',
             '.dshcal-bar{position:relative;z-index:1;display:flex;align-items:center;gap:5px;box-sizing:border-box;min-width:0;height:20px;margin:0 3px;padding:0 6px;overflow:hidden;border:0;border-radius:var(--dsw-radius-sm);background:var(--ev);color:var(--ev-text);font:inherit;font-size:var(--dsw-font-xxs-12-font-size,12px);line-height:20px;text-align:left;cursor:pointer;white-space:nowrap}',
             '.dshcal-bar:hover,.dshcal-bar:focus-visible{filter:brightness(1.06)}',
             '.dshcal-bar[data-cont-start]{border-top-left-radius:0;border-bottom-left-radius:0;margin-left:0}',
@@ -470,7 +474,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-pane-ev{position:relative;display:grid;grid-template-columns:4px minmax(0,1fr) auto;gap:9px;align-items:center;padding:7px 8px 7px 7px;border:1px solid var(--cal-line);border-radius:var(--dsw-radius-md);background:var(--cal-fill);color:var(--cal-text);min-width:0}',
             '.dshcal-pane-ev:hover{background:var(--cal-hover)}',
             '.dshcal-pane-ev[data-now]{border-color:color-mix(in srgb,var(--cal-accent) 60%,transparent);background:var(--cal-accent-soft)}',
-            '.dshcal-pane-ev[data-past]{opacity:.6}',
+            '.dshcal-pane-ev[data-past]{color:var(--cal-soft)}',
+            '.dshcal-pane-ev[data-past]>.dshcal-pane-bar{opacity:.45}',
             '.dshcal-pane-bar{align-self:stretch;border-radius:var(--dsw-radius-xs);background:var(--ev)}',
             // The whole card opens the event; Join stays its own link above it.
             '.dshcal-pane-what{display:flex;flex-direction:column;align-items:stretch;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}',
