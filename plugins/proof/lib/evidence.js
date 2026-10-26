@@ -81,7 +81,7 @@ export function exitOf(text, { isError = false, shell = false } = {}) {
 /** A line of a test runner's results: TAP's "ok 6 …", "✓ …", "test x ... ok". */
 const TEST_LINE = /^\s*(?:(?:not\s+)?ok\s+\d+\b|[✓✔✗✘√]\s|test\s+\S+\s+\.\.\.\s).*$/gm;
 /** "exited with code 2", "Exit status: 1", "rc=0", "exit=0"; a bare "exit 1" only at a line's end. */
-const EXIT_SAID = /\b(?:exit(?:ed)?\s+with(?:\s+(?:code|status))?|exited(?:\s+(?:code|status))?|exit\s+(?:code|status)|exit_code|exitcode|return\s+code|returncode|rc)\s*[:=]?\s*(-?\d{1,3})\b|\bexit\s*[:=]\s*(-?\d{1,3})\b|\bexit\s+(-?\d{1,3})\s*$/im;
+const EXIT_SAID = /\b(?:exit(?:ed)?\s+with(?:\s+(?:code|status))?|exited(?:\s+(?:code|status))?|exit\s+(?:code|status)|exit_code|exitcode|return\s+code|returncode|rc)\s*[:=]?\s*(-?\d{1,3})\b|\bexit\s*[:=]\s*(-?\d{1,3})\b|\bexit\s+(-?\d{1,3})\s*\]?\s*$/im;
 
 const num = (v) => (v === undefined ? undefined : Number(String(v).replace(/,/g, '')));
 
@@ -769,6 +769,10 @@ function innerRuns(out) {
     return [...new Set(found)].slice(0, 8);
 }
 
+/** A command with git's own options before its subcommand dropped: `git -C app push` reads as `git push`. */
+const GIT_OPTS = /\bgit((?:\s+(?:-C|-c)\s+(?:"[^"]*"|'[^']*'|\S+)|\s+--(?:git-dir|work-tree|namespace|exec-path)(?:=|\s+)\S+|\s+--no-pager|\s+--no-replace-objects|\s+--paginate|\s+-P)+)(?=\s)/g;
+export const plainGit = (command) => String(command ?? '').replace(GIT_OPTS, 'git');
+
 /**
  * One tool call and its result as an evidence item:
  * `{ tool, kind, ok, exit?, cmd?, change?, code?, targets?, shipped?, status?, health?, tests?, hash?, metric?, series?, nums?, text }`.
@@ -780,7 +784,8 @@ export function itemOf({ name, args, text, isError = false }) {
     if (tool === '' || BOOKKEEPING_TOOL.test(tool)) return undefined;
     const out = typeof text === 'string' ? text : '';
     const shell = SHELL_TOOL.test(tool);
-    const command = shell ? commandOf(args) : '';
+    const asRun = shell ? commandOf(args) : '';
+    const command = plainGit(asRun);
     const tests = testCountsIn(out);
     const hash = hashIn(out);
     const metric = metricIn(out);
@@ -794,7 +799,7 @@ export function itemOf({ name, args, text, isError = false }) {
     if (warnings) facts.warnings = warnings;
     const codes = codesIn(out);
     if (codes.length) facts.codes = codes;
-    if (tests && !(shell && /^(deploy|probe|lint|hash|build)$/.test(kindOfCommand(commandOf(args), tests)))) {
+    if (tests && !(shell && /^(deploy|probe|lint|hash|build)$/.test(kindOfCommand(command, tests)))) {
         const picked = shell ? unpicked(command) : '';
         const filter = shell ? filterOf(picked) : [];
         facts.tests = { ...tests, ...(shell && (FILTERED_RUN.test(picked) || filter.length) ? { filtered: true } : {}), ...(shell && MIXED_RUN.test(command) ? { mixed: true } : {}) };
@@ -824,11 +829,11 @@ export function itemOf({ name, args, text, isError = false }) {
     // "release_command 3d8d7e5b1c2a98 completed successfully": the deploy's release command went through, whatever came after.
     if (inner.length && /\brelease[_ ]command\b[^\n]{0,40}\b(?:completed successfully|succeeded|finished successfully)\b/i.test(out)) facts.released = true;
     else if (inner.length && /\brelease[_ ]command\b[^\n]{0,40}\b(?:failed|exited with (?:code )?[1-9])/i.test(out)) facts.released = false;
-    const ciRead = shell && CI_CMD.test(commandOf(args)) ? ciIn(out) : undefined;
+    const ciRead = shell && CI_CMD.test(command) ? ciIn(out) : undefined;
     // The checks a CI read lists, by name: "7 passed (phpunit on 8.2 and 8.3, …)" names them, not commands run here.
-    const checks = shell && CI_CMD.test(commandOf(args)) ? checksIn(out) : [];
+    const checks = shell && CI_CMD.test(command) ? checksIn(out) : [];
     if (checks.length) facts.checks = checks;
-    const ended = ciRead ?? endedIn(out) ?? (shell && CI_CMD.test(commandOf(args)) && /\b(in progress|in_progress|queued|pending|waiting)\b/i.test(out) ? 'running' : undefined);
+    const ended = ciRead ?? endedIn(out) ?? (shell && CI_CMD.test(command) && /\b(in progress|in_progress|queued|pending|waiting)\b/i.test(out) ? 'running' : undefined);
     if (ended !== undefined) {
         facts.ended = ended;
         const state = stateIn(out) ?? stateWordIn(out);
@@ -866,7 +871,7 @@ export function itemOf({ name, args, text, isError = false }) {
         const shipped = ships ? (kind === 'deploy' ? ok : outcome(exit, deployIn(out))) : undefined;
         // A download that went through (`curl -sO …` before a checksum) is a request that answered.
         const fetched = kind !== 'probe' && /\b(curl|wget)\b/i.test(command) && exit === 0 && !/\bcurl: \(\d+\)|\b(4\d\d|5\d\d) (Not Found|Forbidden|Unauthorized|Internal Server Error|Bad Gateway|Service Unavailable)\b/i.test(out);
-        const ran = `\`${clip(oneLine(command) || tool, 80)}\``;
+        const ran = `\`${clip(oneLine(asRun) || tool, 80)}\``;
         // A run that failed though it exited 0 (a CI read that lists a failed run, `npm test | tail`) is not said to have exited 0.
         const how = ok === false && exit === 0 ? 'ran' : typeof exit === 'number' ? `exited ${exit}` : exit === null ? 'ran' : exit === 'error' ? 'failed to run' : exit === 'denied' ? 'was denied by the sandbox' : exit === 'timeout' ? 'timed out' : `ended (${exit})`;
         // A status read that lists some pods well and some not ("2 in CrashLoopBackOff, 3 Running").
@@ -1415,6 +1420,8 @@ function passedFor(subject, claim, list) {
         const ran = fitting.at(-1);
         const change = lastIndex(list, (i) => i.code && i.ok !== false);
         if (change > list.lastIndexOf(ran)) return { verdict: 'unbacked', evidence: [said(ran), said(list[change])], why: `The last run came before the last change (${list[change].text}); nothing ran after it.` };
+        // "Both runs complete with 0 errors" says how they ended, which the last one must show.
+        if (claim.completed && ran.ok === false) return { verdict: 'contradicted', evidence: [said(ran)], why: `The last run in this turn did not pass: ${ran.text}.` };
         return { verdict: 'backed', evidence: fitting.slice(-2).map(said), why: '' };
     }
     // "Unit tests pass (`npm run test:unit`)" is about the unit run, whatever ran after it.
@@ -1812,7 +1819,8 @@ function judgeFixed(claim, list, prompt = '') {
     // "Fixed the NullReferenceException in `OrderService.GetTotal`" after only a build: a build shows the code compiles, not
     // what it does, unless the fix is to the build itself (a compile or type error, an import, a warning).
     const run = fitting.length ? fitting : checks;
-    if (run.every((i) => i.kind === 'build' && i.ok === true) && !BUILD_FIX.test(claim.part ?? claim.text ?? '') && !page(list[lastChange])) {
+    const buildFailedBefore = list.slice(0, lastChange).some((i) => i.kind === 'build' && i.ok === false);
+    if (run.every((i) => i.kind === 'build' && i.ok === true) && !BUILD_FIX.test(claim.part ?? claim.text ?? '') && !page(list[lastChange]) && !buildFailedBefore) {
         return { verdict: 'unbacked', evidence: run.slice(-1).map(said), why: `Only a build ran after the change (${run.at(-1).text}); nothing ran the code to show the fix.` };
     }
     const last = (fitting.length ? fitting : checks).at(-1);
@@ -1836,9 +1844,25 @@ function judgeFixed(claim, list, prompt = '') {
             const lines = (i) => (Array.isArray(i.failLines) ? i.failLines : i.lines ?? []).filter((l) => typeof l === 'string');
             if (later.length && !later.some((i) => lines(i).some((l) => name.test(l)))) return { verdict: 'backed', evidence: [said(filtered)], why: '' };
         }
+        if (errorGone(claim, list, lastChange, last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
+}
+
+/** Files a claim's sentence names: `src/store/cart.ts:15`, `cart.ts`. */
+const NAMED_FILE = /(?:^|[\s`'"(⟨])((?:[\w.@-]+\/)*[\w@-][\w.@-]*\.[a-z][a-z0-9]{0,7})(?::\d+)?(?=$|[\s`'")⟩:,;.])/gi;
+/**
+ * Whether the error a fix claim names is gone: a run before the change reported it in a file the claim's sentence names, and
+ * the same kind of run after the change no longer names that file, though it still fails on another ("Fixed — `src/store/cart.ts:15` …").
+ */
+function errorGone(claim, list, lastChange, last) {
+    const files = [...new Set([...String(claim.text ?? claim.part ?? '').matchAll(NAMED_FILE)].map((m) => m[1].split('/').at(-1)).filter((f) => !/^\d/.test(f) && !DOC_FILE.test(f)))];
+    if (files.length === 0) return false;
+    const lines = (i) => [...(Array.isArray(i.failLines) ? i.failLines : []), ...(i.lines ?? [])].filter((l) => typeof l === 'string');
+    const names = (i) => lines(i).some((l) => files.some((f) => l.includes(f)));
+    if (names(last)) return false;
+    return list.slice(0, lastChange).some((i) => i.ok === false && i.kind === last.kind && names(i));
 }
 
 /** A fix that a build shows: of the build, a compile or type error, an import, a warning, a dependency. */
