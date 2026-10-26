@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
     BridgeError, CREATES_FILE, EVENTS_LIMIT_MAX, LOG_MAX_BYTES, MAX_BODY_DEFAULT, MAX_BODY_RANGE, PROMPT_MS, READ_MS, SOCKET_PATH_MAX, WAIT_MAX_SECONDS, answers, attemptOf,
-    checkSettings, codeOf, createBridge, expandHome, isNotFound, lastAssistantText, prepareSocket, requestState, rpcIdFor, sessionSummary, statusFor, summarize, withDeadline,
+    checkSettings, codeOf, createBridge, createsRecord, expandHome, isNotFound, lastAssistantText, prepareSocket, requestState, rpcIdFor, sessionSummary, statusFor, summarize, withDeadline,
 } from '../plugins/session-bridge/lib/bridge.js';
 import { OTHER_NAMES } from './helpers/client.mjs';
 import { tempDir } from './helpers/temp.mjs';
@@ -204,6 +204,10 @@ function fakeDsh() {
                 const late = dsh.failLate;
                 dsh.failLate = undefined;
                 if (late) throw late;
+                // DSH queues a prompt in the session's inbox at once; the stand-in does when a test asks it to.
+                if (dsh.recordSteps) {
+                    dsh.push(req.sessionId, 'agent/inbox/spliced', { target: req.mode === 'steer' ? 'next-step' : 'next-turn', start: 0, removedCount: 0, inserted: [{ id: req.requestId, role: 'user', content: req.content, source: { kind: 'user', rpcId: req.requestId } }] });
+                }
                 return { accepted: true };
             },
             selectModel: async (req) => {
@@ -796,6 +800,49 @@ test('api: a create retried with its request id makes one session and sends one 
     const text = readFileSync(record, 'utf8');
     assert.ok(!text.includes('Run the nightly job') && !text.includes('Nightly'), text);
     assert.deepEqual(JSON.parse(text.trim()), { ...JSON.parse(text.trim()), requestId: 'cron-nightly-1026', sessionId: a.body.sessionId });
+});
+
+test('creates record: a bridge finds a create that another bridge on the same folder added after it read the file', () => {
+    const folder = tempDir('sb');
+    const file = join(folder, CREATES_FILE);
+    const a = createsRecord(file);
+    const b = createsRecord(file);
+    assert.equal(b.get('job-1'), undefined, 'nothing there yet');
+    a.add({ requestId: 'job-1', sessionId: 'session-1', workspace: { id: 'ws-1', path: folder } });
+    assert.equal(b.get('job-1')?.sessionId, 'session-1', 'read again, because the file grew');
+    b.add({ requestId: 'job-2', sessionId: 'session-2', workspace: { id: 'ws-1', path: folder } });
+    assert.equal(a.get('job-2')?.sessionId, 'session-2');
+    assert.deepEqual([a.size, b.size], [2, 2]);
+    assert.equal(modeOf(file), 0o600);
+    assert.equal(readFileSync(file, 'utf8').trim().split('\n').length, 2, 'one line each');
+});
+
+test('api: a create still on its way when the bridge starts again (a settings change) is waited for by a retry on the new bridge: one session, one message', async (t) => {
+    const folder = tempDir('sb');
+    const dsh = fakeDsh();
+    dsh.recordSteps = true;
+    const ws = join(folder, 'ws');
+    mkdirSync(ws);
+    const body = { workspacePath: ws, title: 'Backup', text: 'Back up the folder.', requestId: 'backup-2026-10-26' };
+    const one = await bridgeOn(t, { folder, dsh });
+    let release;
+    dsh.holdCreate = new Promise((r) => { release = r; });
+    const first = call(one.sock, 'POST', '/sessions', body).then(() => 'answered', (error) => error.code ?? error.message);
+    await sleep(50);
+    // The bridge stops (it closes the first caller's connection after 2 s) while DSH is still making that session.
+    await one.bridge.stop();
+    assert.notEqual(await first, 'answered', 'the first caller lost its connection');
+    const two = await bridgeOn(t, { folder, dsh });
+    const retry = call(two.sock, 'POST', '/sessions', body);
+    await sleep(50);
+    release();
+    dsh.holdCreate = null;
+    const got = await retry;
+    assert.equal(got.status, 200, got.text);
+    assert.equal(got.body.alreadyCreated, true);
+    assert.equal(got.body.prompt.alreadySent, true, 'the first try had sent it');
+    assert.deepEqual(dsh.calls.map(([k]) => k), ['create', 'rename', 'prompt'], 'each step once');
+    assert.equal(dsh.sessions.size, 1, 'one session');
 });
 
 test('api: a create retried after DSH restarts finds its session from the record beside the socket, and finishes only what was not done', async (t) => {

@@ -376,6 +376,13 @@ function wholeParam(url, key, fallback, min, max, what = `a whole number of at l
 const SENT = new Map();
 
 /**
+ * Creates running now, by their record file and request id. The module's, like SENT: when a settings change
+ * starts the bridge again while a create is still on its way into DSH, a retry on the new bridge waits for it
+ * and then finds its session, instead of making a second one.
+ */
+const CREATING = new Map();
+
+/**
  * Which session each create's request id made, kept in a file beside the socket (mode 600, one JSON line per
  * create: the request id, the session id and its workspace; never a text or a title), so a create retried
  * after DSH restarts finds its session. It holds the last 5000 and is written again, shorter, past 10000 lines.
@@ -384,17 +391,19 @@ export function createsRecord(file) {
     const map = new Map();
     let loaded = false;
     let lines = 0;
-    const load = () => {
-        if (loaded) return;
-        loaded = true;
-        if (!file) return;
-        let text = '';
+    // The file's size as this record last read or wrote it: another bridge on the same folder (one still
+    // finishing a create while DSH starts this one, after a settings change) may have added to it since.
+    let bytes = 0;
+    const read = () => {
+        let raw;
         try {
-            text = readFileSync(file, 'utf8');
+            raw = readFileSync(file);
         } catch {
             return;
         }
-        for (const line of text.split('\n')) {
+        bytes = raw.length;
+        lines = 0;
+        for (const line of raw.toString('utf8').split('\n')) {
             if (!line.trim()) continue;
             lines += 1;
             try {
@@ -407,15 +416,31 @@ export function createsRecord(file) {
         }
         while (map.size > REMEMBERED) map.delete(map.keys().next().value);
     };
+    const load = () => {
+        if (loaded) return;
+        loaded = true;
+        if (file) read();
+    };
+    const grown = () => {
+        try {
+            return statSync(file).size !== bytes;
+        } catch {
+            return false;
+        }
+    };
     const writeAll = () => {
         const tmp = `${file}.tmp`;
-        writeFileSync(tmp, [...map.values()].map((e) => `${JSON.stringify(e)}\n`).join(''), { mode: 0o600, flag: 'w' });
+        const text = [...map.values()].map((e) => `${JSON.stringify(e)}\n`).join('');
+        writeFileSync(tmp, text, { mode: 0o600, flag: 'w' });
         renameSync(tmp, file);
         lines = map.size;
+        bytes = Buffer.byteLength(text);
     };
     return {
         get(requestId) {
             load();
+            // Not known here: read the file again only if someone added to it since.
+            if (!map.has(requestId) && file && grown()) read();
             return map.get(requestId);
         },
         /** Remember one; a file that cannot be written is said (the caller logs it) and never stops the create. */
@@ -426,14 +451,16 @@ export function createsRecord(file) {
             while (map.size > REMEMBERED) map.delete(map.keys().next().value);
             if (!file) return;
             if (lines + 1 > 2 * REMEMBERED) return writeAll();
+            const line = `${JSON.stringify(entry)}\n`;
             const fd = openSync(file, fsc.O_WRONLY | fsc.O_APPEND | fsc.O_CREAT | fsc.O_NOFOLLOW, 0o600);
             try {
                 fchmodSync(fd, 0o600);
-                writeSync(fd, `${JSON.stringify(entry)}\n`);
+                writeSync(fd, line);
             } finally {
                 closeSync(fd);
             }
             lines += 1;
+            bytes += Buffer.byteLength(line);
         },
         get size() {
             load();
@@ -722,9 +749,10 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
     }
 
     // ── Creates: one session per request id, even when retried after a timeout or a restart ──
-    const creates = createsRecord(socketPath ? join(dirname(socketPath), CREATES_FILE) : '');
-    /** request id → the create (or carry-on) running for it now, so retries that overlap run one after another. */
-    const creating = new Map();
+    const recordFile = socketPath ? join(dirname(socketPath), CREATES_FILE) : '';
+    const creates = createsRecord(recordFile);
+    /** The create (or carry-on) running now for a request id, so retries that overlap run one after another. */
+    const creatingKey = (own) => `${recordFile}\u0000${own}`;
 
     function checkCreate(body) {
         for (const key of ['title', 'text', 'provider', 'model', 'agentPreset']) {
@@ -741,13 +769,14 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         const own = checkCreate(body);
         if (!own) return makeSession(body);
         // Retries of one request id run one after another: the second finds the session the first made.
-        const before = creating.get(own) ?? Promise.resolve();
+        const key = creatingKey(own);
+        const before = CREATING.get(key) ?? Promise.resolve();
         const run = before.catch(() => {}).then(() => (creates.get(own) ? carryOn(creates.get(own), body, own) : makeSession(body, own)));
-        creating.set(own, run);
+        CREATING.set(key, run);
         try {
             return await run;
         } finally {
-            if (creating.get(own) === run) creating.delete(own);
+            if (CREATING.get(key) === run) CREATING.delete(key);
         }
     }
 
