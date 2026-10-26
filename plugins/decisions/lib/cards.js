@@ -367,8 +367,10 @@ export function ownThreadCard(card, view, chat) {
  * @param {object} row - the coordinating chat's watcher row.
  * @param {{ value: any } | undefined} projection - `sessionWatch.projection(id, 'coordinatorSession')`.
  * @param {Map<string, object>} rowsById - every watcher row, for the threads' own sessions.
+ * @param {(sessionId: string) => object | undefined} [viewOf] - a thread's own `coordinatorSession` view (role
+ *   'thread'), which lists the turn it handed back in.
  */
-export function threadCards(row, projection, rowsById) {
+export function threadCards(row, projection, rowsById, viewOf) {
     const view = coordinatorView(projection?.value);
     if (!readable(row) || view?.role !== 'coordinator' || view.off) return [];
     const cards = [];
@@ -390,9 +392,21 @@ export function threadCards(row, projection, rowsById) {
         const question = split?.question || summary;
         const blocked = thread.handback.status === 'blocked';
         // One id per thread turn, the same as the thread's own reply's card (lib/inbox.js): a handback the chat takes
-        // late updates the card the thread's reply made, never a second one. Before the thread's turn is known
-        // (its session not listed), the handback's time.
-        const turn = Number.isSafeInteger(own?.state?.end?.turn) ? own.state.end.turn : undefined;
+        // late updates the card the thread's reply made, never a second one. The turn is the one the thread's own
+        // log says it handed back in, else its last; before either is known (its session not listed), the
+        // handback's time.
+        let mark;
+        try {
+            const marks = viewOf?.(thread.session)?.cards;
+            mark = (Array.isArray(marks) ? marks : []).filter((c) => isRecord(c) && c.kind === 'handback' && Number.isSafeInteger(c.turn)).at(-1);
+        } catch { /* the thread's last turn stands in */ }
+        // The thread handed back again since (its chat has not taken that one yet): this handback is not its last word.
+        if (mark && typeof mark.status === 'string' && mark.status !== thread.handback.status) continue;
+        const handedIn = mark?.turn;
+        const ended = Number.isSafeInteger(own?.state?.end?.turn) ? own.state.end.turn : undefined;
+        // The thread had a turn since it handed back (an answer reached it before its chat took the handback): answered.
+        if (handedIn !== undefined && ended !== undefined && ended > handedIn) continue;
+        const turn = handedIn ?? ended;
         const legacy = `thread:${thread.session}:${at || thread.id}`;
         cards.push({
             id: turn !== undefined ? threadCardId(thread.session, turn) : legacy,

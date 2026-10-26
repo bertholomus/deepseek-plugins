@@ -10,6 +10,7 @@
  *
  * @module dsh-plugin-decisions/config
  */
+import { createHash } from 'node:crypto';
 import { changedEntry, changedTitles, keyName, oneOf, onOff, wholeNumber } from './shared/settings.js';
 
 /** The settings, in the words the page, the settings form and the errors use. */
@@ -64,6 +65,38 @@ export function checkConfig(settings) {
 /** The settings a change touched, by their titles in quotes, from DSH's changed paths. */
 export function changedWords(paths) {
     return changedTitles(paths, SETTING_TITLES);
+}
+
+/**
+ * Each setting's value as a short hash, kept in Decisions' state: at its next
+ * start, what an edit of DSH's profile changed (one that restarts Decisions,
+ * such as `enabled` or `mirrorCommand`) is said in its log.
+ */
+export function settingHashes(settings) {
+    const out = {};
+    for (const key of Object.keys(SETTING_TITLES)) {
+        let text;
+        try { text = JSON.stringify(settings?.[key]) ?? 'undefined'; } catch { text = 'unreadable'; }
+        out[key] = createHash('sha256').update(text).digest('hex').slice(0, 16);
+    }
+    return out;
+}
+
+/**
+ * At start: the log entry for the settings that changed since Decisions last
+ * ran (an edit of DSH's profile restarts it), or undefined when none did or
+ * it never ran before.
+ * @param {import('./shared/settings.js').SettingsCheck} check - already run.
+ * @param {Record<string, string> | undefined} before - `settingHashes` when it last ran.
+ * @param {Record<string, string>} now - `settingHashes` now.
+ */
+export function startEntry(check, before, now) {
+    if (!before) return undefined;
+    const paths = Object.keys(now).filter((key) => before[key] !== now[key]).map((key) => [key]);
+    if (paths.length === 0) return undefined;
+    const words = changedWords(paths);
+    if (!check.ok) return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}; Decisions waits until a wrong one is fixed`, why: `${check.problem.text}.`, state: 'waiting on a setting' };
+    return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}`, why: 'Decisions started again with them.', state: 'done' };
 }
 
 /**

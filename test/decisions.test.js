@@ -12,7 +12,7 @@ import {
 import { Holds, approvalProof, approvalWords, callArguments, describeCall, lateAnswerProof, questionProof, reasonText } from '../plugins/decisions/lib/holds.js';
 import { Inbox, heldOutcome, notifyOutcome, parseData, relayedHandback, relayedThread } from '../plugins/decisions/lib/inbox.js';
 import { Mirror, NO_ADDRESS, checkCommand, checkWebhook, programName } from '../plugins/decisions/lib/mirror.js';
-import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry } from '../plugins/decisions/lib/config.js';
+import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry, settingHashes, startEntry } from '../plugins/decisions/lib/config.js';
 import { SettingsCheck } from '../plugins/decisions/lib/shared/settings.js';
 import { pageState } from '../plugins/decisions/lib/page.js';
 import { JsonStore } from '../plugins/decisions/lib/shared/files.js';
@@ -1008,6 +1008,8 @@ test('inbox: stored state is made safe when read', () => {
         'question:s2:q1': { sessionId: 's2', kind: 'question', title: '', question: '', at: 0 },
     });
     assert.deepEqual(held.sent, [1, 3]);
+    // Each setting's hash when Decisions last ran: only short strings are kept.
+    assert.deepEqual(parseData({ settings: { enabled: 'a1b2', mirror: 3, notify: 'x'.repeat(65) } }).settings, { enabled: 'a1b2' });
 });
 
 test('holds: a kind switched off lets its held requests go back to DSH\'s own card; a stop holds nothing until resumed', async () => {
@@ -1195,7 +1197,7 @@ test('mirror: a command gets the card as JSON on stdin, without a shell; its fai
     const failing = new Mirror({ config: { ...DEFAULTS, mirror: 'command', mirrorCommand: [bad, '--loud'] }, journal });
     assert.deepEqual(await failing.send(CARD), { ok: false, reason: 'bad.sh exited with 3: no route to the pager' });
     const missing = new Mirror({ config: { ...DEFAULTS, mirror: 'command', mirrorCommand: [join(dir, 'nope')] }, journal });
-    assert.deepEqual(await missing.send(CARD), { ok: false, reason: `The command's program ${join(dir, 'nope')} does not exist` });
+    assert.deepEqual(await missing.send(CARD), { ok: false, reason: `The command's program ${join(dir, 'nope')} does not exist: change mirrorCommand in Decisions' entry in DSH's profile (cordis.patch.yml)` });
     const none = new Mirror({ config: { ...DEFAULTS, mirror: 'command' }, journal });
     assert.match((await none.describe()).problem, /^No command is set: add mirrorCommand/);
     const off = new Mirror({ config: DEFAULTS, journal });
@@ -1251,6 +1253,27 @@ test('mirror and config: wrong values are said in words that name the setting; a
     assert.deepEqual(fixed, { kind: 'settings', text: 'Settings fixed: Decisions is working again', why: 'The change to “Keep a reply\'s question for” fixed it.', state: 'done' });
     assert.equal(savedEntry(check, [['mirror']]).text, 'Settings changed: “Also send new cards to”');
     assert.equal(savedEntry(check, []), undefined);
+});
+
+test('config: a start says which settings an edit of DSH\'s profile changed since Decisions last ran, and what is wrong', () => {
+    const checked = (settings) => {
+        const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'decisions' });
+        check.run();
+        return check;
+    };
+    const settings = { ...DEFAULTS };
+    const before = settingHashes(settings);
+    assert.equal(startEntry(checked(settings), undefined, before), undefined, 'the first start says nothing');
+    assert.equal(startEntry(checked(settings), before, settingHashes({ ...settings })), undefined, 'nothing changed');
+    const edited = { ...settings, enabled: false, mirrorCommand: ['/usr/local/bin/notify-me', '--from', 'dsh'] };
+    assert.deepEqual(startEntry(checked(edited), before, settingHashes(edited)),
+        { kind: 'settings', text: 'Settings changed in DSH\'s profile: “Decisions on”, “The command”', why: 'Decisions started again with them.', state: 'done' });
+    const wrong = { ...settings, mirror: 'sometimes' };
+    const entry = startEntry(checked(wrong), before, settingHashes(wrong));
+    assert.equal(entry.text, 'Settings changed in DSH\'s profile: “Also send new cards to”; Decisions waits until a wrong one is fixed');
+    assert.match(entry.why, /\(mirror\)/);
+    assert.equal(entry.state, 'waiting on a setting');
+    assert.ok(Object.values(settingHashes(edited)).every((hash) => /^[0-9a-f]{16}$/.test(hash)), 'hashes only: no value is kept');
 });
 
 test('cards: a plugin\'s question keeps only well-formed choices', () => {
@@ -1451,6 +1474,37 @@ test('inbox: a thread\'s question with no handback stands a few seconds: a nudge
     await inbox.answer(asked.id, { text: 'Yes, drop it.' });
     await clock.advance(1000);
     assert.equal(notesIn(dsh, 'th').at(-1), '[Decisions] The person answered your DECISION NEEDED line (“Drop the node 18 job too?”):\n\nYes, drop it.');
+});
+
+test('inbox: answered before its busy chat takes the handback, a thread\'s handback is no card again when it lands', async () => {
+    const { dsh, clock, inbox, journal } = setup();
+    await clock.advance(1000);
+    let roster = [];
+    let chatCards = [{ turn: 1, seq: 3, kind: 'start', thread: 't1' }];
+    let handedBack = [];
+    threadOf(dsh, { roster: () => roster, chatCards: () => chatCards, threadCards: () => handedBack });
+    replied(dsh, 'th', 'Both pass.\n\nShould I pin node 20 or move to 22?', { title: 'Fix CI', ask: 'Fix the CI matrix.' });
+    const turn = dsh.state('th').turn;
+    handedBack = [{ turn, seq: 40, kind: 'handback', thread: 't1', status: 'needs_decision' }];
+    await clock.advance(1000);
+    const [card] = (await inbox.list()).waiting;
+    assert.equal(card.id, `thread:th:${turn}`);
+    await inbox.answer(card.id, { text: 'Move to 22.' });
+    await clock.advance(1000);
+    dsh.end('th', { kind: 'completed' }, { reply: 'Moved to 22.' });
+    // Minutes later the chat takes the handback the answer already settled.
+    await clock.advance(3 * MIN);
+    roster = [{ id: 't1', session: 'th', title: 'Fix CI', resolved: false, handback: { status: 'needs_decision', summary: 'Pin node 20 or move to 22?', at: new Date(clock.now()).toISOString() } }];
+    chatCards = [...chatCards, { turn: 2, seq: 60, kind: 'handback', thread: 't1', status: 'needs_decision' }];
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting, [], 'the thread has moved on since its handback');
+    assert.equal(entries(journal, 'new').length, 1);
+    // The thread hands back done meanwhile, and its chat still holds the old handback: not a card either.
+    handedBack = [...handedBack, { turn: turn + 1, seq: 90, kind: 'handback', thread: 't1', status: 'done' }];
+    dsh.write('th', 'Also drop node 18.');
+    dsh.end('th', { kind: 'completed' }, { reply: 'Dropped it.' });
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting, []);
 });
 
 test('inbox: thread cards seen, dismissed or answered under their old id (the handback\'s time) keep that under the new one', async () => {

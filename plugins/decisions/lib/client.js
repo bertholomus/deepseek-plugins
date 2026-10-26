@@ -720,9 +720,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     /**
      * A setting is wrong, so the plugin does no work: which setting, what it
      * must be, and where to change it (its settings in Plugins when the
-     * person can change it there, else DSH's profile).
+     * person can change it there, else DSH's profile). `profileApplies`: the
+     * plugin restarts with its new settings when DSH's profile is saved, so
+     * no restart of DSH is needed (else the line says to restart DSH).
      */
-    function SettingsProblem({ name, packageName, problem }) {
+    function SettingsProblem({ name, packageName, problem, profileApplies = false }) {
         const live = problem?.live === true;
         const its = whose(name);
         return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': 'setting' },
@@ -730,7 +732,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             h('p', { className: `${P}-trouble-text` }, `${String(problem?.text ?? 'A setting is wrong').replace(/\.$/, '')}.`),
             h('p', { className: `${P}-trouble-text` }, live
                 ? `Change it in ${its} settings in Plugins. ${name} starts working again as soon as you save.`
-                : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
+                : profileApplies
+                    ? `Change it in ${its} entry in DSH's profile (cordis.patch.yml). DSH applies the file when you save it.`
+                    : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
             live && typeof nav.current?.openBundle === 'function'
                 ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName, { focus: problem?.key }) }, `Open ${its} settings`)) : null);
     }
@@ -1251,7 +1255,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function notifyText(data, installed) {
             if (!data.notify) return 'Notifications are off in its settings.';
             if (data.notifications) return 'Each new card notifies you.';
-            return installed === false ? 'Each new card would notify you, but the Notifications plugin is not installed: add it in Plugins to get them.'
+            // The log says "not running" either way (the host cannot tell why); the page adds why when it knows.
+            return installed === false ? 'Each new card would notify you, but the Notifications plugin is not running: it is not installed. Add it in Plugins to get them.'
                 : 'Each new card would notify you, but the Notifications plugin is not running: switch it on in Plugins to get them.';
         }
 
@@ -1368,10 +1373,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     data.mirror.problem
                         // The command lives only in DSH's profile, which its words name; the rest is in the settings form.
                         ? (canOpen && data.mirror.mode !== 'command' ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => kit.openPlugin(BUNDLE) }, 'Open Decisions\' settings') : null)
-                        : h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void act('testMirror', {}) }, 'Send a test')) : null,
+                        // Not disabled while busy, so the focus stays on it for the line under it that says how the test went.
+                        : h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, 'data-decisions-test': '', onClick: () => { if (!busy) void act('testMirror', {}); } }, 'Send a test')) : null,
                 mirrorFailed(data.mirror) ? h('div', { className: `${P}-line ${P}-warn`, 'data-decisions-mirror-failed': '' },
                     h('span', null, `The last new card was not sent: ${String(data.mirror.last.reason ?? 'it failed').replace(/\.$/, '')} (`, h(kit.TimeText, { at: data.mirror.last.at }), ').')) : null,
-                mirror ? h('div', { className: testSaid ? `${P}-line ${P}-ok` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-decisions-test-said': '' }, testSaid ? said.text : '') : null) : null,
+                // How the test went, under its button: sent, or why not (a failure is an alert, in the warning colour).
+                mirror ? h('div', { className: testSaid ? `${P}-line ${said.failed ? `${P}-warn` : `${P}-ok`}` : `${P}-sr`, role: testSaid && said.failed ? 'alert' : 'status', 'aria-live': testSaid && said.failed ? 'assertive' : 'polite', 'data-decisions-test-said': testSaid ? (said.failed ? 'failed' : 'sent') : '' }, testSaid ? said.text : '') : null) : null,
             data.watchProblem ? h('p', { className: `${P}-note`, 'data-decisions-watch-problem': '' }, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. Change it in Session Watch's settings in Plugins.`) : null);
         }
 
@@ -1609,7 +1616,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 setFailure(undefined);
                 const { problem, value } = await run(method, args);
                 setBusyId(undefined);
-                if (problem && method !== 'answer') setFailure(problem);
+                // A failed test is said under its button, in the header; other failures under the header.
+                if (problem && method === 'testMirror') setSaid((was) => ({ text: /^Not /.test(problem) ? problem : `Not sent: ${problem}`, where: 'mirror', failed: true, n: was.n + 1, at: Date.now() }));
+                else if (problem && method !== 'answer') setFailure(problem);
                 if (!problem) setSaid((was) => ({ text: saidText(method, card, value), where: method === 'testMirror' ? 'mirror' : 'list', n: was.n + 1, at: Date.now(), ...(method === 'answer' && card?.id ? { cardId: card.id, title: card.title ?? '' } : {}) }));
                 void live.refresh();
                 return problem;
@@ -1626,7 +1635,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : data.problem
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-decisions-header': 'problem' } },
-                                    h(kit.SettingsProblem, { name: 'Decisions', packageName: BUNDLE, problem: data.problem })),
+                                    h(kit.SettingsProblem, { name: 'Decisions', packageName: BUNDLE, problem: data.problem, profileApplies: true })),
                                 h(HistoryCard, { key: 'history', data, onOpen }),
                             ]
                             : [

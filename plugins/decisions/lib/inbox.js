@@ -92,6 +92,14 @@ function saidMap(value) {
     return out;
 }
 
+/** Each setting's hash when Decisions last ran (lib/config.js settingHashes), or undefined. */
+function settingsMap(value) {
+    if (!isRecord(value)) return undefined;
+    const out = {};
+    for (const [key, hash] of Object.entries(value).slice(0, 40)) if (key.length <= 60 && typeof hash === 'string' && hash.length <= 64) out[key] = hash;
+    return out;
+}
+
 /** Make a stored value safe. */
 export function parseData(value) {
     return {
@@ -107,6 +115,8 @@ export function parseData(value) {
         said: saidMap(value?.said),
         // When the mirror's messages of the last hour went (sent ones only), for its hourly limit.
         sent: Array.isArray(value?.sent) ? value.sent.filter((at) => Number.isFinite(at)).slice(-500) : [],
+        // Each setting's hash when Decisions last ran, so a start can say what an edit of DSH's profile changed.
+        ...(settingsMap(value?.settings) ? { settings: settingsMap(value.settings) } : {}),
     };
 }
 
@@ -428,7 +438,7 @@ export class Inbox {
                 else add(asked);
                 for (const thread of threadsOf(row, projection)) chats.set(thread.session, thread.chat);
                 if (config.threads) {
-                    for (const card of threadCards(row, projection, byId)) add(card);
+                    for (const card of threadCards(row, projection, byId, (id) => coordinatorView(this.watch.projection?.(id, 'coordinatorSession')?.value))) add(card);
                     handbacks.push(...handbacksOf(row, projection));
                 }
             } catch (error) {
