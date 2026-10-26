@@ -64,11 +64,12 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
     }
 
     function makeAgent(s) {
-        return {
+        const inbox = [];
+        const agent = {
             id: s.id,
             status: 'idle',
             session: s.handle,
-            inbox: [],
+            inbox,
             followup(msg) {
                 if (dsh.refuse) throw new Error(dsh.refuse);
                 this.inbox.push(msg);
@@ -89,6 +90,18 @@ export function fakeDsh({ now = Date.now, autoRead = true } = {}) {
                 });
             },
         };
+        // DSH's inbox removal: a pending message out of the queue, recorded in the log, and told as discarded.
+        Object.defineProperty(inbox, 'remove', {
+            value: (id) => {
+                const at = inbox.findIndex((m) => m.id === id);
+                if (at < 0) return false;
+                const [gone] = inbox.splice(at, 1);
+                commit(s.id, 'agent/inbox/spliced', { target: 'next-turn', start: at, removedCount: 1, inserted: [], outcome: 'canceled' });
+                watch?.onDiscarded(agent, gone);
+                return true;
+            },
+        });
+        return agent;
     }
 
     /** The goal driver: an armed, active goal starts a round when its agent is idle. */

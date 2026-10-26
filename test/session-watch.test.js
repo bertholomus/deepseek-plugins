@@ -327,8 +327,39 @@ test('watcher: a delivery that cannot happen says why, and one never read times 
     assert.equal(stuck.state, 'queued');
     await clock.advance(31000);
     assert.equal(stuck.state, 'failed');
-    assert.equal(stuck.reason, 'it waited in the session\'s queue and no turn read it');
+    assert.equal(stuck.reason, 'no turn read it within 30 seconds, so Session Watch took it back out of the session\'s queue');
     assert.equal(watch.deliveries.size, 0);
+    // Taken back for real: the queue no longer holds it, the log records the removal, and the next turn never reads it.
+    assert.equal(dsh.agents.get('s').inbox.some((m) => m.id === stuck.id), false);
+    assert.equal(dsh.sessions.get('s').events.at(-1).type, 'agent/inbox/spliced');
+    assert.equal(dsh.sessions.get('s').events.at(-1).data.removedCount, 1);
+    dsh.commit('s', 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+    assert.equal(dsh.sessions.get('s').events.some((e) => e.type === 'user/message' && e.data.id === stuck.id), false);
+});
+
+test('watcher: at the timeout, a message a turn has just taken is left for its turn to prove; one left in a session that is not loaded is said to wait there', async () => {
+    const { dsh, watch, clock, warnings } = setup({ config: { deliveryTimeoutSeconds: 120 } });
+    dsh.write('s', 'Long job');
+    const taken = await watch.deliver('s', 'When you can.');
+    // The turn's step boundary takes it from the queue just before the timeout; its user/message comes after.
+    dsh.agents.get('s').inbox.splice(0);
+    await clock.advance(121000);
+    assert.equal(taken.state, 'queued', 'not reported failed while its turn may still prove it');
+    dsh.commit('s', 'user/message', { id: taken.id, role: 'user', content: [{ type: 'text', text: 'When you can.' }], source: { kind: 'cordis-host-runner' } });
+    assert.equal(taken.state, 'delivered');
+    // Taken, then never shown: a last look a minute on says so.
+    const lost = await watch.deliver('s', 'And this.');
+    dsh.agents.get('s').inbox.splice(0);
+    await clock.advance(121000 + 61000);
+    assert.equal(lost.state, 'failed');
+    assert.equal(lost.reason, 'a turn took it from the session\'s queue, but the session\'s log never showed it read');
+    // The session is let go before the timeout: the message stays in its saved queue, and that is what is said.
+    const left = await watch.deliver('s', 'Last one.');
+    dsh.agents.delete('s');
+    await clock.advance(121000);
+    assert.equal(left.state, 'failed');
+    assert.equal(left.reason, 'no turn read it within 2 minutes; it is still in the session\'s queue, which the session reads when it runs again');
+    assert.ok(warnings.some((line) => /was not delivered: no turn read it within 2 minutes/.test(line)), 'each one is logged');
 });
 
 test('watcher: a queued message DSH lets go unread fails the delivery', async () => {
@@ -377,6 +408,38 @@ test('watcher: a graceful stop and a crash both leave sessions it finds as cut o
     assert.equal(crash.title, '');
     assert.equal(crash.cwd, '/work/crash');
     // Nothing loaded the agents to find them.
+    assert.equal(dsh.agents.size, 0);
+});
+
+test('watcher: after a stop, a session the last run left running reads as its log has it, not as DSH saved it before the stop', async () => {
+    const dir = tempDir('session-watch');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const first = setup({ dir, clock, dsh });
+    dsh.write('quit', 'Long migration');
+    dsh.write('crash', 'Long import');
+    first.watch.running.flush();
+    // A quit ends both turns in the log (aborted, disposed); then the crash's end is lost, as SIGKILL loses it.
+    dsh.stop();
+    dsh.sessions.get('crash').events.pop();
+    // What DSH's list still has for them is from before their turns: nothing saved, and "blank".
+    for (const id of ['quit', 'crash']) Object.assign(dsh.sessions.get(id), { saved: undefined, blank: true });
+    const second = setup({ dir, clock, dsh });
+    const bumps = second.hub.versions.sessions ?? 0;
+    await second.watch.list();
+    await second.watch.readLeftRunning();
+    const rows = await second.watch.list(undefined, { maxAgeMs: 0 });
+    const quit = rows.find((row) => row.sessionId === 'quit');
+    const crash = rows.find((row) => row.sessionId === 'crash');
+    assert.equal(quit.word, 'cut off');
+    assert.equal(quit.state.end.kind, 'aborted');
+    assert.equal(quit.status, 'cold');
+    assert.equal(crash.word, 'cut off');
+    assert.equal(crash.state.end.kind, 'interrupted', 'a cold read closes the open turn as interrupted');
+    assert.ok(second.hub.versions.sessions > bumps, 'the windows are told');
+    // Read once per start, without loading the agents; cutOffSessions finds both from those reads.
+    const found = await second.watch.cutOffSessions({ withinMs: 0 });
+    assert.deepEqual(found.map((item) => item.sessionId).sort(), ['crash', 'quit']);
     assert.equal(dsh.agents.size, 0);
 });
 

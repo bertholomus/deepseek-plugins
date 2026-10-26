@@ -258,7 +258,34 @@ export class SessionWatch {
         }
         const listed = items.filter((item) => typeof item?.sessionId === 'string');
         this.listed = { at: this.now(), items: listed };
+        // What the last run left running reads as its log has it from now on (the windows are told when it is read).
+        void this.readLeftRunning();
         return listed.map((item) => this.rowOf(item.sessionId));
+    }
+
+    /**
+     * The sessions the last run left running, folded from their logs once
+     * per start: DSH's saved values for them are from before the stop (a
+     * quit or a crash saves nothing more), so until then a cut-off session
+     * would read as it did before its turn ("new", even). Loaded sessions
+     * keep their live state. Windows are told when it is done.
+     * @returns {Promise<void>}
+     */
+    readLeftRunning() {
+        if (!this.leftRead) {
+            this.leftRead = (async () => {
+                let changed = false;
+                for (const sessionId of Object.keys(this.leftRunning)) {
+                    if (this.sessionOf(sessionId) || this.cold.get(sessionId)?.full) continue;
+                    const read = await this.readLog(sessionId);
+                    if (!read || this.sessionOf(sessionId)) continue;
+                    this.cold.set(sessionId, { state: read.state, full: true });
+                    changed = true;
+                }
+                if (changed) this.hub?.bump('sessions');
+            })();
+        }
+        return this.leftRead;
     }
 
     /** One session's row, reading DSH's list when the watcher has not seen it yet. */
@@ -404,7 +431,8 @@ export class SessionWatch {
     /** DSH let a queued message go without reading it (installed by index.js on `agent/inbox/discarded`). */
     onDiscarded(agent, message) {
         const delivery = this.deliveries.get(message?.id);
-        if (!delivery) return;
+        // The watcher's own taking back (`expire`) says why itself.
+        if (!delivery || delivery.withdrawing) return;
         delivery.advance('failed', { reason: 'the session let the message go without reading it' });
         this.deliveries.delete(delivery.id);
         this.emit({ type: 'delivery', sessionId: delivery.sessionId, delivery: delivery.toJSON() });
@@ -456,13 +484,55 @@ export class SessionWatch {
         }
         // A session that read the message at once already resolved it; one that never shows it is reported, not assumed.
         const timeoutMs = Math.max(1000, (this.config.deliveryTimeoutSeconds ?? 600) * 1000);
-        this.after(this.logger, 'session-watch: delivery timeout', timeoutMs, () => {
-            if (delivery.state === 'delivered' || delivery.state === 'failed') return;
-            this.deliveries.delete(delivery.id);
-            delivery.advance('failed', { reason: delivery.state === 'queued' ? 'it waited in the session\'s queue and no turn read it' : 'the session\'s log never showed it' });
-            this.emit({ type: 'delivery', sessionId, delivery: delivery.toJSON() });
-        });
+        this.after(this.logger, 'session-watch: delivery timeout', timeoutMs, () => this.expire(delivery, timeoutMs));
         return delivery;
+    }
+
+    /**
+     * No turn read a delivery within the timeout. A message still waiting in
+     * the session's queue is taken back out of it (DSH's own inbox removal,
+     * which the session's log records), so a message reported as not
+     * delivered is never read later. One a turn took from the queue a moment
+     * ago is left for its turn to prove. Never throws.
+     * @param {Delivery} delivery
+     * @param {number} timeoutMs
+     */
+    expire(delivery, timeoutMs) {
+        if (delivery.state === 'delivered' || delivery.state === 'failed') return;
+        const seconds = Math.round(timeoutMs / 1000);
+        const fail = (reason) => {
+            this.deliveries.delete(delivery.id);
+            delivery.advance('failed', { reason });
+            this.logger?.warn?.(`session-watch: a message to ${delivery.sessionId} was not delivered: ${reason}`);
+            this.emit({ type: 'delivery', sessionId: delivery.sessionId, delivery: delivery.toJSON() });
+        };
+        const inbox = this.agentOf(delivery.sessionId)?.inbox;
+        let removed;
+        if (typeof inbox?.remove === 'function') {
+            delivery.withdrawing = true;
+            try {
+                removed = inbox.remove(delivery.id) === true;
+            } catch (error) {
+                this.logger?.warn?.(`session-watch: could not take a message back from ${delivery.sessionId}: ${errorText(error)}`);
+            } finally {
+                delivery.withdrawing = false;
+            }
+        }
+        if (removed === true) {
+            fail(`no turn read it within ${spanOf(seconds)}, so Session Watch took it back out of the session's queue`);
+            return;
+        }
+        if (removed === false && delivery.state === 'queued') {
+            // Not in the queue any more: a turn has just taken it, and its own log proves it. A last look a minute on.
+            this.after(this.logger, 'session-watch: delivery last look', 60000, () => {
+                if (delivery.state === 'delivered' || delivery.state === 'failed') return;
+                fail('a turn took it from the session\'s queue, but the session\'s log never showed it read');
+            });
+            return;
+        }
+        fail(delivery.state === 'queued'
+            ? `no turn read it within ${spanOf(seconds)}; it is still in the session's queue, which the session reads when it runs again`
+            : 'the session\'s log never showed it');
     }
 
     // ── Cut off by a stop ──────────────────────────────────────────────
@@ -475,6 +545,7 @@ export class SessionWatch {
      */
     async cutOffSessions({ withinMs, signal }) {
         const rows = await this.list(signal, { maxAgeMs: 0 });
+        await this.readLeftRunning();
         const now = this.now();
         const candidates = new Set(Object.keys(this.leftRunning));
         for (const row of rows) {
@@ -487,11 +558,14 @@ export class SessionWatch {
             const row = this.rowOf(sessionId);
             if (row.parentSessionId) continue;
             if (this.statusOf(sessionId) === 'running') continue;
-            let state = this.sessionOf(sessionId) ? this.stateOf(sessionId) : undefined;
+            const folded = this.cold.get(sessionId);
+            let state = this.sessionOf(sessionId) ? this.stateOf(sessionId) : folded?.full ? folded.state : undefined;
             if (!state || state.open) {
                 const read = await this.readLog(sessionId, signal);
                 if (!read) continue;
                 state = read.state;
+                // Not loaded: its row reads as its log has it from now on, not as DSH's saved value from before the stop.
+                if (!this.sessionOf(sessionId)) this.cold.set(sessionId, { state, full: true });
             }
             if (!state?.end || !cutOff(state.end)) continue;
             if (state.open) continue;
@@ -607,6 +681,12 @@ export class SessionWatch {
         this.running.close();
         this.listeners.clear();
     }
+}
+
+/** A wait in words: "45 seconds", "10 minutes". */
+function spanOf(seconds) {
+    if (seconds % 60 === 0 && seconds >= 120) return `${seconds / 60} minutes`;
+    return `${seconds} second${seconds === 1 ? '' : 's'}`;
 }
 
 /** A question as windows and other plugins see it: no handler. */
