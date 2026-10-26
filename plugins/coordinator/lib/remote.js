@@ -61,12 +61,16 @@ export class ProjectsRemote {
 
     /**
      * Every coordinating chat with its thread settings and access settings
-     * and their sources, with the user's tools (guardedTools) and the
-     * permissions DSH offers.
+     * and their sources, with the user's tools (guardedTools), the
+     * permissions DSH offers, and the settings that are wrong now, in words
+     * (the plugin's page shows them).
      */
     async list() {
         try {
-            return { ...this.lists(), guarded: this.manager.guards().map(([name]) => name), permissions: this.manager.permissionCatalog() };
+            return {
+                ...this.lists(), guarded: this.manager.guards().map(([name]) => name), permissions: this.manager.permissionCatalog(),
+                problems: this.manager.configProblems().map((p) => p.message),
+            };
         } catch (error) {
             throw failure(error);
         }

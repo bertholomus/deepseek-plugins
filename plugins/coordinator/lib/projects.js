@@ -60,6 +60,7 @@ import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf, isSame, bornOf, CLOCK_SLACK_MS } from './deletes.js';
 import { SHELL_TOOLS, MUTATING_TOOLS, snapshotFolder, diffFolder, Mutations } from './shell.js';
+import { guardedToolsOf, trustedHostsOf } from './config.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -501,10 +502,12 @@ export class ProjectManager {
      * @param {object} options.config - validated plugin config.
      * @param {Function} options.buildTools - (manager, who) => tool definitions for one agent.
      */
-    constructor({ ctx, config, buildTools }) {
+    constructor({ ctx, config, buildTools, problems = [] }) {
         this.ctx = ctx;
         this.config = config;
         this.buildTools = buildTools;
+        /** The fixed settings that were wrong when the plugin started (config.js checkConfig), each in words. */
+        this.fixedProblems = Array.isArray(problems) ? problems : [];
         /** The store's file; its copy is `store`. */
         this.storeFile = dataPath(config.storeFile);
         // With no other manager running on the file (the plugin was switched off, or this is the first), read it
@@ -692,7 +695,31 @@ export class ProjectManager {
      * (live config) and the tools other plugins mark as the user's own.
      */
     guards() {
-        return withPersonal(guardList(liveValue(this.config.guardedTools)), this.personalTools());
+        return withPersonal(guardList(guardedToolsOf(liveValue(this.config.guardedTools)).value), this.personalTools());
+    }
+
+    /**
+     * Every setting that is wrong now, in words, with what the plugin uses
+     * meanwhile: the fixed ones as the plugin started with them, and the
+     * live ones (guardedTools, trustedHosts and the access defaults) as they
+     * are now. The plugin's page shows them.
+     * @returns {{key: string, message: string}[]}
+     */
+    configProblems() {
+        const out = [...this.fixedProblems];
+        for (const found of [guardedToolsOf(liveValue(this.config.guardedTools)), trustedHostsOf(liveValue(this.config.trustedHosts))]) {
+            if (found.problem) out.push(found.problem);
+        }
+        const tools = liveValue(this.config.yourTools);
+        if (typeof tools === 'string' && tools.trim() !== '' && !['asked', 'always'].includes(tools.trim().toLowerCase())) {
+            out.push({ key: 'yourTools', message: `yourTools must be "asked" or "always" (it is ${JSON.stringify(tools.trim()).slice(0, 80)}), so threads get your tools only when asked until you fix it.` });
+        }
+        const permission = liveValue(this.config.threadPermission);
+        if (typeof permission === 'string' && permission.trim() !== '' && this.permissionCatalog() && this.presetOf(permission.trim()) === undefined) {
+            const names = this.permissionCatalog().options.map((o) => `"${o.value}"`).join(', ');
+            out.push({ key: 'threadPermission', message: `threadPermission must be a permission DSH offers (${names}) or "default" (it is ${JSON.stringify(permission.trim()).slice(0, 80)}), so chats that use this default start no new threads until you fix it.` });
+        }
+        return out;
     }
 
     /**
@@ -889,7 +916,7 @@ export class ProjectManager {
             const cwd = this.cwdOf(session) ?? first;
             const here = typeof args.workdir === 'string' && args.workdir.trim() !== '' ? resolve(expand(cwd), expand(args.workdir.trim())) : expand(cwd);
             // The machines the user trusts (config.trustedHosts, read now): a send that reaches only these is no send.
-            const trustedHosts = liveValue(this.config.trustedHosts);
+            const trustedHosts = trustedHostsOf(liveValue(this.config.trustedHosts)).value;
             const trustedSends = [];
             const found = exec.name === 'run_code'
                 ? codeSendOf(String(args.code ?? ''), { depth: 0, cwd: here, read: (path) => textInside(roots, path), trustedHosts, trustedSends }, 'run_code')

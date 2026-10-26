@@ -592,7 +592,8 @@ test('config: defaults, and nothing to set up per chat', () => {
     assert.equal(c.memoryDir, '~/.dsh/coordinator/memory');
     // A chat coordinates with /coordinate: no list of projects, no welcome, and no settings for the chat itself.
     for (const key of ['projects', 'welcome', 'coordinatorModel', 'coordinatorEffort', 'coordinatorPermission']) assert.equal(Object.hasOwn(c, key), false, key);
-    assert.throws(() => plugin.Config({ autoHandback: 'always' }));
+    // Any value passes the schema, so a wrong one can't stop the plugin: lib/config.js checks it in words.
+    assert.doesNotThrow(() => plugin.Config({ autoHandback: 'always', maxHandbacksPerHour: 'x', trustedHosts: 'nas' }));
     assert.equal(plugin.name, 'coordinator');
     assert.ok(plugin.inject.includes('sessionController') && plugin.inject.includes('systemPrompt'));
 });
@@ -1334,7 +1335,8 @@ test('window: Coordinate and the Thread settings endpoints read and change a cha
     for (const name of ['create', 'rename', 'remove', 'addCoordinator', 'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace', 'listCategories']) {
         assert.equal(name in remote, false, name);
     }
-    assert.deepEqual(Object.keys(await remote.list()).sort(), ['guarded', 'permissions', 'projects']);
+    assert.deepEqual(Object.keys(await remote.list()).sort(), ['guarded', 'permissions', 'problems', 'projects']);
+    assert.deepEqual((await remote.list()).problems, [], 'no setting to fix');
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'coordinator/refused' && pattern.test(error.message));
     };
@@ -1890,7 +1892,9 @@ test('a permission prompt notice still waiting out approvalNoticeSeconds stops w
     assert.equal(host.sessions.get(coord.id).prompts.length, 0);
     // At once is the default; a wait can't be less than none.
     assert.equal(plugin.Config({}).approvalNoticeSeconds, 0);
-    assert.throws(() => setup({ approvalNoticeSeconds: -1 }), /approvalNoticeSeconds/);
+    // A wait below none is a setting to fix, not a reason to stop: the plugin tells the chat at once meanwhile.
+    const { dir } = setup({ approvalNoticeSeconds: -1 });
+    assert.match(readFileSync(join(dir, 'coordinator.log'), 'utf8'), / config-problem approvalNoticeSeconds\n/);
 });
 
 // ── turns DSH runs back to back, and turns the plugin did not see end ──────
@@ -4697,4 +4701,49 @@ test('news: a sink that throws is logged, and the handback still reads as delive
     await tick();
     assert.equal(host.sessions.get(coord.id).prompts.length, 1, 'one handback, no idle note');
     assert.match(readFileSync(join(dir, 'coordinator.log'), 'utf8'), /error news-sink .*notifier down/);
+});
+
+test('config: wrong values never stop the plugin; each falls back to its default and is named in the logs and on the page', async () => {
+    const host = fakeHost({ gateway: true, presets: true });
+    const warned = [];
+    host.logger = { info() {}, warn: (format, ...args) => warned.push(args.reduce((text, arg) => text.replace('%s', String(arg)), format)) };
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const raw = {
+        threadEffort: 'high', storeFile: join(dir, 'coordinator.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'coordinator.log'),
+        // Types the old schema refused before the plugin ran (DSH showed only "Problem"), and values apply() threw on.
+        maxHandbacksPerHour: 0, maxThreadsPerHour: 'many', approvalNoticeSeconds: -5, maxMemoryBytes: 12.5, autoHandback: 'sometimes',
+        trustedHosts: { nas: true }, guardedTools: 7, enabled: 'maybe',
+    };
+    assert.doesNotThrow(() => plugin.apply(host, plugin.Config(raw)));
+    host.coordinated = coordinateIn(host, openChat(host, CHAT, { title: 'DSH Plugins', folder: '/work/dsh' }));
+    await tick();
+    // It runs: the chat coordinates and gets its thread tools.
+    const coord = coordinatorOf(host);
+    assert.ok(coord.ctx.registered.has('thread_start'), 'the chat has its thread tools');
+    const keys = ['enabled', 'autoHandback', 'maxHandbacksPerHour', 'maxThreadsPerHour', 'approvalNoticeSeconds', 'maxMemoryBytes'];
+    for (const key of keys) assert.ok(warned.some((line) => line.startsWith(`coordinator: ${key} must be`)), `DSH's log names ${key}: ${warned.join(' | ')}`);
+    const log = readFileSync(join(dir, 'coordinator.log'), 'utf8');
+    for (const key of keys) assert.match(log, new RegExp(` config-problem ${key}\\n`));
+    // The page lists them in words, the live ones (guardedTools, trustedHosts) too, with what the plugin uses meanwhile.
+    const { problems } = await host.provided.get('dshPluginCoordinatorRemote').list();
+    assert.equal(problems.length, 8, problems.join('\n'));
+    assert.ok(problems.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.'), problems.join('\n'));
+    assert.ok(problems.includes('autoHandback must be "idle" or "off" (it is "sometimes"), so the plugin uses "idle" until you fix it.'));
+    assert.ok(problems.includes('trustedHosts must be a list of host names or addresses (it is {"nas":true}), so the plugin uses none, so every send asks until you fix it.'));
+    assert.ok(problems.some((line) => line.startsWith('guardedTools must be a list of names')));
+    // The defaults stand in: 30 handbacks an hour.
+    await coord.ctx.call('thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a workflow.' });
+    const thread = [...host.live.values()].find((a) => a.id !== coord.id);
+    for (let i = 0; i < 30; i += 1) await thread.ctx.call('thread_handback', { status: 'progress', summary: `Step ${i + 1} done.` });
+    assert.match(String(await thread.ctx.call('thread_handback', { status: 'done', summary: 'All done.' }).catch((error) => error.message)), /handback limit reached \(30 per hour\)/);
+});
+
+test('config: a fixed list of hosts or tools may be one name; YAML\'s bare off turns the nudges off', async () => {
+    const { host, dir } = setup({ trustedHosts: 'nas.local', guardedTools: 'lane-catalog', autoHandback: false });
+    await host.coordinated;
+    const checks = await import('../lib/config.js');
+    assert.deepEqual(checks.trustedHostsOf('nas.local'), { value: ['nas.local'] });
+    assert.deepEqual(checks.guardedToolsOf('lane-catalog'), { value: ['lane-catalog'] });
+    assert.equal(checks.checkConfig({ autoHandback: false }).config.autoHandback, 'off');
+    assert.doesNotMatch(readFileSync(join(dir, 'coordinator.log'), 'utf8'), /config-problem/);
 });

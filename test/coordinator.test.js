@@ -104,3 +104,26 @@ test('plugins and docs carry no third-party assistant branding', () => {
     walk(root.pathname);
     assert.deepEqual(hits, []);
 });
+
+test('coordinator: a wrong setting falls back to its default, in words, and never throws', async () => {
+    const { checkConfig, guardedToolsOf, trustedHostsOf, DEFAULTS } = await import('../plugins/coordinator/lib/config.js');
+    const good = checkConfig({});
+    assert.deepEqual(good.problems, []);
+    for (const [key, value] of Object.entries(DEFAULTS)) assert.equal(good.config[key], value, key);
+    const bad = checkConfig({ maxThreadsPerHour: -1, enabled: 'perhaps', storeFile: '', logFile: 3, autoHandback: 'auto' });
+    assert.deepEqual(bad.problems.map((p) => p.key).sort(), ['autoHandback', 'enabled', 'logFile', 'maxThreadsPerHour', 'storeFile']);
+    assert.equal(bad.config.maxThreadsPerHour, 20);
+    assert.equal(bad.config.enabled, true);
+    assert.equal(bad.problems.find((p) => p.key === 'maxThreadsPerHour').message, 'maxThreadsPerHour must be a whole number of threads from 1 to 1000 (it is -1), so the plugin uses 20 until you fix it.');
+    // What a person or YAML means is taken as meant: "30", off and "no".
+    const meant = checkConfig({ maxHandbacksPerHour: '30', autoHandback: false, enabled: 'no', logFile: '' });
+    assert.deepEqual([meant.problems, meant.config.maxHandbacksPerHour, meant.config.autoHandback, meant.config.enabled, meant.config.logFile], [[], 30, 'off', false, '']);
+    assert.equal(checkConfig(null).config.enabled, true);
+    // Live settings pass through as DSH gave them (references read when used).
+    const ref = { get: () => 'x' };
+    assert.equal(checkConfig({ threadModel: ref }).config.threadModel, ref);
+    assert.deepEqual(guardedToolsOf({ vault: 'vault', lanes: ['lanes', 'model lanes'], cua: null }), { value: { vault: ['vault'], lanes: ['lanes', 'model lanes'], cua: [] } });
+    assert.match(guardedToolsOf(7).problem.message, /^guardedTools must be a list of names/);
+    assert.deepEqual(trustedHostsOf(['nas', 'pi']), { value: ['nas', 'pi'] });
+    assert.match(trustedHostsOf(['nas', 4]).problem.message, /uses only the names in it \(1\)/);
+});

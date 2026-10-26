@@ -83,6 +83,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             `:where(.dshp-t-card-actions,.dshp-t-paused,.dshp-dock,.dshp-ps,.dshp-page,.dshp-t-chat-bar,.dshp-t-pane-gear) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
             // Default models form
             '.dshp-heading{margin:0 0 4px;font-size:14px;font-weight:600;line-height:1.5;color:var(--dsw-alias-label-primary)}',
+            // Settings to fix: a line in the error colour, no ground of its own (the page is DSH's).
+            '.dshp-problems{display:flex;flex-direction:column;gap:4px;margin:0 0 16px;padding:2px 0 2px 12px;border-left:2px solid var(--dsw-alias-state-error-primary)}',
+            `.dshp-problems-title{color:${ERROR_TEXT}}`,
+            '.dshp-problems-list{margin:2px 0 0;padding-left:18px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}',
+            '.dshp-problems-list>li+li{margin-top:4px}',
             '.dshp-section{display:flex;flex-direction:column;gap:2px;padding:12px 0}',
             '.dshp-section+.dshp-section{border-top:.5px solid var(--dsw-alias-border-l2)}',
             '.dshp-title{margin:0;font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary)}',
@@ -1088,7 +1093,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (!alive || !result.ok || !isObject(result.value)) return;
                     const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
                     const permissions = isObject(result.value.permissions) ? result.value.permissions : null;
-                    setValue((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions) ? was : { guarded, permissions }));
+                    const problems = Array.isArray(result.value.problems) ? result.value.problems.filter((text) => typeof text === 'string' && text !== '') : [];
+                    setValue((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions)
+                        && was.problems.join('\n') === problems.join('\n') ? was : { guarded, permissions, problems }));
                 };
                 void read();
                 const timer = setInterval(() => {
@@ -1099,6 +1106,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return value;
         }
 
+        const PROBLEMS = {
+            one: 'A setting to fix',
+            many: (n) => `${n} settings to fix`,
+            where: 'In your profile\'s cordis.patch.yml, in the row "- id: coordinator". The plugin keeps running meanwhile, as each line says.',
+        };
         const ACCESS_NOTE = 'These apply to every coordinating chat that doesn\'t set its own in its Thread settings. Your tools are the ones listed under guardedTools in this plugin\'s config.';
 
         /**
@@ -1134,6 +1146,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ];
         }
 
+        /**
+         * The plugin's settings that are wrong, each in the words the plugin
+         * logs: what it must be, what it is, and what the plugin uses
+         * meanwhile. Nothing while all are right.
+         */
+        function SettingProblems({ problems }) {
+            if (!Array.isArray(problems) || problems.length === 0) return null;
+            return h('section', { className: 'dshp-problems', 'data-projects-problems': '', 'aria-labelledby': 'dshp-problems-title' },
+                h('h4', { id: 'dshp-problems-title', className: 'dshp-title dshp-problems-title' }, problems.length === 1 ? PROBLEMS.one : PROBLEMS.many(problems.length)),
+                h('p', { className: 'dshp-hint' }, PROBLEMS.where),
+                h('ul', { className: 'dshp-problems-list' }, ...problems.map((text, i) => h('li', { key: i }, text))));
+        }
+
         function DefaultsForm({ form, catalog, link }) {
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const cat = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
@@ -1145,6 +1170,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const labels = snapshot.insertedTwice ? { ...LABELS, readOnly: INSERTED_TWICE } : LABELS;
             const disabled = !state.writable || state.saving;
             return h('div', { 'data-projects-defaults': true },
+                h(SettingProblems, { problems: listed?.problems }),
                 h('h3', { className: 'dshp-heading' }, 'Default models'),
                 h(ui.SettingsForm, { labels, state, onSave: form.actions.save, onDiscard: form.actions.discard },
                     ...ROUTES.map((route) => h(RouteSection, { key: route.id, route, state, actions: form.actions, catalog: cat, models, disabled })),
