@@ -1,136 +1,228 @@
 # Notifications
 
-System notifications for DSH when its window is hidden or unfocused. A plugin
-(the coordinator first) asks for one; this plugin sends it through the first
-sender around — DSH's own desktop sender in the Desktop app where DSH
-provides it, otherwise a DSH window's own notifications (the Desktop app's
-carry its icon), or a command-line sender where one exists. Nothing shows
-while the window is focused: if you're looking at DSH, you don't need a toast
-over it.
+System notifications for DSH while you are not looking at its window. Other
+plugins send their news through it — the coordinator when a thread hands
+back, ends a turn without a handback, waits for approval, or fails or is
+stopped after a nudge; Decisions for each new card; Agent Terminals when an
+agent waits on you; Autopilot when it backs off; Fleet when a finding on an
+Ascent starts or clears. It is built for long unattended runs: you leave DSH
+working, and the news finds you.
 
-## How it works
+- **It shows with DSH's icon**, from DSH's own window, and only while you are
+  not looking at DSH (hidden, minimised, behind other windows, or in the
+  background). If you are looking, no notification is needed.
+- **A click brings DSH's window up and opens the chat** the news is about.
+- **Many at once** (more than three in one look) show as the newest two and
+  one summary of the rest; a click on the summary opens the recent list.
+- **Nothing is lost**: the settings page lists the last notifications with
+  what became of each — shown, not shown and why, failed and why — with
+  Open chat for the ones from a chat. Its log file has a line for every
+  one.
+- **A restart loses nothing and repeats nothing**: news still waiting for a
+  window is kept on disk and shows after the restart, once.
 
-The Desktop app's own plugin and launcher send attention through
-`desktopRuntime.notifyAttention` — it sends nothing while the window is
-focused, flashes the taskbar on Windows, badges the dock, and brings the
-window up when a notification is clicked. Where DSH provides that service
-the plugin uses it and adds nothing to DSH's own flow.
+## How it sends
 
-Everywhere else the sender is a DSH window itself: the host queues the
-notification and the window's browser half shows it through the Web
-Notifications API, which macOS and Windows attribute to the app the window
-belongs to — DeepSeek Harness. On the Desktop host the queue is used even
-while the window is hidden or minimised (its renderer still exists; its
-timers are throttled, so a hidden window may take up to about a minute to
-poll, and the queue flushes the moment the window is focused again).
-Elsewhere the queue is only used while a tab has polled recently:
+Each notification goes through the first sender that is around:
 
 | Where | Sender | Notes |
 | --- | --- | --- |
-| Desktop app, DSH provides `desktopRuntime` | DSH's own `desktopRuntime` | the app's own notifications; also skipped while the window is focused |
-| Desktop app, no `desktopRuntime` (0.2.1-rc.2) | the Desktop window's Web Notifications | queued while hidden or minimised; flushed on focus; carries DSH's icon |
-| `web` profile, tab open | the same browser half, in the tab | permission asked once, from a click; polled every 15 s |
-| No window watching, Linux | a command: `notify-send` | fire and forget, with the whale as `--icon` |
-| No window watching, Windows | a command: a PowerShell toast | fire and forget, with the whale as its logo |
-| No window watching, macOS | nothing | see below |
+| A DSH that provides `desktopRuntime` | DSH's own desktop notifications | used as they are; they skip while the window is focused |
+| The Desktop app (no `desktopRuntime`, as in DeepSeek Harness 0.2.1-rc.3 here) | the app's window, through the Web Notifications API | queued even while the window is hidden or minimised; macOS shows them as DeepSeek Harness's, with its icon |
+| DSH's `web` profile in a browser tab | the same browser half, in the tab | the browser asks once (the **Allow notifications** button); used while a tab checked in within 90 s |
+| No window around, Linux | `notify-send` | with the whale as `--icon` |
+| No window around, Windows | a PowerShell toast | with the whale as its logo |
+| No window around, macOS | nothing | see below |
 
-**Why macOS has no command line.** macOS's only command-line sender,
-`osascript`, cannot set a per-notification icon: its notifications show
-Script Editor's icon, which is exactly what this plugin must never do. So on
-macOS a notification with no window around is not sent at all rather than
-sent with the wrong app's icon. The Desktop app's window is the sender, and
-it exists hidden, minimised and in the background.
+**Why macOS has no command-line sender.** `osascript`, macOS's only one,
+cannot set a notification's icon: its notifications show Script Editor's
+icon, as if another app sent them. So with no DSH window around, macOS gets
+none, the recent list says so, and the news is still there when you look.
 
-The browser half stands down by itself when the host answers that the Desktop
-app sends natively, so nothing ever sends twice.
+**How a "shown" is proven.** A window that takes news off the queue tells
+the plugin what it did with each: shown (the system's own show event came),
+not needed (you were looking), dropped (it waited more than 5 minutes, or
+notifications are blocked), failed (with the reason), or handed over with no
+confirmation (macOS's Focus or Do Not Disturb can hold one back). Each is a
+line in its log file and an entry in the recent list. The caller's answer
+(`'browser'`, below) means queued; the log and the list say what came of it.
 
-**The icon.** The plugin's icon is the DeepSeek whale (`icon.svg`, with a
-256 px `icon.png` beside it). `notify-send` shows it on Linux (`--icon`) and
-a Windows toast carries the PNG as its logo. In a DSH window the Web
-Notifications API posts as the window's own app — DSH's icon in the Desktop
-app, the browser's in the `web` profile.
+**Proven and untested.** Proven by the real-DSH test (below), in a real DSH
+window whose system notifications are replaced by a recorder: the queue, the
+show, the click that opens the chat, bursts, the settings page and a restart,
+on DSH 0.2.0-rc.2, 0.2.1-rc.1 and the installed app's 0.2.1-rc.3. The last
+runs DSH under the app's own binary, as the app does, so the plugin takes
+the Desktop app's path (the window's queue, even while it is hidden).
+Proven by reading the app's code: its window may show notifications without
+an ask. Proven by reading DSH's source: the `desktopRuntime` call shape.
+Untested: a banner on the screen itself (no test puts one there), the
+Windows PowerShell toast and `notify-send` on Linux (their commands are
+unit-tested, not run), and DSH's own `desktopRuntime` (no DSH here provides
+it).
 
-**Proven and guessed.** Proven by reading DSH's source: the desktop path is
-the app's own (`lib/notifications.js`, `host-process-entry.js` — a plugin
-injects `desktopRuntime` the same way DSH's own notifications plugin does).
-**Proven on this machine:** the `desktopRuntime` call shape, and — on
-0.2.1-rc.2 — the Desktop window's Web Notification banner (see
-`review/notifications-release.md`). **Untested (guess):** the Windows
-PowerShell toast and its logo image, `notify-send` on Linux and its
-`--icon`, and the browser profile end to end in a real browser. None of it
-has run on Windows or Linux.
+## The settings page
+
+DSH → Plugins → Notifications:
+
+- **Send system notifications**, and one switch per kind of news (below).
+  Saved with DSH's own form, in the profile's `cordis.patch.yml`.
+- **Where they go now**, in a sentence: DSH's window, a browser tab, a
+  command, or nowhere (and what to do about it).
+- **This window**: whether it may show notifications, and the **Allow
+  notifications** button where the browser has not been asked yet. In the
+  Desktop app, macOS decides how they show: System Settings → Notifications
+  → DeepSeek Harness.
+- **Send a test notification**: shows one now, even while you look, and
+  says whether the system showed it.
+- **Recent notifications**: the newest ten (the plugin keeps thirty), each
+  with its time and what became of it, **Open chat** for the ones from a
+  chat, and where the log file with every one is.
+- **A setting is wrong**, when one is (below): which, what it must be, and
+  how to fix it.
+
+## Settings
+
+The row's id is `notifications`. Every setting is a switch. A save on the
+settings page restarts the plugin, which costs nothing (its queue and list
+are on disk).
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `enabled` | true or false | `true` | Off: no notification at all; callers are told `'off'` and the list says so. |
+| `notifyHandback` | true or false | `true` | The coordinator: a thread handed back to its chat (`kind: 'handback'`). |
+| `notifyFinished` | true or false | `true` | The coordinator: a thread ended a turn without a handback (`'finished'`). |
+| `notifyApproval` | true or false | `true` | The coordinator: a thread waits on a permission prompt (`'approval'`). |
+| `notifyFailed` | true or false | `true` | The coordinator: a thread failed again after its nudge (`'failed'`). |
+| `notifyStopped` | true or false | `true` | The coordinator: a thread was stopped again after its nudge (`'stopped'`). |
+| `notifyFleet` | true or false | `true` | Fleet: a finding on an Ascent starts, gets worse or clears (`'fleet'`). |
+
+News of any other kind follows `enabled` alone: Decisions' cards, Agent
+Terminals' agents that wait on you and Autopilot's questions
+(`kind: 'decision'`), and Autopilot backing off (`'autopilot'`). Decisions
+and Agent Terminals also have a switch for theirs in their own settings.
+
+A value that is not true or false (`"yes"`, `0`) never stops the plugin: it
+counts as the default, its log file warns once at start, and the settings
+page names the setting until it is fixed.
+
+```yaml
+# In the profile's cordis.patch.yml (a patch row replaces the whole config: list every key you set)
+- id: notifications
+  config:
+    enabled: true
+    notifyFleet: false
+```
 
 ## For other plugins
 
 ```js
-ctx.inject(['notifications'], (notifications) => {
+ctx.inject(['notifications'], (scope) => {
+    const notifications = scope.notifications;
     notifications.notify({
-        title: '“Fix CI” handed back',
-        body: '',
-        kind: 'handback',     // optional: gates on that event's switch
-        sessionId,            // optional; no platform can open a session yet
+        title: '“Fix CI” handed back',   // one line; cut at 200 characters
+        body: '',                         // optional; cut at 400
+        kind: 'handback',                 // optional: gates on that kind's switch
+        sessionId,                        // optional: a click opens this chat
     });
 });
 ```
 
-The service is absent when the plugin is off or not installed, so wrap the
-call the way DSH's own optional injections work (`ctx.inject` waits for it).
-`notify` returns what happened: `'desktop'`, `'browser'`, `'cli'`, `'none'`
-(no sender around), or `'off'` (the settings gate it). Senders take one line
-each; whitespace collapses.
+The service is there while the plugin runs (also while `enabled` is false,
+so callers hear `'off'`), and absent while the plugin is switched off in
+Plugins or not installed: take it with `ctx.inject` as above. `notify`
+never throws and answers at once:
 
-The coordinator calls it on its news: a handback, a thread that ended a turn
-without a handback, one waiting for your approval, and one that failed or was
-stopped again after the plugin's nudge. Its words for these are in its
-`lib/index.js`; the kinds gate here, one switch each.
+| Answer | Meaning |
+| --- | --- |
+| `'desktop'` | handed to DSH's own desktop notifications |
+| `'browser'` | queued for a DSH window, which shows it while nobody looks (the log and the list say what came of it) |
+| `'cli'` | handed to `notify-send` or a PowerShell toast |
+| `'none'` | nothing could show it (no window on macOS, or a sender failed); listed with the reason |
+| `'off'` | switched off in its settings (all, or that kind) |
 
-Fleet calls it with `kind: 'fleet'` when a finding on an Ascent starts, gets
-worse or clears: running hot, low on memory, a GPU error or an out-of-memory
-kill in the kernel log, a fabric link down, an Ascent that stops answering.
-Fleet waits for a finding to hold before it opens and for a quiet spell before
-it reports it cleared, so one finding is one notification when it starts and
-one when it clears.
+## Where it keeps things
 
-## Settings
+- `DSH_HOME/notifications/state.json` (`~/.dsh` when `DSH_HOME` is unset):
+  news waiting for a window, the last thirty notifications with what became
+  of each, and the next id. The folder is 700 and the file 600 (titles name
+  your chats). Written whole and renamed, so a crash leaves the old file or
+  the new one. Deleting it starts the list over; nothing else depends on it.
+- `DSH_HOME/notifications/notifications.log`: its log, one line per
+  notification (`2026-10-26T10:02:13-07:00 info #12 (handback) “Thread
+  handed back” waiting: …`), one per outcome (`… info #12 shown: …`), and a
+  warning for a setting that is wrong or a file it could not write. Past
+  1 MB it moves to `notifications.log.1` (one older file kept). File 600,
+  like the state. The plugin writes its own because DSH 0.2 keeps a
+  plugin's log lines in memory only; they go to DSH's logger too.
+- In each window's local storage, `dsh-plugin-notifications/shown`: the last
+  hundred items that window showed, so a reload never shows one twice.
 
-On DSH's Plugins page, under Notifications: a master switch, and one switch
-per event (handbacks; ended without a handback; waiting for approval; failed
-after a nudge; stopped after a nudge; Fleet findings). A save lands in the profile's
-`cordis.patch.yml` and the plugin restarts with it — a restart costs a
-notifier nothing, so its config is ordinary config, not live.
+## Switching it off
 
-The same page names where this browser stands: notifications are on, blocked
-for the site in the browser's settings, or waiting for your OK once — the
-**Allow** button asks. The browser profile only shows notifications the
-browser has allowed.
+- Just the notifications: switch off **Send system notifications** on its
+  settings page and save (or set `enabled: false`). The plugin keeps
+  running, so callers hear `'off'` and the list still shows what came.
+- One kind: its switch on the settings page.
+- The whole plugin: its switch on DSH's Plugins page. Its service, its
+  endpoints, its page and its style sheet go; callers find no service and
+  carry on without it. Switched on again, it starts from what it kept.
+
+## Setup and rollback
+
+- It is a DSH bundle with no dependencies beyond DSH's own packages: add
+  `dsh-plugin-notifications` to the profile's bundles (DSH's Plugins page or
+  `package.json` `dsh.profile.bundles`), linked from this folder.
+- In a browser profile, open the settings page once and press **Allow
+  notifications**. The Desktop app allows them by itself; macOS asks once,
+  as for any app.
+- Rollback: point the profile back at the earlier checkout of this folder
+  (or `git checkout <earlier commit> -- plugins/notifications`) and restart
+  DSH. An earlier version ignores `state.json`; delete
+  `DSH_HOME/notifications/` if you want nothing left behind. The profile's
+  `notifications` row keeps working (the keys did not change).
 
 ## Limits
 
-- **A click brings DSH's window up; it does not open the chat.** DSH's own
-  desktop sender does that, and DSH offers plugins no way to open a session
-  (no deep link a plugin may use).
 - **A hidden or minimised window may delay a notification by up to about a
-  minute.** A hidden window's timers are throttled to roughly once a minute,
-  so the queue's poll lands late; the queue flushes the moment the window is
-  focused again, and items older than five minutes are dropped rather than
-  shown late.
-- **The Desktop app with its window closed** (destroyed, not hidden) has no
-  renderer to show one: the items wait in the queue for a window that comes
-  back within five minutes, then age out. On macOS nothing replaces them.
-- **A closed browser tab** stops the browser sender; when no tab has polled
-  for 90 s the queue is no longer used, and on macOS no command sender
-  follows — the news is not sent rather than sent with Script Editor's icon.
-- **The command-line senders are best effort.** A machine without
-  `notify-send` gets a logged failure and no notification.
-- **Permission is asked once, from where an ask can work.** The Desktop
-  app's window grants its own ask; a browser needs the Allow button on the
-  plugin's page, and items wait in the queue until it is answered.
-- The plugin sends no notifications itself while it is off, and it leaves
-  nothing behind: no marks, no style tag, no queue.
+  minute**: its timers are throttled, so its look at the queue lands late.
+  It looks again the moment the window is focused or loses focus.
+- **The Desktop app with its window closed** (not hidden) has no window to
+  show one: news waits up to five minutes for a window, then is listed as
+  not shown. On macOS nothing replaces it.
+- **A browser tab closed for more than 90 s** stops the browser sender; on
+  macOS nothing replaces it.
+- **Two DSH windows at once** (the Desktop app and a browser tab on the same
+  DSH): the first to look at the queue shows the news, the other does not.
+- **The command-line senders are best effort**: a missing `notify-send` or
+  a failing toast is listed as failed, with the reason.
+- **"Shown" is the system's own word**: the notification's show event. With
+  DeepSeek Harness's notifications turned off in System Settings, macOS may
+  take one without putting it on screen, and no app can tell; the settings
+  page's **This window** row says where to look.
 
 ## Tests
 
 ```sh
-node plugins/notifications/test/notifications.test.js   # offline, no DSH needed
-node --check plugins/notifications/lib/client.js         # the browser half parses
+npm test                                                   # the whole repository, these tests included
+node --test plugins/notifications/test/notifications.test.js
+node scripts/e2e.mjs notifications                          # real DSH, every build under .e2e/ and the app's
 ```
+
+- The unit tests (41) cover the senders and their quoting, the settings
+  check, the state file (modes, a broken file, ids across restarts), the
+  log file (its lines, modes, the move to `.1`, a folder it cannot write), every
+  outcome the notifier records and logs, the endpoints (the Remote markers
+  the gateway needs, failures in words), the host wiring, the coordinator's
+  news contract, and the browser half's sender: shown, watched, stale,
+  blocked, failed, unconfirmed, bursts, a click that opens the chat, a
+  reload that does not show twice. DSH's packages come from the newest
+  runtime under `.e2e/` (`test/peers.mjs`); link `.e2e` into a fresh copy.
+- The real-DSH test (`test/e2e/run.mjs`) runs DSH in a throwaway home with a
+  stand-in caller plugin (`test/e2e/caller`) and a real window whose Web
+  Notifications are replaced by a recorder, so nothing reaches the screen:
+  everything listed at the top of that file, with pictures light and dark
+  and at 760 px in `.e2e/shots/notifications/<DSH version>/`.
+- By hand, in a DSH Test instance with the plugin and `test/e2e/caller`
+  loaded: `node plugins/notifications/test/e2e/send.mjs "$(dsh-test url)"`
+  sends one the way another plugin does and prints the answer and what came
+  of it. That one is real: with the window hidden it shows on your screen.

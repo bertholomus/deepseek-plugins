@@ -88,10 +88,12 @@ export class Notifier {
      * @param {() => number} [options.now] - the clock, for tests.
      * @param {{ load(): object, save(state: object): boolean }} [options.store] - where the state is kept (state.js); memory only without.
      * @param {{ key: string, text: string }[]} [options.problems] - settings that were wrong (config.js), for the page.
+     * @param {string} [options.logFile] - where the log lines can be read, as the page names it ('' when nowhere).
      */
-    constructor({ settings = () => ({}), logger = { warn() {}, info() {} }, platform = process.platform, desktopHost = false, send, now = Date.now, store, problems = [] } = {}) {
+    constructor({ settings = () => ({}), logger = { warn() {}, info() {} }, platform = process.platform, desktopHost = false, send, now = Date.now, store, problems = [], logFile = '' } = {}) {
         this.settings = settings;
         this.logger = logger;
+        this.logFile = logFile;
         this.platform = platform;
         this.desktopHost = Boolean(desktopHost);
         this.send = send ?? ((notification, onError) => cliSend(platform, notification, { icon: iconFor(platform), onError }));
@@ -332,6 +334,7 @@ export class Notifier {
             windowSeenAt: this.lastBrowserSeen ? new Date(this.lastBrowserSeen).toISOString() : '',
             waiting: this.queue.length,
             problems: this.problems.map((problem) => ({ key: problem.key, text: problem.text })),
+            logFile: this.logFile,
             recent: this.recent.slice().reverse(),
         };
     }

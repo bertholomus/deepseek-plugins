@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { Notifier, EVENT_FIELDS, BROWSER_TTL_MS, MAX_QUEUED, QUEUE_STALE_MS, RECENT_MAX, TITLE_MAX, WINDOW_OUTCOMES } from '../lib/notifier.js';
 import { oneLine, cliCommand, cliSend, desktopSend, iconFor } from '../lib/backends.js';
 import { checkSettings, DEFAULTS, TITLES } from '../lib/config.js';
-import { StateFile, parseState, emptyState } from '../lib/state.js';
+import { LogFile, LOG_MAX_BYTES, StateFile, parseState, emptyState, stamp } from '../lib/state.js';
 
 register('./peers.mjs', import.meta.url);
 const peers = await import('@deepseek-ai/dsh-typert-protocol').then(async (protocol) => ({
@@ -209,6 +209,58 @@ test('state: saved whole, folder 700 and file 600, read back as it was', () => {
         writeFileSync(file, '{ broken');
         assert.deepEqual(store.load(), emptyState());
         assert.deepEqual(errors, ['its saved state was unreadable, so it starts empty']);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('log file: a line per call with its local time and level, folder 700 and file 600, one line even for a title with a newline', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-notifications-log-'));
+    try {
+        const file = join(dir, 'notifications', 'notifications.log');
+        const at = new Date(2026, 9, 26, 10, 2, 13).getTime();
+        const log = new LogFile(file, { now: () => at });
+        assert.equal(log.write('info', '#1 (handback) “Fix CI” handed back\nsecond line'), true);
+        assert.equal(log.write('warn', 'a setting is wrong: x'), true);
+        assert.equal(log.write('error', 'any other level is info'), true);
+        assert.equal(statSync(join(dir, 'notifications')).mode & 0o777, 0o700);
+        assert.equal(statSync(file).mode & 0o777, 0o600);
+        const lines = readFileSync(file, 'utf8').split('\n');
+        assert.match(stamp(at), /^2026-10-26T10:02:13[+-]\d\d:\d\d$/, 'local time to the second, with its offset');
+        assert.deepEqual(lines, [
+            `${stamp(at)} info #1 (handback) “Fix CI” handed back second line`,
+            `${stamp(at)} warn a setting is wrong: x`,
+            `${stamp(at)} info any other level is info`,
+            '',
+        ]);
+        assert.equal(LOG_MAX_BYTES, 1024 * 1024);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('log file: past its size it moves to .1 and starts over; a folder it cannot write is false, never a throw, and it tries again', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-notifications-log-'));
+    try {
+        const file = join(dir, 'notifications.log');
+        const log = new LogFile(file, { maxBytes: 120, now: () => 0 });
+        for (let n = 1; n <= 5; n += 1) assert.equal(log.write('info', `line ${n} ${'x'.repeat(20)}`), true);
+        const kept = readFileSync(file, 'utf8').trim().split('\n');
+        const older = readFileSync(`${file}.1`, 'utf8').trim().split('\n');
+        assert.ok(statSync(file).size <= 120 && statSync(`${file}.1`).size <= 120, 'neither file grows past the limit');
+        assert.deepEqual([...older, ...kept].map((l) => l.split(' ')[3]), ['1', '2', '3', '4', '5'].slice(-(older.length + kept.length)), 'the newest lines, in order, across the two files');
+        assert.equal(statSync(file).mode & 0o777, 0o600, 'the new file is 600 too');
+        // A new run picks up the size the file has, so the limit holds across restarts.
+        const again = new LogFile(file, { maxBytes: 120, now: () => 0 });
+        again.write('info', `line 6 ${'x'.repeat(20)}`);
+        assert.ok(statSync(file).size <= 120);
+        const blocked = join(dir, 'a-file');
+        writeFileSync(blocked, '');
+        const broken = new LogFile(join(blocked, 'notifications.log'));
+        assert.equal(broken.write('info', 'nowhere to go'), false);
+        assert.equal(broken.size, undefined, 'it reads the file again on the next line');
+        rmSync(blocked);
+        assert.equal(broken.write('info', 'now it can'), true, 'once the folder can be made, lines land');
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
@@ -454,11 +506,19 @@ test('host: it wires the service, DSH\'s desktop runtime and the endpoints, keep
         assert.ok(existsSync(file), 'the state file is in DSH\'s data folder');
         assert.equal(JSON.parse(readFileSync(file, 'utf8')).recent[0].title, 'T');
         assert.equal(statSync(file).mode & 0o777, 0o600);
+        // DSH 0.2 writes no plugin's log lines out, so the plugin keeps its own, beside its state.
+        const logFile = join(home, 'notifications', 'notifications.log');
+        const logged = readFileSync(logFile, 'utf8').split('\n').filter(Boolean).map((l) => l.replace(/^\S+ /, ''));
+        assert.ok(/^info started \(on; /.test(logged[0]), logged.join('\n'));
+        assert.ok(logged.includes('info DSH\'s own desktop notifications are here: they send from now on'), logged.join('\n'));
+        assert.ok(logged.some((l) => /^info #1 \(handback\) “T” sent: Handed to DSH's own desktop notifications/.test(l)), logged.join('\n'));
+        assert.equal(statSync(logFile).mode & 0o777, 0o600);
+        assert.equal(remote.notifier.status().logFile, logFile, 'the page names where the lines are (here a temporary folder, so in full)');
     });
 });
 
 test('host: switched off it still answers callers, with \'off\'; a wrong setting never stops it', needsPeers, async () => {
-    await withTempHome(async () => {
+    await withTempHome(async (home) => {
         const off = fakeCtx({ typertGateway: { provide() {} } });
         peers.plugin.apply(off, peers.plugin.Config({ enabled: false }));
         assert.equal(off.provided.get('notifications').notify({ title: 'T' }), 'off');
@@ -467,6 +527,7 @@ test('host: switched off it still answers callers, with \'off\'; a wrong setting
         const config = peers.plugin.Config({ notifyHandback: 'no', enabled: 1 });
         assert.doesNotThrow(() => peers.plugin.apply(wrong, config));
         assert.ok(out.some((line) => line.startsWith('warn notifications: a setting is wrong: “Handbacks” (notifyHandback) must be true or false, but it is "no"')), out.join('\n'));
+        assert.match(readFileSync(join(home, 'notifications', 'notifications.log'), 'utf8'), /^\S+ warn a setting is wrong: “Handbacks” \(notifyHandback\) must be true or false, but it is "no"/m, 'and its log file says so');
         const status = wrong.provided.get(peers.remote.SERVICE).notifier.status();
         assert.deepEqual(status.problems.map((p) => p.key), ['enabled', 'notifyHandback']);
         assert.equal(status.enabled, true, 'a wrong master switch counts as on, as the page says');

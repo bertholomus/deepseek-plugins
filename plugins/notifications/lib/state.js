@@ -11,9 +11,14 @@
  * keep counting up across restarts, and a window that took an item before
  * the restart never gets it again.
  *
+ * Beside it, the plugin's own log (LogFile): a line for every notification
+ * and every outcome, and each warning. DSH 0.2 keeps a plugin's log lines
+ * in memory only (its logger has no exporter that writes them out), so
+ * this file is where they can be read.
+ *
  * @module dsh-plugin-notifications/state
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -78,6 +83,63 @@ export class StateFile {
             return true;
         } catch (error) {
             this.onError('could not save its state', error);
+            return false;
+        }
+    }
+}
+
+/** A log line's time: local, to the second, with its offset (2026-10-26T10:02:13-07:00). */
+export function stamp(ms) {
+    const date = new Date(ms);
+    const pad = (n) => String(Math.abs(Math.trunc(n))).padStart(2, '0');
+    const offset = -date.getTimezoneOffset();
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+        + `${offset < 0 ? '-' : '+'}${pad(offset / 60)}:${pad(offset % 60)}`;
+}
+
+/** Where the log starts over: past this size it moves to `<file>.1` (one older file kept). */
+export const LOG_MAX_BYTES = 1024 * 1024;
+
+/**
+ * The plugin's own log: `<time> info|warn <text>`, one line each. The
+ * folder is 700 and the file 600, as for the state (titles name your
+ * chats). Past LOG_MAX_BYTES it moves to `<file>.1`, so the two hold the
+ * last few thousand notifications at most. `write` never throws.
+ */
+export class LogFile {
+    /**
+     * @param {string} file - the file's absolute path.
+     * @param {{ maxBytes?: number, now?: () => number }} [options]
+     */
+    constructor(file, { maxBytes = LOG_MAX_BYTES, now = Date.now } = {}) {
+        this.file = file;
+        this.maxBytes = maxBytes;
+        this.now = now;
+        /** The file's size as far as this run knows; read again after a failure. */
+        this.size = undefined;
+    }
+
+    /** @returns whether the line reached the disk. */
+    write(level, text) {
+        try {
+            const line = `${stamp(this.now())} ${level === 'warn' ? 'warn' : 'info'} ${String(text).replace(/[\r\n]+/g, ' ')}\n`;
+            const bytes = Buffer.byteLength(line);
+            if (this.size === undefined) {
+                const dir = dirname(this.file);
+                mkdirSync(dir, { recursive: true, mode: 0o700 });
+                chmodSync(dir, 0o700);
+                try { this.size = statSync(this.file).size; } catch { this.size = 0; }
+            }
+            if (this.size > 0 && this.size + bytes > this.maxBytes) {
+                renameSync(this.file, `${this.file}.1`);
+                this.size = 0;
+            }
+            appendFileSync(this.file, line, { mode: 0o600 });
+            if (this.size === 0) chmodSync(this.file, 0o600);
+            this.size += bytes;
+            return true;
+        } catch {
+            this.size = undefined;
             return false;
         }
     }

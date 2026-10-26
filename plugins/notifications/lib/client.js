@@ -79,7 +79,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             testSending: 'Sent. Waiting for the system to say it showed it…',
             recentTitle: 'Recent notifications',
             recentEmpty: 'None yet. News from other plugins shows here with what became of it, so a notification you missed is never lost.',
-            recentHint: 'The newest first, with what became of each. The log has every one.',
+            recentHint: 'The newest first, with what became of each.',
+            recentLog: (file) => `The newest first, with what became of each. Every one is also a line in ${file}.`,
             openChat: 'Open chat',
             unreachable: 'Could not read where notifications go: the plugin did not answer. It tries again by itself.',
             problemsTitle: 'A setting is wrong',
@@ -346,7 +347,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('p', { className: 'dshn-note', role: 'status', 'data-notifications-test-result': '' }, testLine)),
                 h('section', { className: 'dshn-section', 'data-notifications-recent': String(recent.length), 'aria-label': TEXT.recentTitle },
                     h('div', { className: 'dshn-title' }, TEXT.recentTitle),
-                    h('div', { className: 'dshn-hint' }, recent.length > 0 ? TEXT.recentHint : status ? TEXT.recentEmpty : ''),
+                    h('div', { className: 'dshn-hint', 'data-notifications-recent-hint': '' },
+                        recent.length > 0 ? (typeof status?.logFile === 'string' && status.logFile ? TEXT.recentLog(status.logFile) : TEXT.recentHint) : status ? TEXT.recentEmpty : ''),
                     recent.length > 0 ? h('ul', { className: 'dshn-list' }, ...recent.map((item) => h(RecentItem, { key: item.id, item, openSession }))) : null));
         }
 
