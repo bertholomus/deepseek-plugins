@@ -71,9 +71,10 @@ policy") is not one. `DECISION NEEDED` is read in any case, `BLOCKED` only
 in capitals; with both, the decision wins. The recommendation follows the
 question after a dash (`— recommend: …`, or `— recommend …` without the
 colon), in a sentence of its own (`Recommend: …`, `I'd recommend …`, `My
-recommendation: …`), or on the next line (`Recommend: …`). A reply without a marker that ends by asking
-you something shows its last question, or else its last line that asks for
-your word. Its card also carries the reply's lines just before the question
+recommendation: …`), or on the next line (`Recommend: …`). A reply
+without a marker that ends by asking you something shows its last
+question, or else its last line that asks for your word. Its card also
+carries the reply's lines just before the question
 (up to four lines or 400 characters, folded after two), so a list of
 choices comes with "Which one do you prefer?" and you can answer in place;
 a pick the reply states there shows under *Recommended*, in its own words
@@ -334,8 +335,9 @@ a turn of its own, and its reply asks: the thread's card shows at once,
 and when the chat takes the handback after its turn it is the same card
 (same id, same wait, announced once), answered into the thread. A decision
 line written `— recommend …` without the colon, with lines before it,
-keeps its pick and its lines, also after the restart below. Notifications are covered by the unit tests over a
-stand-in DSH. It drives the page and its settings in Plugins in a browser,
+keeps its pick and its lines, also after the restart below.
+Notifications are covered by the unit tests over a stand-in DSH. It
+drives the page and its settings in Plugins in a browser,
 light and dark, wide and narrow: the one-line answer box, the line that
 says your answer reached the session, a kind switched off, the webhook
 address kept in DSH's key store and never in a log (its setting and
@@ -353,7 +355,8 @@ holds the number), sets a wrong value and fixes it in the form, starts
 Session Watch with a number in quotes (named in Decisions' header, whose
 button puts the cursor in Session Watch's field, flagged there; one
 **Save** fixes it), switches
-Session Watch off and on in Plugins and in the profile, checks
+Session Watch off and on in Plugins and in the profile (while it is off,
+the open page asks no endpoint that is not there), checks
 `enabled: false`, sets it back to true in the profile while DSH runs (DSH
 applies the file, and the log says what changed), and checks the file
 modes. It reads the running DSH's fingerprint before and after and fails if

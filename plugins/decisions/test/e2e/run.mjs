@@ -19,6 +19,8 @@
  *   BLOCKED line and a plain question each make one card, logged once; a
  *   reply that asks nothing makes none. An answer in words, and Go with the
  *   recommendation, reach the session as its next message, read into a turn.
+ *   A decision line's "— recommend X" without its colon splits off its
+ *   pick, and the card keeps the lines before it (through the restart too).
  * - Dismiss and bring back.
  * - Approvals: Decisions holds the request and passes it on at once (the
  *   window's prompt shows too); Allow once from Decisions lets the tool run
@@ -37,6 +39,10 @@
  *   one card, the thread's, with the chat's recommendation; answered, the
  *   answer goes into the thread, and while the thread works on it neither
  *   card comes back and nothing is announced.
+ * - A thread that hands back while its chat is held in a turn of its own,
+ *   and whose reply asks: its card shows at once, and the handback the chat
+ *   takes after its turn is the same card (same id and wait, announced
+ *   once), answered into the thread.
  * - The page, from DSH's sidebar: the count, the cards with their controls,
  *   an answer and an approval from the page (a one-line answer box that
  *   opens when you are in it; the page says when the answer reached the
@@ -46,19 +52,26 @@
  *   list; the webhook address, refused when it cannot work, stored in DSH's
  *   key store (never the profile), shown as set, noted in What happened by
  *   its key, tested, used for new cards, never written to a log; a webhook
- *   that fails is said as a failure, on the page too; the address removed
- *   again, and noted.
+ *   that fails is said as a failure, on the page too, and a failed test
+ *   under its button (focus kept); the address removed again, and noted.
  * - Decisions switched off and on from Plugins beside the coordinator: its
  *   page is styled again and the coordinator's sidebar sheet stays its own.
- * - A restart repeats nothing and keeps what is still waiting.
+ * - A restart repeats nothing and keeps what is still waiting, each card
+ *   with its lines and pick (read from its session's log).
  * - A command instead of a webhook (the profile's mirrorCommand).
- * - A wrong setting: Decisions holds nothing and lists nothing, its page
- *   says which setting, and saving a good one fixes it.
+ * - A wrong type ("yes" for a switch) and a number in quotes (#32): named
+ *   with the value; the quoted number is flagged in the form and one Save
+ *   stores it. A wrong setting: Decisions holds nothing and lists nothing,
+ *   its page says which setting, and saving a good one fixes it. Session
+ *   Watch's number in quotes: named in Decisions' header, whose button puts
+ *   the cursor in Session Watch's field; one Save fixes it.
  * - Session Watch switched off in Plugins and on again: DSH reports no
  *   failure, and Decisions comes back by itself.
  * - Session Watch off in the profile: Decisions loads but does nothing (DSH
  *   reports nothing waiting, and approvals go to DSH's own prompt alone),
- *   and its page says what to do; `enabled: false` too.
+ *   its page says what to do and then asks no endpoint that is not there;
+ *   `enabled: false` too, then true again in the profile while DSH runs:
+ *   applied, and its log says which setting changed.
  * - Its folder is 700 and its files 600.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/decisions/test/e2e/run.mjs
@@ -982,6 +995,18 @@ try {
         await setDark(page, true);
         await shot(page, shots, 'watch-off-dark');
         await setDark(page, false);
+        // Once the page says so, the window asks nothing that is not there: DSH's plugin list says when Session Watch runs again.
+        const missing = [];
+        let listed = 0;
+        const onResponse = (response) => {
+            const path = new URL(response.url()).pathname;
+            if (response.status() >= 400 && /dsh-plugin-(decisions|session-watch)\//.test(path)) missing.push(`${response.status()} ${path}`);
+            if (/pluginManager\/listPlugins/.test(`${path} ${response.request().postData() ?? ''}`)) listed += 1;
+        };
+        page.on('response', onResponse);
+        await sleep(12000);
+        page.off('response', onResponse);
+        check('while Session Watch is off, the page asks no endpoint that is not there, only DSH\'s plugin list (12 s with the page open)', missing.length === 0 && listed > 0, json({ missing, listed }));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-watch-off');
     });
