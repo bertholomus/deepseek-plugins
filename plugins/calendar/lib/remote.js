@@ -309,9 +309,31 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(CalendarRemote, [
+/** The window's endpoints. */
+const METHODS = Object.freeze([
     'state', 'version', 'events', 'search', 'event', 'createEvent', 'updateEvent', 'deleteEvent', 'respond',
     'addAccount', 'updateAccount', 'removeAccount', 'syncNow', 'startSignIn', 'signInStatus', 'finishSignIn', 'cancelSignIn',
     'setGoogleClient', 'setMicrosoftClient', 'createCalendar', 'deleteCalendar', 'updateCalendar', 'setDefaultCalendar', 'setPrefs',
     'exportCalendar', 'importIcs',
 ]);
+markRemote(CalendarRemote, METHODS);
+
+/** What the window says while the plugin is switched off. */
+export const OFF_WORDS = 'The calendar is switched off: enabled is false in its entry (id: calendar) in this profile\'s cordis.patch.yml. Set it to true to use it again.';
+
+/**
+ * The window's endpoints while the plugin is switched off (enabled: false): nothing syncs, no file is read or
+ * written and chats get no tools, and every call the window makes says so in words ('calendar/off') rather than
+ * going unanswered.
+ */
+export class CalendarOff extends CalendarRemote {
+    constructor(ctx) {
+        super(ctx, null, {});
+    }
+
+    /** Every endpoint runs its work through here (CalendarRemote), so each says the calendar is off, and does nothing. */
+    async run() {
+        throw new RemoteError('calendar/off', OFF_WORDS, {});
+    }
+}
+markRemote(CalendarOff, METHODS);

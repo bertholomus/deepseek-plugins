@@ -31,7 +31,9 @@
  *   in words for the window and in the log, with the safe choice meanwhile:
  *   no calendar tools for chats, every chat's change asking first;
  * - its files are in the DSH's own home (DSH_HOME), never in the home's own
- *   DSH folder.
+ *   DSH folder;
+ * - switched off (enabled: false), nothing syncs or is written, chats get
+ *   no tools, and the window's calls say so in words ('calendar/off').
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/calendar/test/e2e/run.mjs
  *
@@ -638,6 +640,23 @@ try {
     const runOwn = feedCalendar?.id ?? 'missing';
     check('the plugin keeps its files in this DSH\'s home (DSH_HOME), not in the home\'s own DSH folder', existsSync(join(calendarDir, 'events', `${runOwn}.json`))
         && !existsSync(join(homedir(), '.dsh', 'calendar', 'events', `${runOwn}.json`)), runOwn);
+
+    // 6. Switched off (enabled: false): nothing syncs, nothing is written, chats get no tools, and the window's calls say so.
+    await stopDsh(child);
+    writeProfile(model.port, { enabled: false });
+    const logBefore = readText(logFile);
+    const storeBefore = statSync(storeFile).mtimeMs;
+    child = await boot(dsh, 'danger-full-access', 'switched off');
+    const web4 = await signInWeb();
+    const off = await waitFor(async () => { const s = await webApi(web4, 'dsh-plugin-calendar/state', {}); return s.error?.code === 'calendar/off' ? s : null; },
+        'the switched-off calendar', 30000).catch(() => null);
+    const offEvents = await webApi(web4, 'dsh-plugin-calendar/events', { from, to });
+    call = await agentCall('calendar_events', { from: '2026-10-12', to: '2026-10-18' });
+    check('switched off (enabled: false), the window\'s calls say so in words, naming the setting and where it is, rather than going unanswered',
+        off?.ok === false && /^The calendar is switched off: enabled is false in its entry \(id: calendar\) in this profile's cordis\.patch\.yml\./.test(off.error?.message ?? '')
+        && offEvents.ok === false && offEvents.error?.code === 'calendar/off', JSON.stringify({ off, offEvents }).slice(0, 400));
+    check('and chats get no calendar tools, nothing syncs and the plugin writes nothing', call.offered.length > 0 && !call.offered.some((t) => t.startsWith('calendar_'))
+        && readText(logFile) === logBefore && statSync(storeFile).mtimeMs === storeBefore, call.offered.join(', '));
 } catch (error) {
     failed += 1;
     console.log(`not ok - the run stopped: ${redact(error?.stack ?? error)}`);

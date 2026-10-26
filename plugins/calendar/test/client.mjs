@@ -953,3 +953,69 @@ test('motion stops for the loading bar too, the view has its own tint, and one r
     assert.equal(css.match(/\.dshcal-note\{/g).length, 1);
     assert.equal(css.match(/\.dshcal-notice\{/g).length, 1);
 });
+
+test('the look is DSH\'s (DESIGN.md): its tokens deepened for glass, its ring, its floating layers at its levels, its cards in a chat', () => {
+    const css = I.CSS;
+    const rules = css.split('}').map((rule) => rule.trim()).filter(Boolean);
+    // Every token of the plugin's own that a rule reads is set on its roots (none falls back silently).
+    // (Set on the roots in the style sheet, or on an element by the view: a calendar's own colour.)
+    const set = new Set([...css.matchAll(/(--cal-[\w-]+):/g), ...SOURCE.matchAll(/'(--cal-[\w-]+)':/g)].map((m) => m[1]));
+    const read = new Set([...css.matchAll(/var\((--cal-[\w-]+)/g)].map((m) => m[1]));
+    for (const name of read) assert.ok(set.has(name), `${name} is read but never set`);
+    // Its colours are DSH's: no colour literal for text, lines or fills in the token block, only the glass grounds' rgba.
+    const tokens = css.slice(0, css.indexOf('@media (prefers-reduced-transparency'));
+    for (const name of ['--cal-text', '--cal-meta', '--cal-faint', '--cal-soft', '--cal-accent', '--cal-link', '--cal-danger', '--cal-warn', '--cal-ok', '--cal-line', '--cal-hover']) {
+        const value = new RegExp(`${name}:([^;]+);`).exec(tokens)?.[1] ?? '';
+        assert.match(value, /^(var\(--dsw-|color-mix\(in srgb,var\(--dsw-)/, `${name} is ${value}`);
+    }
+    // Secondary text deepened toward DSH's label colour, as section 3 does.
+    assert.ok(tokens.includes('--cal-meta:color-mix(in srgb,var(--dsw-alias-label-secondary) 65%,var(--dsw-alias-label-primary))'));
+    // No token DSH doesn't define, and Wallpaper read only by its public values.
+    assert.ok(!/--dsh-font-mono|--dsh-color-bg-hover|--wp-(?!blur|tint)[\w-]+/.test(css));
+    assert.ok(css.includes('var(--ds-font-family-code,'));
+    // DSH's focus ring on every ring the plugin draws.
+    for (const outline of css.match(/outline:2px solid [^;}]+/g)) assert.equal(outline, 'outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))');
+    // Glass goes near-opaque where the system asks for less transparency.
+    assert.match(css, /@media \(prefers-reduced-transparency:reduce\)\{:is\([^)]*\)\{--cal-glass:rgba\(14,18,17,\.9\);--cal-conv:rgba\(10,13,12,\.95\)\}/);
+    // Floating layers at DSH's levels: the popover with DSH's menus and hover cards (100); nothing in the page reaches it.
+    const zOf = (selector) => Number(/z-index:(\d+)/.exec(rules.find((r) => r.startsWith(selector)) ?? '')?.[1]);
+    assert.equal(zOf('.dshcal-pop{'), 100);
+    assert.equal(zOf('.dshcal-toast{'), 1100);
+    for (const rule of rules) {
+        const z = Number(/z-index:(\d+)/.exec(rule)?.[1] ?? 0);
+        if (!rule.startsWith('.dshcal-pop{') && !rule.startsWith('.dshcal-toast{')) assert.ok(z < 100, rule.slice(0, 80));
+    }
+    assert.match(rules.find((r) => r.startsWith('.dshcal-pop{')), /background:var\(--dsw-specific-menu\);-webkit-backdrop-filter:var\(--dsw-menu-backdrop-filter\)/);
+    // DSH's Modal and Menu as DSH draws them: no ground, blur, line or corner of the plugin's on them.
+    for (const rule of rules.filter((r) => /^\.dshcal-(dlg|menu)[.{,\s]/.test(r))) assert.ok(!/background|backdrop-filter|border|radius/.test(rule), rule);
+    // No :has() on <body> (nor anywhere it could reach DSH's list).
+    assert.ok(!css.includes('body:has('));
+    // Cards in a chat draw like DSH's own there: opaque, a .5px line, DSH's large corner, no blur.
+    for (const name of ['.dshcal-chat-card{', '.dshcal-chat-line{']) {
+        const rule = rules.find((r) => r.startsWith(name));
+        assert.match(rule, /border:\.5px solid var\(--dsw-alias-border-l4\);border-radius:var\(--dsw-radius-lg\);background:var\(--dsw-alias-bg-layer-1\)/, name);
+        assert.ok(!rule.includes('backdrop-filter'), name);
+    }
+});
+
+test('toasts are DSH\'s Toast: a done one with its green check, a failure holding longer with its warning glyph', () => {
+    const done = I.toastProps({ text: 'Saved “Lunch”.', tone: 'ok', id: 1 }, () => {});
+    assert.equal(done.text, 'Saved “Lunch”.');
+    assert.equal(done.tone, 'success');
+    assert.equal(done.holdMs, 3000);
+    assert.equal(done.icon, undefined);
+    const failed = I.toastProps({ text: 'Not changed: the server said no.', tone: 'error', id: 2 }, () => {});
+    assert.equal(failed.tone, undefined, 'no green check on a failure');
+    assert.equal(failed.holdMs, 6000);
+    assert.equal(failed.icon?.type, 'IconWarningOutlineRegular');
+    // The store's toast: one at a time, gone when DSH's Toast says it faded, a newer one kept.
+    const store = I.calendarStore({ call: async () => ({}) });
+    store.toast('First');
+    const first = store.currentToast();
+    store.toast('Second', 'error');
+    const second = store.currentToast();
+    store.clearToast(first.id);
+    assert.equal(store.currentToast()?.text, 'Second', 'a faded older toast leaves the newer one');
+    store.clearToast(second.id);
+    assert.equal(store.currentToast(), null);
+});

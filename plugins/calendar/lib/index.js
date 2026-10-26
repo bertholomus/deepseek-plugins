@@ -24,7 +24,7 @@ import { TEST_ENDPOINTS, checkConfig, dataPath } from './config.js';
 import { isLoopback } from './http.js';
 import { CalendarManager } from './manager.js';
 import { ShownPlans, changeGate } from './policy.js';
-import { CalendarRemote, SERVICE } from './remote.js';
+import { CalendarOff, CalendarRemote, SERVICE } from './remote.js';
 import { calendarTools } from './tools.js';
 
 export const name = 'calendar';
@@ -96,7 +96,13 @@ export function apply(ctx, raw) {
     // Each setting checked in words; a wrong one never stops the plugin: it uses the safe choice and says so.
     const { settings: config, problems } = checkConfig(raw);
     for (const problem of problems) ctx.logger?.warn?.('calendar: setting %s is wrong: %s', problem.key, problem.text);
-    if (!config.enabled) return;
+    if (!config.enabled) {
+        // Switched off: no sync, no file, no tools. The window's calls say so in words rather than going unanswered.
+        ctx.inject(['typertGateway'], (scope) => {
+            scope.provide(SERVICE, new CalendarOff(scope));
+        });
+        return;
+    }
     // Its files in DSH's data folder, as DSH resolves it (DSH_HOME, else the home's DSH folder).
     const home = dshHomePath();
     config.storeFile = dataPath(config.storeFile, home);
