@@ -4,13 +4,13 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
-Updated: 2026-10-26 10:30 AM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 10:38 AM PDT by A (gmail), thread "Goal 9.5 builder"
 Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
 Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
 
 ## Doing now (GOAL95)
 - **Fleet card flip (Albert's priority, FLIP-1026): READY in DSH Test at 9:52 AM** — `goal95/fleet-card-flip` at 4e24735 (on MiniMe's b399db0 and b44d7f8; pushed to tank). DSH Test `g95-fleet-flip` (port 19533) stays running with Fleet and Wallpaper from `~/Projects/goal95/wt/fleet-card-flip` for Albert to look at (Models in the sidebar). Pictures, recordings, frame timing (p99 17.7 ms) and checks: `~/Projects/goal95/status/fleet-work/flip/`. Not deployed: MiniMe deploys after Albert's OK; never switch the live checkout. The branch merges into goal95/fleet and Fleet's GOAL95 work continues (hand-over by 12:45 PM).
-- 16 builder subagents (started 8:47-8:49 AM) audit and fix all 20 plugins, one worktree and DSH Test instance each (`g95-<plugin>-b`); each keeps `~/Projects/goal95/status/<plugin>.md`. Hand-overs due 11:00 AM (Session Bridge, Reasoning Pill) to 12:15 PM (Categories, Hermes Bridge, Wallpaper). A fresh judge (`g95-<plugin>-j<N>`) starts on each hand-over. Handed over so far: Session Bridge b5768b6, Reasoning Pill c868e41, dsh-site 56fa8e9, DNA Studio cdac02e (local repo, no remote), Decisions ad79740; their judges run (round 1, Decisions round 5) (agents in `~/Projects/goal95/agents.txt`).
+- 16 builder subagents (started 8:47-8:49 AM) audit and fix all 20 plugins, one worktree and DSH Test instance each (`g95-<plugin>-b`); each keeps `~/Projects/goal95/status/<plugin>.md`. Hand-overs due 11:00 AM (Session Bridge, Reasoning Pill) to 12:15 PM (Categories, Hermes Bridge, Wallpaper). A fresh judge (`g95-<plugin>-j<N>`) starts on each hand-over. Handed over so far: Session Bridge b5768b6, Reasoning Pill c868e41, dsh-site 56fa8e9, DNA Studio cdac02e (local repo, no remote), Decisions ad79740, Calendar 8b7983c; their judges run (round 1, Decisions round 5). dsh-site round 1: 8.0 NOT YET; a fresh round-2 builder took it over (hand-over by 12:30 PM), the first builder stays on Hermes Bridge (agents in `~/Projects/goal95/agents.txt`).
 
 ## Done (GOAL95, newest first)
 - 8:49 AM PDT: builders started (briefs `~/Projects/goal95/briefs/{RULES,BUILDER,JUDGE-GOAL95}.md`; agents listed in `~/Projects/goal95/agents.txt`).
@@ -29,6 +29,7 @@ Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19
 - Instance names with distinct ports: `~/Projects/goal95/instances.txt`. Memory guard: `~/Projects/goal95/bin/slot take|give|list` (`slots.max` 8 for anyone, plus `slots.judges` 6 judge-only slots 9-14 for owners named `-j<N>`; a slot is taken only while memory is at least 20% free).
 
 ## Gotchas (GOAL95)
+- dsh-site scorecards and their pictures stay local in `review/` (not committed); its SCOREBOARD rows give the scores only.
 - Shared kit: goal95/decisions changes `shared/client-kit.js` (synced into all 7 kit blocks) and carries goal95/session-watch's db946fd as 18a58ee. Merge goal95/session-watch to main first, then goal95/decisions, then run `node scripts/sync-shared.mjs --check`; any other branch that synced `shared/` needs the same check after its merge.
 - Commit 09a18d1 (suite/v1) carries a tool-attribution trailer by mistake; it is not rewritten (no force-push). Commit messages here carry no attribution lines.
 - Live dsh-site: its builder's audit found security problems in the live version (details only in the local `~/Projects/goal95/status/dsh-site.md`); the fix is `goal95/dsh-site` 56fa8e9 (judge round 1 running) and needs a new `allowHosts` value in the live row in the same change. Raised in the thread at 10:03 AM; deploying or switching it off is MiniMe's and Albert's call.
