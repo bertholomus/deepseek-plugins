@@ -4,12 +4,12 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
-Updated: 2026-10-26 9:35 AM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 9:56 AM PDT by A (gmail), thread "Goal 9.5 builder"
 Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
 Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
 
 ## Doing now (GOAL95)
-- **PRIORITY (Albert, 8:46 AM, brief `briefs/FLIP-1026.md`, screenshot `briefs/FLIP-1026-models-live.png`): Fleet Models page, a Library card flips (glass-aware 3D) to a facts back with Hugging Face and GitHub links.** The Fleet builder does it first, in `~/Projects/goal95/wt/fleet-card-flip` on `goal95/fleet-card-flip` (from 5b4d1eb, pushed to tank), DSH Test instance `g95-fleet-flip` (port 19533, a slot held for it, left running for Albert when ready). It writes "FLIP READY" at the top of `~/Projects/goal95/status/fleet.md`; then one line to Albert; then the branch merges into goal95/fleet and Fleet's GOAL95 work continues (hand-over by 12:45 PM). MiniMe deploys after Albert's OK; never switch the live checkout.
+- **Fleet card flip (Albert's priority, FLIP-1026): READY in DSH Test at 9:52 AM** — `goal95/fleet-card-flip` at 4e24735 (on MiniMe's b399db0 and b44d7f8; pushed to tank). DSH Test `g95-fleet-flip` (port 19533) stays running with Fleet and Wallpaper from `~/Projects/goal95/wt/fleet-card-flip` for Albert to look at (Models in the sidebar). Pictures, recordings, frame timing (p99 17.7 ms) and checks: `~/Projects/goal95/status/fleet-work/flip/`. Not deployed: MiniMe deploys after Albert's OK; never switch the live checkout. The branch merges into goal95/fleet and Fleet's GOAL95 work continues (hand-over by 12:45 PM).
 - 16 builder subagents (started 8:47-8:49 AM) audit and fix all 20 plugins, one worktree and DSH Test instance each (`g95-<plugin>-b`); each keeps `~/Projects/goal95/status/<plugin>.md`. Hand-overs due 11:00 AM (Session Bridge, Reasoning Pill) to 12:15 PM (Categories, Hermes Bridge, Wallpaper). A fresh judge (`g95-<plugin>-j<N>`) starts on each hand-over.
 
 ## Done (GOAL95, newest first)
