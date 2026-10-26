@@ -822,6 +822,8 @@ try {
     window = undefined;
 
     // ── A folder inside the vault DSH may not read ─────────────────────
+    // The vault copy the unreadable-folder step made (never a folder of the checkout).
+    if (!lockedVault || !lockedVault.startsWith(`${run.root}/`)) throw new Error(`no vault copy of the run's own to close a folder in (${lockedVault || 'none'})`);
     closedFolder = join(lockedVault, 'Projects', 'osprey-mobile');
     mkdirSync(closedFolder, { recursive: true });
     writeFileSync(join(closedFolder, 'Releases.md'), '# Osprey releases\n\nThe app ships to the app stores on Thursdays.\n');
