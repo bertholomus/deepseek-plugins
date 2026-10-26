@@ -119,19 +119,18 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     const heads = [];
     const warnings = [];
     let present = null;
+    const removed = [];
     const document = {
         querySelector: () => present,
-        createElement: (type) => ({ type, dataset: {} }),
+        createElement: (type) => ({ type, dataset: {}, remove() { removed.push(this); } }),
         head: { appendChild: (tag) => { heads.push(tag); } },
     };
     const { id, client } = loadClient({ document, console: { ...console, warn: (...parts) => { warnings.push(parts.join(' ')); } } });
     assert.equal(id, 'dsh-plugin-categories');
     assert.deepEqual(plain(client.inject), ['slots']);
-    const { CSS, SidebarTree, CategoriesPage, CategoriesIcon, CategoryChip } = client.internals;
-    // Its styles once, under its own prefix, and the session list's rules read DSH's own indent.
-    assert.equal(heads.length, 1);
-    assert.deepEqual(plain(heads[0].dataset), { plugin: 'dsh-plugin-categories', pluginCss: 'dsh-plugin-categories/client.css' });
-    assert.equal(heads[0].textContent, CSS);
+    const { CSS, SidebarTree, CategoriesPage, CategoriesIcon, CategoryChip, addStyles } = client.internals;
+    // Its styles, under its own prefix, only while it runs (added by apply, below).
+    assert.equal(heads.length, 0, 'loading adds no sheet');
     assert.match(CSS, /\.dshc-sb-head\{/);
     assert.match(CSS, /\.dshc-tree-row\{/);
     assert.doesNotMatch(CSS, /dshp-|data-projects-/);
@@ -149,26 +148,36 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     assert.match(CSS, /@media \(prefers-reduced-motion:reduce\)\{\.dshc-sb-chev\{transition:none\}\}/);
     for (const [, layer] of CSS.matchAll(/z-index:(\d+)/g)) assert.ok(Number(layer) < 100, `z-index ${layer} stays under DSH's floating layers`);
     assert.doesNotMatch(CSS, /(^|[},])\s*(:root|html|body)\s*\{/);
-    present = {};
-    loadClient({ document });
-    assert.equal(heads.length, 1, 'a second load adds no second sheet');
-
     // Each part waits for its own DSH services; the categories are read as soon as the window can ask.
     const registered = [];
     const injected = [];
     const effects = [];
+    const disposers = new Map();
     const rpc = [];
     const opened = [];
     const panels = [];
     const connection = { rpc: { call: async (path, method, payload) => { rpc.push([path, method, plain(payload)]); return { ok: true, value: { categories: [] } }; } } };
     const ctx = {
-        effect: (fn, label) => { effects.push(label); return fn(); },
+        effect: (fn, label) => { effects.push(label); const dispose = fn(); disposers.set(label, dispose); return dispose; },
         inject: (names, fn) => { injected.push(plain(names)); fn(ctx); },
         slots: { inject: (_name, fn) => fn(), register: (slot, component) => { registered.push([slot, component]); return () => {}; } },
         connection, uiWorkspace: { openSession: (sessionId) => { opened.push(sessionId); } },
         get: (name) => (name === 'layout' ? { selectPanel: (panel) => { panels.push(panel); } } : undefined),
     };
     client.apply(ctx);
+    // Its sheet once while it runs; switched off, it goes, so nothing of it is left (DESIGN.md).
+    assert.equal(heads.length, 1);
+    assert.deepEqual(plain(heads[0].dataset), { plugin: 'dsh-plugin-categories', pluginCss: 'dsh-plugin-categories/client.css' });
+    assert.equal(heads[0].textContent, CSS);
+    assert.equal(effects[0], 'categories: styles');
+    disposers.get('categories: styles')();
+    assert.deepEqual(removed, [heads[0]]);
+    // One there already (an earlier copy's) is taken over, never doubled.
+    present = { dataset: {}, textContent: 'old' };
+    assert.equal(addStyles(), present);
+    assert.equal(present.textContent, CSS);
+    assert.equal(heads.length, 1, 'no second sheet');
+    present = null;
     assert.deepEqual(injected, [['connection'], ['uiWorkspace']]);
     assert.deepEqual(registered.map(([slot, component]) => [slot.name, slot.id ?? slot.key, slot.order, slot.label, component]), [
         ['shell.overlay', 'dsh-plugin-categories:sidebar', undefined, undefined, SidebarTree],
@@ -212,6 +221,7 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     warnings.length = 0;
     const loose = loadClient({ document: { querySelector: () => { throw new Error('no head'); } }, console: { ...console, warn: (...parts) => { warnings.push(parts.join(' ')); } } });
     assert.equal(loose.id, 'dsh-plugin-categories');
+    assert.doesNotThrow(() => loose.client.apply({ effect: (fn) => fn(), inject: () => {} }));
     assert.deepEqual(warnings, ['[categories] could not add the plugin\'s styles: no head']);
 });
 

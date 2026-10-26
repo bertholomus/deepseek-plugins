@@ -189,16 +189,31 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             `.dshc-sr{${HIDDEN}}`,
         ].join('');
         const CSS_ID = `${BUNDLE}/client.css`;
-        try {
-            if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`) === null) {
+        /**
+         * The plugin's style sheet, one per window, while the plugin runs: its
+         * disposer takes it out again, so switched off in Plugins the plugin
+         * leaves no rule behind. A sheet already there (an earlier copy's) is
+         * taken over rather than doubled. Never throws.
+         * @returns the sheet, or undefined where it could not be added.
+         */
+        function addStyles() {
+            try {
+                if (typeof document === 'undefined') return undefined;
+                const found = document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_ID)}]`);
+                if (found) {
+                    found.textContent = CSS;
+                    return found;
+                }
                 const tag = document.createElement('style');
                 tag.dataset.plugin = BUNDLE;
                 tag.dataset.pluginCss = CSS_ID;
                 tag.textContent = CSS;
                 document.head.appendChild(tag);
+                return tag;
+            } catch (error) {
+                console.warn(`[categories] could not add the plugin's styles: ${error?.message ?? error}`);
+                return undefined;
             }
-        } catch (error) {
-            console.warn(`[categories] could not add the plugin's styles: ${error?.message ?? error}`);
         }
 
         // ── Shared ─────────────────────────────────────────────────────────
@@ -2217,6 +2232,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const inject = ['slots'];
 
         function apply(ctx) {
+            // Its styles while it runs, gone when it is switched off (DESIGN.md: off leaves no rule).
+            ctx.effect(() => {
+                const sheet = addStyles();
+                return () => { try { sheet?.remove?.(); } catch { /* already gone with the window */ } };
+            }, 'categories: styles');
             // DSH's connection, once DSH provides it: the plugin's endpoints go over it.
             let connection;
             const link = hostLink(() => connection);
@@ -2235,7 +2255,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pieces the views are built on.
         module.exports.internals = {
-            BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP,
+            BUNDLE, IDS, OTHERS, CSS, TEXT, PAGE, SIDEBAR, CHIP, addStyles,
             hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
             pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, WorkspaceMenu, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
             sidebarGroups, sidebarRules, workspaceDot, groupDot, sameSeats, sectionWorkspace, sectionAt, placeHeaders, markList, describeWorkspaces, markWorkspaceDots, useTreeSync, useCategoryDrags,
