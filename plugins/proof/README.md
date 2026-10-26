@@ -76,11 +76,12 @@ the build that ran, whatever a test run after it printed, and a run whose
 every test passed and that failed on a coverage threshold shows the tests
 (not the coverage). A deploy whose health check then failed is shown when
 the reply reports that check's answer ("The health check answers 503 for
-now") and does not say it is up. A reply that says itself that it did not check its fix ("Tests
-were not run, per your instruction", "I didn't run the tests") is not
-flagged for the fix having no run after it; it still is when the fix's edit
-failed or a run after it failed. A bare label ("**Fixed** — `add` now sums
-every argument") claims what the clause after it says.
+now") and does not say it is up. A reply that says itself that it did not
+check its fix ("Tests were not run, per your instruction", "I didn't run
+the tests") is not flagged for the fix having no run after it; it still is
+when the fix's edit failed or a run after it failed. A bare label
+("**Fixed** — `add` now sums every argument") claims what the clause after
+it says.
 
 A results table with before and after columns is read row by row: a row
 whose figure went down ("| p50 | 310 ms | 120 ms |") claims that change,
@@ -359,8 +360,11 @@ each flagged claim it shows:
 
 - the claim's own clause, quoted (its whole sentence shows on hover), and
   why it was flagged ("No test ran in this turn.", "The last push in this
-  turn did not go through: … rejected …"), with commands drawn as code;
-  for a claim the check verified, the check's reason instead;
+  turn did not go through: … rejected …"), with commands drawn as code (a
+  program run by its full path is named by its own name, so
+  `/opt/tools/node-v22/bin/node --test a.test.mjs` shows as
+  `node --test a.test.mjs`); for a claim the check verified, the check's
+  reason instead;
 - for a contradiction, **What the turn shows**: the line of output that
   says otherwise, when the why does not quote it already;
 - the independent check's line when there is one: its state (*waiting to

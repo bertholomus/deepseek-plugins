@@ -155,6 +155,11 @@ test('evidence: each tool result becomes one item of the right kind', () => {
     assert.equal(edit('src/a.ts').code, true);
     assert.equal(edit('README.md').code, undefined);
     assert.equal(itemOf({ name: 'todo_write', args: {}, text: 'Todos updated.' }), undefined);
+    // A program run by its full path is shown by its own name, so the card says what ran.
+    const long = bash('/Users/dev/tools/node-v22.23.4-darwin-arm64/bin/node --test broken.test.mjs', '# tests 2\n# pass 1\n# fail 1\n[exit code: 1]');
+    assert.equal(long.text, '`node --test broken.test.mjs` exited 1: 1 passed, 1 failed');
+    assert.match(long.cmd, /^\/Users\/dev\/tools\//);
+    assert.equal(bash('cd /home/dev/app && /home/dev/.venv/bin/pytest -q | /usr/bin/tee /tmp/t.log', '3 passed in 0.02s').text, '`cd /home/dev/app && pytest -q | tee /tmp/t.log` exited 0: 3 passed, 0 failed');
 });
 
 // ── Judging ────────────────────────────────────────────────────────

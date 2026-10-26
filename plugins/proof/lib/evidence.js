@@ -580,6 +580,8 @@ export function codesIn(text) {
 }
 
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** A command as a card shows it: a program run by its full path is named by its own name (`node --test a.test.mjs`, not `/opt/tools/node-v22/bin/node --te…`), so a long path does not hide what ran. */
+const shownCommand = (command) => oneLine(command).replace(/(^|&&|\|\||[;|(])(\s*)\/(?:[^\s/'"]+\/)+([^\s/'"]+)(?=\s|$)/g, '$1$2$3');
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 /** The command a shell call ran, from its arguments (an object, or JSON text). */
@@ -951,7 +953,7 @@ export function itemOf({ name, args, text, isError = false }) {
         const shipped = ships ? (kind === 'deploy' ? ok : outcome(exit, deployIn(out))) : undefined;
         // A download that went through (`curl -sO …` before a checksum) is a request that answered.
         const fetched = kind !== 'probe' && /\b(curl|wget)\b/i.test(command) && exit === 0 && !/\bcurl: \(\d+\)|\b(4\d\d|5\d\d) (Not Found|Forbidden|Unauthorized|Internal Server Error|Bad Gateway|Service Unavailable)\b/i.test(out);
-        const ran = `\`${clip(oneLine(asRun) || tool, 80)}\``;
+        const ran = `\`${clip(shownCommand(asRun) || tool, 80)}\``;
         // A run that failed though it exited 0 (a CI read that lists a failed run, `npm test | tail`) is not said to have exited 0.
         const how = ok === false && exit === 0 ? 'ran' : typeof exit === 'number' ? `exited ${exit}` : exit === null ? 'ran' : exit === 'error' ? 'failed to run' : exit === 'denied' ? 'was denied by the sandbox' : exit === 'timeout' ? 'timed out' : `ended (${exit})`;
         // A status read that lists some pods well and some not ("2 in CrashLoopBackOff, 3 Running").
