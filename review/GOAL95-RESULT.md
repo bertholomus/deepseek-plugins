@@ -9,7 +9,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
 | --- | --- | --- | --- | --- | --- |
-| Agent Terminals | being judged (round 4; earlier best 8.5, round 3, 3290a42) | 44ce483 | goal95/agent-terminals | NOT YET | judge working |
+| Agent Terminals | 9.0 (round 4) | 44ce483 | goal95/agent-terminals | NOT YET | a message sent twice back to back is proven by the first one's transcript line, so after a restart the second is never typed yet reads delivered (`provenIn()` in `lib/transcripts.js`) |
 | Autopilot | not judged yet (earlier best 8.5, round 3, ea10517) | db0453a | goal95/autopilot | NOT YET | builder working |
 | Calendar | 8.0 (round 1) | 8b7983c | goal95/calendar | NOT YET | DSH's approval for a chat's change does not say what changes; reminders are stored but never fire |
 | Canon | being judged (round 4; earlier best 8.0) | b98506f | goal95/canon | NOT YET | judge working |
