@@ -47,15 +47,14 @@ seconds, and Decisions notifies you of it (the coordinator nudges such a
 thread to hand back at once, and the handback that follows is the card).
 A recommendation in any of them shows under *Recommended*, with
 **Go with the recommendation**, and a link in the question
-(`[Port pick](.dsh-thread/t1)`) reads as its words.
-A handback's pick counts wherever it is said (`Recommend 9090 for the status
-page.`, `9090 (recommended)`), and a handback that asks no question is
-headed *The thread needs your decision:* (or *The thread is blocked:*). An
+(`[Port pick](.dsh-thread/t1)`) reads as its words. A handback's pick
+counts wherever it is said (`Recommend 9090 for the status page.`,
+`9090 (recommended)`), and a handback that asks no question is headed
+*The thread needs your decision:* (or *The thread is blocked:*). An
 approval or a question from inside a thread says whose thread it is (*in a
-thread of “Release”*).
-Once the thread's card is answered (here or in the thread), the chat's
-relay of that question does not come back as a card of its own, also
-after a restart; a new question in the chat does. A reply
+thread of “Release”*). Once the thread's card is answered (here or in the
+thread), the chat's relay of that question does not come back as a card
+of its own, also after a restart; a new question in the chat does. A reply
 that only offers more ("Let me know if you'd like me to update the docs")
 asks nothing, so it is not listed. A subagent's replies are left out: the
 session that started it reads them. A reply's question leaves the list
@@ -74,9 +73,9 @@ colon), in a sentence of its own (`Recommend: …`, `I'd recommend …`, `My
 recommendation: …`), or on the next line (`Recommend: …`). A reply
 without a marker that ends by asking you something shows its last
 question, or else its last line that asks for your word. Its card also
-carries the reply's lines just before the question
-(up to four lines or 400 characters, folded after two), so a list of
-choices comes with "Which one do you prefer?" and you can answer in place;
+carries the reply's lines just before the question (up to four lines or
+400 characters, folded after two), so a list of choices comes with "Which
+one do you prefer?" and you can answer in place;
 a pick the reply states there shows under *Recommended*, in its own words
 without its reason: "I would recommend **release/v2** because the prefix
 is the convention" gives *release/v2* (a bold or code span the pick starts
@@ -336,11 +335,12 @@ and when the chat takes the handback after its turn it is the same card
 (same id, same wait, announced once), answered into the thread. A decision
 line written `— recommend …` without the colon, with lines before it,
 keeps its pick and its lines, also after the restart below.
-Notifications are covered by the unit tests over a stand-in DSH. It
-drives the page and its settings in Plugins in a browser,
-light and dark, wide and narrow: the one-line answer box, the line that
-says your answer reached the session, a kind switched off, the webhook
-address kept in DSH's key store and never in a log (its setting and
+Notifications are covered by the unit tests over a stand-in DSH.
+
+In a browser, the real-DSH test drives the page and its settings in
+Plugins, light and dark, wide and narrow: the one-line answer box, the line
+that says your answer reached the session, a kind switched off, the
+webhook address kept in DSH's key store and never in a log (its setting and
 removal noted by key), a test message and new cards sent to a stand-in
 webhook on this machine, a failing webhook said as a failure in the log
 and on the page, a failed **Send a test** said under its button with the
@@ -354,10 +354,9 @@ in the form in its quotes, fixed with one **Save**, and the profile then
 holds the number), sets a wrong value and fixes it in the form, starts
 Session Watch with a number in quotes (named in Decisions' header, whose
 button puts the cursor in Session Watch's field, flagged there; one
-**Save** fixes it), switches
-Session Watch off and on in Plugins and in the profile (while it is off,
-the open page asks no endpoint that is not there), checks
-`enabled: false`, sets it back to true in the profile while DSH runs (DSH
-applies the file, and the log says what changed), and checks the file
-modes. It reads the running DSH's fingerprint before and after and fails if
-it moved; pictures go to `.e2e/shots/decisions/<version>/`.
+**Save** fixes it), switches Session Watch off and on in Plugins and in the
+profile (while it is off, the open page asks no endpoint that is not
+there), checks `enabled: false`, sets it back to true in the profile while
+DSH runs (DSH applies the file, and the log says what changed), and checks
+the file modes. It reads the running DSH's fingerprint before and after and
+fails if it moved; pictures go to `.e2e/shots/decisions/<version>/`.
