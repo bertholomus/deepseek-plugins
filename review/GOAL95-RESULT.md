@@ -4,13 +4,13 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 3:55 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 4:00 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
 | --- | --- | --- | --- | --- | --- |
 | Agent Terminals | 9.0 (round 4) | 44ce483 | goal95/agent-terminals | NOT YET | a message sent twice back to back is proven by the first one's transcript line, so after a restart the second is never typed yet reads delivered (`provenIn()` in `lib/transcripts.js`) |
-| Autopilot | being judged (round 5; earlier best 8.5, round 3, ea10517) | f9f84e7 | goal95/autopilot | NOT YET | judge working |
+| Autopilot | 9.0 (round 5; round 3 was 8.5) | f9f84e7 | goal95/autopilot | NOT YET | a failed carry-on turn in a session with no todos or goal is never retried and its row says only "failed" (`onTurnEnd` in `lib/pilot.js`); "happy to" or "let me know" in a reply's last lines blocks the nudge, and the README does not say so |
 | Calendar | 8.0 (round 1) | 8b7983c | goal95/calendar | NOT YET | DSH's approval for a chat's change does not say what changes; reminders are stored but never fire |
 | Canon | 8.5 (round 4) | b98506f | goal95/canon | NOT YET | usefulness 8.5: the quote is too thin (`bestPassage` in `lib/vault.js`), and after Promote nothing says which of two notes is current |
 | Categories | 8.8 (round 1) | 70977a1 | goal95/categories | NOT YET | UX 8: "Add a workspace" shows two blank menu items; a failed save is announced as done and lost at the next restart |
@@ -31,4 +31,4 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Wallpaper | 8.4 (round 1) | 29329f7 | goal95/wallpaper (redesign repo) | NOT YET | at the default tint DSH's own text is unreadable over a picture of the other tone, and an opaque band shows behind the glass composer in every open chat |
 
 Live DSH: pid 43210, started Mon Oct 26 07:14:47, unchanged at every check until 3:35:11 PM, when Albert restarted it himself ("that was me", 3:42 PM); every DeepSeek Harness process on the Mac, DSH Test instances included, ended with it, and the live app came back as pid 64099 with its profile unchanged. Its patch sha moved at 9:00 AM (a scheduled context job) and at
-9:06, 9:31 and 9:45 AM (MiniMe's direct edits of Fleet Shell's `runnerRev`), never from this work; f240a78d… from 9:45 AM; cb6b0fd7… since 3:15 PM (MiniMe's runnerRev 35 to 36 for Fleet Shell, diffed against its own backup).
+9:06, 9:31 and 9:45 AM (MiniMe's direct edits of Fleet Shell's `runnerRev`), never from this work; f240a78d… from 9:45 AM; cb6b0fd7… from 3:15 PM and a2c42a4d… since 3:49 PM (MiniMe's runnerRev 35 to 36, then 37, for Fleet Shell; diffed against a 2:53 PM copy, nothing else changed).
