@@ -1154,6 +1154,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return [...counts.entries()].sort((a, b) => rank(a[0]) - rank(b[0]) || b[1] - a[1]).map(([word, count]) => ({ word, count }));
         }
 
+        /** The state words to show: the counted ones, and a chosen one no session reads now (count 0), in its place. */
+        function wordsWith(words, chosen) {
+            if (!chosen || words.some((w) => w.word === chosen)) return words;
+            const rank = (word) => {
+                const at = WORD_ORDER.indexOf(word);
+                return at < 0 ? WORD_ORDER.length : at;
+            };
+            const at = words.findIndex((w) => rank(w.word) > rank(chosen));
+            const zero = { word: chosen, count: 0 };
+            return at < 0 ? [...words, zero] : [...words.slice(0, at), zero, ...words.slice(at)];
+        }
+
         /** Each user plugin as DSH's plugin list has it: on, off, not running (on but not started), or not installed; undefined when DSH cannot say. */
         function usersOf(rows) {
             if (!Array.isArray(rows)) return undefined;
@@ -1195,6 +1207,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** The sessions of the chosen state, newest first, each with when it last changed and Open. */
         function ChosenView({ word, rows, onOpen }) {
             const mine = (Array.isArray(rows) ? rows : []).filter((row) => row.word === word);
+            if (mine.length === 0) {
+                return h('div', { id: `${P}-chosen`, className: `${P}-chosen`, 'data-session-watch-chosen': word },
+                    h('p', { className: `${P}-note`, role: 'status' }, `No session reads ${word} now.`));
+            }
             return h('div', { id: `${P}-chosen`, className: `${P}-chosen`, 'data-session-watch-chosen': word },
                 h('ul', { className: `${P}-sessions`, 'aria-label': `Sessions that read ${word}` },
                     mine.slice(0, SHOWN).map((row) => {
@@ -1208,30 +1224,32 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** What it watches, from what `readWatching` gave: pure, for the tests. Choosing a state lists its sessions. */
-        function WatchingView({ data, error, onRetry, chosen, onChoose, onOpen }) {
+        function WatchingView({ data, error, onRetry, chosen, onChoose, onOpen, sectionRef }) {
             const head = [h('h2', { key: 'title', className: `${P}-h2`, id: `${P}-watching-title` }, 'What it watches')];
             let body;
             if (!data) {
                 body = error ? h(kit.ErrorLine, { text: error, onRetry, lead: 'Couldn\'t read the sessions' }) : h(kit.Loading, { text: 'Reading the sessions' });
             } else {
                 const running = data.words.find((w) => w.word === 'running')?.count ?? 0;
-                // A state no session reads any more closes by itself.
-                const open = data.words.some((w) => w.word === chosen) ? chosen : undefined;
+                // A chosen state stays, in its place, after its last session leaves it: it says so, and the focus stays on it.
+                const open = typeof chosen === 'string' && chosen !== '' ? chosen : undefined;
+                const words = wordsWith(data.words, open);
                 head.push(h('span', { key: 'count', className: `${P}-watching-count ${P}-num` }, data.total === 0 ? 'none yet' : `${sessionsWord(data.total)} · ${running} running`));
                 body = [
                     data.total === 0
                         ? h('p', { key: 'none', className: `${P}-note` }, 'No sessions yet. Each new session shows here as soon as DSH makes it.')
                         : h('ul', { key: 'words', className: `${P}-words`, 'aria-label': 'Sessions by state' },
-                            data.words.map(({ word, count }) => h('li', { key: word },
+                            words.map(({ word, count }) => h('li', { key: word },
                                 h('button', {
                                     type: 'button',
                                     className: `${P}-word`,
                                     'aria-expanded': open === word ? 'true' : 'false',
                                     ...(open === word ? { 'aria-controls': `${P}-chosen` } : {}),
                                     title: open === word ? 'Hide these sessions' : `Show the ${sessionsWord(count)} that read ${word}`,
-                                    onClick: () => onChoose?.(open === word ? undefined : word),
+                                    // Closing a state no session reads now takes its button away: the focus goes to the first state left.
+                                    onClick: () => onChoose?.(open === word ? undefined : word, { gone: open === word && count === 0 }),
                                 }, h(kit.StateTag, { word }), h('span', { className: `${P}-num` }, String(count)))))),
-                    open ? h(ChosenView, { key: 'chosen', word: open, rows: data.rows, onOpen }) : null,
+                    open && data.total > 0 ? h(ChosenView, { key: 'chosen', word: open, rows: data.rows, onOpen }) : null,
                     data.users ? h('p', { key: 'users', className: `${P}-note`, 'data-session-watch-users': '' },
                         `Autopilot, Decisions and Agent Terminals read sessions through it. ${listed(data.users.map((u) => `${u.name} is ${u.state}`))}.`) : null,
                     data.problem ? h('p', { key: 'problem', className: `${P}-note`, 'data-session-watch-problem': '' },
@@ -1239,7 +1257,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     error ? h(kit.ErrorLine, { key: 'error', text: error, onRetry }) : null,
                 ];
             }
-            return h('section', { className: `${P}-pane ${P}-watching`, 'aria-labelledby': `${P}-watching-title`, 'data-session-watch-watching': '' },
+            return h('section', { ref: sectionRef, className: `${P}-pane ${P}-watching`, 'aria-labelledby': `${P}-watching-title`, 'data-session-watch-watching': '' },
                 h('div', { className: `${P}-watching-head` }, head), body);
         }
 
@@ -1249,7 +1267,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function Watching() {
             const live = kit.useLive(readWatching, ['sessions', 'settings'], { delayMs: 800 });
             const [chosen, setChosen] = React.useState(undefined);
-            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh, chosen, onChoose: setChosen, onOpen: views.openSession });
+            const sectionRef = React.useRef(null);
+            const refocus = React.useRef(false);
+            const onChoose = React.useCallback((word, how) => {
+                refocus.current = how?.gone === true;
+                setChosen(word);
+            }, []);
+            React.useEffect(() => {
+                if (!refocus.current) return;
+                refocus.current = false;
+                const root = sectionRef.current;
+                const target = root?.querySelector?.('[aria-label="Sessions by state"] button') ?? root?.querySelector?.('h2');
+                if (!target) return;
+                if (target.tagName !== 'BUTTON') target.setAttribute('tabindex', '-1');
+                target.focus?.();
+            });
+            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh, chosen, onChoose, onOpen: views.openSession, sectionRef });
         }
 
         /** On Session Watch's own page in Plugins only. */
@@ -1305,7 +1338,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, SHOWN, views, wordCounts, usersOf, readWatching, WatchingView, ChosenView, WatchingSection };
+        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, SHOWN, views, wordCounts, wordsWith, usersOf, readWatching, WatchingView, ChosenView, WatchingSection };
         return module.exports;
     },
 });

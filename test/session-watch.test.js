@@ -717,14 +717,22 @@ test('its page in Plugins: choosing a state lists the sessions that read it, new
     assert.deepEqual(opened, ['idle-1']);
     button.props.onClick();
     assert.deepEqual(picks, ['idle', undefined], 'choosing the open state again closes it');
+    const hows = [];
+    chips(WatchingView({ data, chosen: 'running', onChoose: (word, how) => hows.push([word, how?.gone]) }))[1].props.onClick();
+    chips(WatchingView({ data, chosen: 'idle', onChoose: (word, how) => hows.push([word, how?.gone]) }))[1].props.onClick();
+    assert.deepEqual(plain(hows), [[null, true], [null, false]], 'closing a state at 0 says its button goes, so the focus can move');
     // An untitled session says so; without DSH's workspace there is no Open.
     const cutList = elementsOf(WatchingView({ data, chosen: 'cut off' })).find((e) => e.props?.['data-session-watch-chosen'] === 'cut off');
     assert.equal(textIn(cutList), 'Untitled session5 min ago');
     assert.equal(elementsOf(cutList).some((e) => e.type === 'button'), false);
-    // A state no session reads any more closes by itself.
+    // A chosen state whose last session left it stays in its place, at 0, and says so (the focus stays on it).
     const gone = WatchingView({ data, chosen: 'running' });
-    assert.equal(elementsOf(gone).some((e) => e.props?.['data-session-watch-chosen'] !== undefined), false);
-    assert.equal(chips(gone).every((b) => b.props['aria-expanded'] === 'false'), true);
+    assert.deepEqual(plain(chips(gone).map((b) => `${textIn(b)}:${b.props['aria-expanded']}`)), ['cut off1:false', 'running0:true', `idle${SHOWN + 4}:false`]);
+    const none = elementsOf(gone).find((e) => e.props?.['data-session-watch-chosen'] === 'running');
+    assert.equal(textIn(none), 'No session reads running now.');
+    assert.equal(elementsOf(none).find((e) => e.type === 'p').props.role, 'status');
+    assert.deepEqual(plain(client.internals.wordsWith([{ word: 'idle', count: 2 }], 'odd').map((w) => w.word)), ['idle', 'odd'], 'a word the section does not know goes last');
+    assert.equal(elementsOf(WatchingView({ data: { total: 0, words: [], rows: [] }, chosen: 'idle' })).some((e) => e.props?.['data-session-watch-chosen'] !== undefined), false, 'no sessions at all: only "No sessions yet"');
     // Open goes through DSH's workspace, from the time it is there until it goes.
     const shown = [];
     const cleanups = [];

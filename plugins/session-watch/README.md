@@ -11,7 +11,8 @@ Agent Terminals are on, and what a wrong setting means meanwhile. Choose a
 state to list its sessions, the latest change first (twelve at a time),
 each with when it last changed and **Open**, which shows that session in
 the window as the sidebar does. It follows the sessions as they change,
-without a reload.
+without a reload: a chosen state stays open when its last session leaves
+it, and says so.
 
 ## What it knows about every session
 
@@ -198,8 +199,9 @@ proves, from each session's own log:
   works, and its page in Plugins flags it, refuses a value out of range,
   and fixes it on Save; **What it watches** counts every session by state,
   follows a new session without a reload, lists a chosen state's sessions
-  as the watcher has them, opens one with **Open**, and drops its setting
-  line once fixed; pictures light, dark and at 760 px;
+  as the watcher has them, opens one with **Open**, keeps a chosen state
+  (at 0) and the keyboard focus when its last session leaves it, and drops
+  its setting line once fixed; pictures light, dark and at 760 px;
 - switched off in Plugins: no failure from DSH, its endpoints, service,
   section and style sheet go; on again, it serves and delivers at once.
 

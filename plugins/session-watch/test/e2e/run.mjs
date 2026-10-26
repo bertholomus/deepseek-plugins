@@ -468,6 +468,30 @@ try {
             if (!(await form.isVisible())) await view.click();
             await form.waitFor({ state: 'visible', timeout: 20000 });
             await watching.waitFor({ state: 'visible', timeout: 15000 });
+            // By keyboard: a chosen state whose last session leaves it stays, at 0, says so, and keeps the focus;
+            // closed, its button goes and the focus moves to the first state left.
+            ids.slowView = await run.newSession('E2E:slow', 'Slow view');
+            await runningSession(ids.slowView);
+            const runningChip = watching.locator('button[title$=" that read running"]');
+            await runningChip.waitFor({ state: 'visible', timeout: 15000 });
+            await runningChip.focus();
+            await page.keyboard.press('Enter');
+            const runningList = watching.locator('[data-session-watch-chosen="running"]');
+            await runningList.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+            const listedRunning = (await runningList.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+            model.release();
+            const left = await waitFor(async () => ((await runningList.innerText()).includes('No session reads running now.') ? true : null), 'the running session to leave the list', 20000, 300).catch(() => false);
+            const focused = () => page.evaluate(() => {
+                const el = document.activeElement;
+                return el && el !== document.body ? `${el.getAttribute('aria-expanded') ?? el.tagName}:${el.innerText.replace(/\s+/g, ' ').trim()}` : 'body';
+            });
+            const kept = await focused();
+            check('by keyboard, a chosen state whose last session leaves it stays at 0, says so, and keeps the focus',
+                listedRunning.startsWith('Slow view ') && left === true && kept === 'true:running 0', `${listedRunning} | ${left} | ${kept}`);
+            await page.keyboard.press('Enter');
+            const firstChip = (await watching.locator('[aria-label="Sessions by state"] button').first().innerText()).replace(/\s+/g, ' ').trim();
+            const moved = await focused();
+            check('closed, its button goes and the focus moves to the first state left', (await runningList.count()) === 0 && (await runningChip.count()) === 0 && moved === `false:${firstChip}`, `${moved} | ${firstChip}`);
             const save = form.getByRole('button', { name: 'Save' });
             await field.fill('5');
             const refused = (await page.locator('[data-suite-setting="deliveryTimeoutSeconds"]').innerText()).replace(/\n+/g, ' ');
