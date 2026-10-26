@@ -40,7 +40,8 @@ start until a turn ends there again.
   session's own log: *queued* once the session's inbox shows it, *delivered*
   once a turn reads it, naming that turn, *not delivered* with the reason
   when DSH refuses it, lets it go unread, or no turn reads it within the
-  delivery timeout. It never reports a message as sent on hope.
+  delivery timeout. It never reports a message as sent on hope, and DSH's
+  log has a line for each message it puts in and for what became of it.
 - **Not delivered means never read.** Past the delivery timeout, the
   watcher takes the message back out of the session's queue (DSH's
   `inbox.remove`; the session's log records it), so no later turn reads a

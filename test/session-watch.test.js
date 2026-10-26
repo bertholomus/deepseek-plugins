@@ -202,7 +202,8 @@ test('fold: turn ends, goals and todo lists in the watcher\'s words', () => {
 
 function setup({ config = {}, dir = tempDir('session-watch'), clock = manualClock(), dsh = fakeDsh({ now: clock.now }) } = {}) {
     const warnings = [];
-    const logger = { info: () => {}, warn: (line) => warnings.push(line) };
+    const infos = [];
+    const logger = { info: (line) => infos.push(line), warn: (line) => warnings.push(line) };
     const hub = new Hub();
     let n = 0;
     const watch = new SessionWatch({
@@ -218,7 +219,7 @@ function setup({ config = {}, dir = tempDir('session-watch'), clock = manualCloc
     dsh.attach(watch);
     const events = [];
     watch.on((event) => events.push(event));
-    return { dir, clock, dsh, watch, hub, events, warnings };
+    return { dir, clock, dsh, watch, hub, events, warnings, infos };
 }
 
 test('watcher: lists every session with its state, live when loaded and saved when not', async () => {
@@ -281,7 +282,7 @@ test('watcher: another projection\'s value, live while loaded and as DSH saved i
 });
 
 test('watcher: a delivery is queued, then delivered when the session reads it into a turn', async () => {
-    const { dsh, watch, events } = setup();
+    const { dsh, watch, events, infos } = setup();
     dsh.add('s', { title: 'Parser' });
     dsh.commit('s', 'turn/start', { turn: 1 });
     dsh.commit('s', 'turn/end', { turn: 1, reason: { kind: 'completed' } });
@@ -296,6 +297,11 @@ test('watcher: a delivery is queued, then delivered when the session reads it in
     assert.equal(msg.data.source.kind, 'cordis-host-runner');
     assert.deepEqual(events.filter((event) => event.type === 'delivery').map((event) => event.delivery.state), ['queued', 'delivered']);
     assert.deepEqual(Object.keys(delivery.toJSON()).sort(), ['at', 'deliveredAt', 'id', 'queuedAt', 'sessionId', 'state', 'turn']);
+    // Each side effect is logged: the message put in, and the turn that read it.
+    assert.deepEqual(infos.filter((line) => line.includes(delivery.id)), [
+        `session-watch: a message ${delivery.id} went into s (its queue); a turn has 10 minutes to read it`,
+        `session-watch: the message ${delivery.id} to s was read into turn 2`,
+    ]);
 });
 
 test('watcher: a running session is steered when asked, and gets a follow-up otherwise', async () => {
@@ -311,7 +317,7 @@ test('watcher: a running session is steered when asked, and gets a follow-up oth
 });
 
 test('watcher: a delivery that cannot happen says why, and one never read times out as not delivered', async () => {
-    const { dsh, watch, clock } = setup({ config: { deliveryTimeoutSeconds: 30 } });
+    const { dsh, watch, clock, warnings } = setup({ config: { deliveryTimeoutSeconds: 30 } });
     const missing = await watch.deliver('nope', 'Hello');
     assert.equal(missing.state, 'failed');
     assert.match(missing.reason, /^the session could not be opened: Session nope not found/);
@@ -320,6 +326,8 @@ test('watcher: a delivery that cannot happen says why, and one never read times 
     const refused = await watch.deliver('s', 'Hello');
     assert.equal(refused.state, 'failed');
     assert.equal(refused.reason, 'DSH refused the message: the inbox is closed');
+    assert.match(warnings.join('\n'), /a message to nope was not delivered: the session could not be opened/);
+    assert.match(warnings.join('\n'), /a message to s was not delivered: DSH refused the message: the inbox is closed/);
     dsh.refuse = undefined;
     // A running turn that never reaches its next step leaves a follow-up in the queue.
     dsh.write('s', 'Long job');

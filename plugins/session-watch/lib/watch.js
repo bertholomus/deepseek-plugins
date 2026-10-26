@@ -300,7 +300,10 @@ export class SessionWatch {
                     this.cold.set(sessionId, { state: read.state, full: true });
                     changed = true;
                 }
-                if (changed) this.hub?.bump('sessions');
+                if (changed) {
+                    this.logger?.info?.(`session-watch: read the logs of the sessions a stop cut off (${Object.keys(this.toFold).length})`);
+                    this.hub?.bump('sessions');
+                }
             })().catch((error) => this.logger?.warn?.(`session-watch: could not read the sessions a stop cut off: ${errorText(error)}`));
         }
         return this.leftRead;
@@ -443,6 +446,7 @@ export class SessionWatch {
                 const turn = this.stateOf(sessionId)?.turn;
                 delivery.advance('delivered', { turn, seq: event.seq });
                 this.deliveries.delete(delivery.id);
+                this.logger?.info?.(`session-watch: the message ${delivery.id} to ${sessionId} was read into turn ${turn}`);
                 this.emit({ type: 'delivery', sessionId, delivery: delivery.toJSON() });
             }
         }
@@ -455,6 +459,7 @@ export class SessionWatch {
         if (!delivery || delivery.withdrawing) return;
         delivery.advance('failed', { reason: 'the session let the message go without reading it' });
         this.deliveries.delete(delivery.id);
+        this.logger?.warn?.(`session-watch: a message to ${delivery.sessionId} was not delivered: ${delivery.reason}`);
         this.emit({ type: 'delivery', sessionId: delivery.sessionId, delivery: delivery.toJSON() });
     }
 
@@ -475,6 +480,7 @@ export class SessionWatch {
         } catch (error) {
             const failed = new Delivery(`failed-${this.now().toString(36)}`, sessionId, text, this.now);
             failed.advance('failed', { reason: `the message could not be made: ${errorText(error)}` });
+            this.logger?.warn?.(`session-watch: a message to ${sessionId} was not delivered: ${failed.reason}`);
             return failed;
         }
         const delivery = new Delivery(message.id, sessionId, text, this.now);
@@ -485,14 +491,17 @@ export class SessionWatch {
         } catch (error) {
             this.deliveries.delete(message.id);
             delivery.advance('failed', { reason: `the session could not be opened: ${errorText(error)}` });
+            this.logger?.warn?.(`session-watch: a message to ${sessionId} was not delivered: ${delivery.reason}`);
             return delivery;
         }
+        const steered = mode === 'steer' && agent.status === 'running';
         try {
-            if (mode === 'steer' && agent.status === 'running') agent.steer(message);
+            if (steered) agent.steer(message);
             else agent.followup(message);
         } catch (error) {
             this.deliveries.delete(message.id);
             delivery.advance('failed', { reason: `DSH refused the message: ${errorText(error)}` });
+            this.logger?.warn?.(`session-watch: a message to ${sessionId} was not delivered: ${delivery.reason}`);
             return delivery;
         }
         // The inbox change is committed before followup/steer returns; flush it so a stop now keeps it.
@@ -504,6 +513,7 @@ export class SessionWatch {
         }
         // A session that read the message at once already resolved it; one that never shows it is reported, not assumed.
         const timeoutMs = Math.max(1000, (this.config.deliveryTimeoutSeconds ?? 600) * 1000);
+        this.logger?.info?.(`session-watch: a message ${delivery.id} went into ${sessionId} (${steered ? 'its running turn' : 'its queue'}); a turn has ${spanOf(Math.round(timeoutMs / 1000))} to read it`);
         this.after(this.logger, 'session-watch: delivery timeout', timeoutMs, () => this.expire(delivery, timeoutMs));
         return delivery;
     }
