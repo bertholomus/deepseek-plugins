@@ -510,7 +510,7 @@ named with their result, focus after Back, the folder menu's cut paths,
 the page's state read without Session Watch, and every state's words. The
 bench test runs the bench on 200 sessions.
 
-**Real-DSH test.** It makes 106 checks and takes about two minutes a
+**Real-DSH test.** It makes 126 checks and takes about four minutes a
 build. It starts DSH from each `.e2e/dsh-<version>` install and from the
 installed app's own DSH, each in a throwaway home. It runs with Session
 Watch, Recall and a scripted model (`test/e2e/fake-model.mjs` here) that
