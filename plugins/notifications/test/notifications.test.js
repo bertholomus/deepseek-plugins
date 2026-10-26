@@ -747,6 +747,19 @@ test('window: the sender survives the 404 that used to kill polling', async () =
     disposers[0]();
 });
 
+test('window: its link to the endpoints never throws: no connection, a failed call and an odd answer each answer in words', async () => {
+    const { hostLink } = clientInternals();
+    assert.deepEqual(await hostLink(() => undefined).call('status', {}), { ok: false, error: { code: 'notifications/unreachable', message: 'the window is not connected to DSH yet' } });
+    const failing = hostLink(() => ({ rpc: { call: async () => { throw new Error('socket closed'); } } }));
+    assert.deepEqual(await failing.call('pending', {}), { ok: false, error: { code: 'notifications/unreachable', message: 'socket closed' } });
+    const odd = hostLink(() => ({ rpc: { call: async () => 'not a result' } }));
+    assert.deepEqual(await odd.call('pending', {}), { ok: false, error: { code: 'notifications/unreadable', message: 'the plugin sent an answer this window cannot read' } });
+    const calls = [];
+    const fine = hostLink(() => ({ rpc: { call: async (...args) => { calls.push(args); return { ok: true, value: 3 }; } } }));
+    assert.deepEqual(await fine.call('acknowledge', { ids: [1] }), { ok: true, value: 3 });
+    assert.deepEqual(calls, [['/api', 'dsh-plugin-notifications/acknowledge', { args: { ids: [1] } }]]);
+});
+
 test('window: with permission unanswered the queue waits; once allowed, it shows', async () => {
     const { applyPoller } = clientInternals();
     const Notification = fakeNotificationClass('default');

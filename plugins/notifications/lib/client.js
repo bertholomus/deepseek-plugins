@@ -374,12 +374,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** The window's link to the plugin's endpoints (remote.js), like DSH's own panels use. */
         function hostLink(connectionOf) {
             return {
+                /** Never throws: a call that could not be made answers as a refusal does. */
                 async call(method, args) {
-                    const connection = connectionOf();
-                    if (!connection) return { ok: false, error: { code: 'notifications/unreachable', message: 'the window is not connected to DSH yet' } };
-                    const result = await connection.rpc.call('/api', `${BUNDLE}/${method}`, { args });
-                    return isRecord(result) && (result.ok === true || (result.ok === false && isRecord(result.error))) ? result
-                        : { ok: false, error: { code: 'notifications/unreadable', message: 'the plugin sent an answer this window cannot read' } };
+                    try {
+                        const connection = connectionOf();
+                        if (!connection) return { ok: false, error: { code: 'notifications/unreachable', message: 'the window is not connected to DSH yet' } };
+                        const result = await connection.rpc.call('/api', `${BUNDLE}/${method}`, { args });
+                        return isRecord(result) && (result.ok === true || (result.ok === false && isRecord(result.error))) ? result
+                            : { ok: false, error: { code: 'notifications/unreadable', message: 'the plugin sent an answer this window cannot read' } };
+                    } catch (error) {
+                        return { ok: false, error: { code: 'notifications/unreachable', message: String(error?.message ?? error) } };
+                    }
                 },
             };
         }
