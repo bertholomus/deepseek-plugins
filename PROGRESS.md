@@ -128,3 +128,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 2:33 PM PDT: Focus judged 8.5 NOT YET at 3859b8d (round 1; U 8.5, R 9.5, UX 8.5, T 9, D 8.5): the end leaves no mark after its toast; a hidden window announces the end while hidden. Scorecard and 26 pictures committed.
 - 2026-10-26 2:36 PM PDT: Hermes Bridge judged 8.9 NOT YET at 717b595 (round 1; U 9, R 9, UX 8.5, T 9, D 9; all findings minor). Scorecard and 34 pictures committed.
 - 2026-10-26 2:36 PM PDT: Session Watch handed over 2741f21 and Categories 70977a1 (both pushed); their round-1 judges started (g95-session-watch-j1, g95-categories-j1; finish by 4:45 PM).
+- 2026-10-26 2:40 PM PDT: Recall handed over 7e3cd3f (gh; Recall 72/72, npm test 843 pass 0 fail, real-DSH 126/126 on three builds at d720af9, same code); its round-3 judge started on g95-recall-j1 (finish by 4:50 PM), told to run recall_search from a real-model chat on its own data only.
