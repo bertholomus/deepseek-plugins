@@ -34,7 +34,8 @@
  *   card in the agent's chat and its Open, then Back to the results (the
  *   card's search) and Back to the chat; a running turn's row that follows
  *   it to "stopped" with no new search, and the line above the message box
- *   when it is opened while it runs; the index card, a folder that is
+ *   when it is opened while it runs (the mark takes over when it is stopped
+ *   there); the index card, a folder that is
  *   not there, Look for changes now; a narrow window; light and dark; focus
  *   back on the button that opened the reading view after Turn before and
  *   Back; Wallpaper on (a stand-in for it in this window) over a light and a
@@ -764,6 +765,23 @@ try {
             await mark.waitFor({ state: 'visible', timeout: 20000 });
             check('opened once it ended: its mark, and no line above the composer', (await page.locator('[data-recall-dock]').filter({ visible: true }).count()) === 0, await mark.innerText());
             await mark.getByRole('button', { name: 'Done' }).click();
+            // Stopped while its line shows: the mark takes over at the turn's end, and no line says it still runs.
+            ids.lynx = await run.newSession('Roll out the lynx canary.\nE2E:hang The lynx canary waits.', 'Lynx canary');
+            await waitFor(async () => (await run.session(ids.lynx)).status === 'running', 'the lynx turn to start', 20000, 200);
+            await found({ text: 'lynx' }, 'the running lynx turn to be read', 20000, (r) => r.results[0]?.state === 'running');
+            await openRecall(page);
+            await searchFor(page, 'lynx canary', { total: 1 });
+            await page.locator('[data-recall-open]').first().click();
+            await dock.waitFor({ state: 'visible', timeout: 20000 });
+            await run.bridge('POST', `/sessions/${encodeURIComponent(ids.lynx)}/cancel`, {});
+            const tookOver = await waitFor(async () => {
+                const docks = page.locator('[data-recall-dock]').filter({ visible: true });
+                const still = (await docks.count()) > 0 && /still running/.test(await docks.first().innerText().catch(() => ''));
+                return (await mark.count()) > 0 && /Found by Recall · turn 1, for “lynx canary”/.test(await mark.innerText().catch(() => '')) && !still;
+            }, 'the mark to take over from the line', 20000, 200).then(() => true, () => false);
+            check('stopped while its line shows above the composer: the mark is drawn at the turn\'s end, and no line says it still runs', tookOver,
+                `${await mark.innerText().catch(() => 'no mark')} | ${await page.locator('[data-recall-dock]').filter({ visible: true }).first().innerText().catch(() => 'no line')}`);
+            if (tookOver) await mark.getByRole('button', { name: 'Done' }).click();
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-follow');
         });
@@ -1237,11 +1255,11 @@ try {
             await page.locator('[data-recall-header="off"]').waitFor({ state: 'hidden', timeout: 15000 });
             check('the open page shows Recall on again within 15 s of the save', true, `${Date.now() - wrote} ms`);
         }
-        const found = await waitFor(async () => {
+        const madeOff = await waitFor(async () => {
             const r = await search({ text: '"turn with Recall off"' });
             return r.total >= 1 ? r : null;
         }, 'the turn made while Recall was off to be read', 30000);
-        check('Recall reads what changed while it was off: the turn made then is found', found.results[0]?.sessionId === ids.disabled && found.results[0]?.turn === 1, json(found.results[0]));
+        check('Recall reads what changed while it was off: the turn made then is found', madeOff.results[0]?.sessionId === ids.disabled && madeOff.results[0]?.turn === 1, json(madeOff.results[0]));
         // Off again, the same way.
         wrote = Date.now();
         writeFileSync(patchFile, off);

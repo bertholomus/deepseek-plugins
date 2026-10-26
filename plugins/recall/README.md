@@ -212,7 +212,9 @@ session in DSH's own chat and brings that turn to the top:
   card: **Found by Recall** · turn 2, for “narwhal”.
 - A turn that still runs has no end for the card yet. Until it ends, the
   card sits above the message box: **Found by Recall** · turn 3, still
-  running, for “ocelot canary”.
+  running, for “ocelot canary”. Once the turn ends, the card moves to its
+  end; until DSH draws that end (it may wait until you scroll to it), the
+  card above the message box stays, without *still running*.
 - **Back to the results** returns to the same search.
 - **Back to the chat**, when you came from a tool's card in another chat,
   returns to that chat.
@@ -549,7 +551,8 @@ What it checks:
     search, on the page) and Back to the chat;
   - a turn still running: its row says so, opening it puts the card above
     the message box, and once the turn is stopped the row says *stopped*
-    with no new search;
+    with no new search; another, stopped while its card shows above the
+    message box, gets its mark at its end instead;
   - the index card with a folder that is not there;
   - Look for changes now;
   - Recall's settings in Plugins.

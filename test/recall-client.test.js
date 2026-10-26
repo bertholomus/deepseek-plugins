@@ -820,6 +820,14 @@ test('opening a session at a turn: the mark shows on that turn only, brings it i
     assert.equal(textIn(dock.tree), 'Found by Recall · turn 9, still running, for “frame skip”Back to the resultsDone', 'a phrase in one pair of quotes');
     button(dock.tree, 'Back to the results').props.onClick();
     assert.equal(pages, 2);
+    // DSH's word on the session: not yet said to run, it is still running; said to run, then not, the turn is over,
+    // though its end may not be drawn yet (out of view): the line keeps the ways back and drops "still running".
+    dock.update({ session: { running: false } });
+    assert.match(textIn(dock.tree), /turn 9, still running/);
+    dock.update({ session: { running: true } });
+    assert.match(textIn(dock.tree), /turn 9, still running/);
+    dock.update({ session: { running: false } });
+    assert.equal(textIn(dock.tree), 'Found by Recall · turn 9, for “frame skip”Back to the resultsDone');
     // The turn ends and DSH draws its tail: the mark takes over and the line goes.
     const late = mount(RecallMark, { turn: { turn: 9 }, sessionId: 'sess-own-1' });
     t.after(() => late.unmount());

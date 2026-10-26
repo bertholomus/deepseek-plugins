@@ -1722,15 +1722,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /**
          * A turn still running has no tail in DSH's chat, so no mark after it: while Recall's jump is at such a turn,
          * a line above the composer says which turn it is and gives the same ways back. It goes once the mark is drawn.
+         * Once DSH says the session ran and then that it stopped, the line no longer says "still running": the mark
+         * waits for the turn's end to be drawn, which DSH may leave until the person scrolls to it.
          */
-        function RecallDock({ sessionId }) {
+        function RecallDock({ sessionId, session }) {
             const j = useStore(jump);
+            const seen = React.useRef({ n: undefined, ran: false });
+            if (seen.current.n !== j?.n) seen.current = { n: j?.n, ran: false };
+            if (session?.running === true) seen.current.ran = true;
+            const ended = seen.current.ran && session?.running === false;
             if (!j || j.sessionId !== sessionId || !j.running || j.drawn) return null;
             return h('section', { className: `${P}-pane ${P}-mark ${P}-dock`, 'aria-label': 'Found by Recall', 'data-recall-dock': '' },
                 h('span', { className: `${P}-mark-glyph` }, h(RecallGlyph, { size: 14 })),
                 h('span', { className: `${P}-mark-text` },
                     h('span', { className: `${P}-mark-strong` }, 'Found by Recall'),
-                    ` · turn ${j.turn}, still running${j.query ? `, for ${quoted(phraseless(j.query), 60)}` : ''}`),
+                    ` · turn ${j.turn}${ended ? '' : ', still running'}${j.query ? `, for ${quoted(phraseless(j.query), 60)}` : ''}`),
                 markActions(j, sessionId));
         }
 
