@@ -80,7 +80,11 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 		const nowS = createStore(Date.now()); // advanced by the local tick, so the countdown redraws without a fetch
 		const cx = (...a) => a.filter(Boolean).join(" ");
 		// The host keeps an absolute endAt while running and the remaining time while idle; same rule, client side.
-		const remainingOf = (t, now) => (t?.running ? Math.max(0, t.endAt - now) : Math.max(0, t?.remainingMs ?? 0));
+		// Never more than the timer's length: the window's clock reading can be a tick older than the start.
+		const remainingOf = (t, now) => {
+			const left = t?.running ? t.endAt - now : t?.remainingMs ?? 0;
+			return Math.max(0, Math.min(Number.isFinite(t?.durationMs) ? t.durationMs : Infinity, left));
+		};
 		const phaseOf = (t, now) => {
 			if (!t) return "ready";
 			if (t.running) return "running";
@@ -363,6 +367,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 .fc-row{display:flex;align-items:center;gap:8px;min-width:0}
 .fc-wrap{flex-wrap:wrap}
 .fc-custom{flex:1 1 150px}
+.fc-custom .fc-num{width:104px}
 .fc-num{width:84px;box-sizing:border-box;font-variant-numeric:tabular-nums}
 input.fc-num{min-height:36px;padding:6px 10px;border-radius:var(--dsw-radius-md,12px);border:.5px solid var(--dsw-alias-border-l4);background:transparent;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14)}
 input.fc-num:focus-visible,.fc-num input:focus-visible{outline:2px solid ${RING};outline-offset:1px}
@@ -373,10 +378,10 @@ input.fc-num:focus-visible,.fc-num input:focus-visible{outline:2px solid ${RING}
 .fc-settings{display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l3)}
 .fc-switch{justify-content:space-between;cursor:pointer}
 .fc-switch-text{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary)}
-.fc-fields{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
-.fc-fields>.fc-meta{flex:1 0 100%}
-.fc-field{display:inline-flex;align-items:center;gap:6px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}
-.fc-field .fc-num{width:72px}
+.fc-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:end;gap:8px 12px}
+.fc-fields>.fc-meta{grid-column:1/-1}
+.fc-field{display:flex;flex-direction:column;align-items:stretch;gap:4px;min-width:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}
+.fc-field .fc-num{width:100%}
 .fc-btn{min-height:36px;padding:0 14px;border-radius:var(--dsw-radius-md,12px);border:.5px solid var(--dsw-alias-border-l4);background:transparent;color:var(--dsw-alias-label-primary);font:var(--dsw-font-s-14);cursor:pointer}
 .fc-btn:focus-visible{outline:2px solid ${RING};outline-offset:2px}
 @keyframes fc-pulse{0%,100%{opacity:1}50%{opacity:.35}}

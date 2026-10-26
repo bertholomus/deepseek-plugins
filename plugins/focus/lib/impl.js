@@ -375,9 +375,11 @@ export async function apply(ctx, rawConfig) {
         say('warn', 'DSH has no connection.fetch.register; the timer is not served');
         return;
       }
+      // PUT, PATCH and DELETE are routed here too, so they get the 405 with Allow below; DSH itself
+      // answers 404 for a method a route does not name.
       c.effect(() => connection.fetch.register({
         path: '/api/focus/state',
-        methods: ['GET', 'POST'],
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
         requestBody: 'buffered',
         fetch: (req) => focus.handle(req),
       }), 'focus: state');

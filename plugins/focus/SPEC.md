@@ -53,7 +53,8 @@ export async function apply(ctx, config) { ... }
 - **(v2)** `rev`: +1 per change (saved with the state); `problems`: the setting's and the folder's
   problems, in words.
 - Errors are answers: 400 (bad JSON, not an object, unknown op or kind, wrong types) and 409 with a
-  sentence that says what to do; 405 with `Allow: GET, POST`; anything else 500 with the reason, and
+  sentence that says what to do; 405 with `Allow: GET, POST` for PUT, PATCH and DELETE (the route
+  names them so DSH hands them over; DSH answers 404 for any other method); anything else 500 with the reason, and
   the log has it. No throw reaches DSH.
 - `createFocus({ dataDir, problems, now, day, setTimer, clearTimer, say, logMaxBytes })` holds the
   working parts with its clock and timers handed in, so the tests run time forward by hand.

@@ -387,7 +387,7 @@ test('apply: serves GET and POST /api/focus/state (buffered), says a wrong setti
     const { ctx, routes, warns, dispose } = fakeCtx();
     await apply(ctx, { dataDir: dir, colour: 'red' });
     assert.equal(routes.length, 1);
-    assert.deepEqual([routes[0].path, routes[0].methods, routes[0].requestBody], ['/api/focus/state', ['GET', 'POST'], 'buffered']);
+    assert.deepEqual([routes[0].path, routes[0].methods, routes[0].requestBody], ['/api/focus/state', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], 'buffered']);
     assert.deepEqual(warns, [['focus: %s', 'colour is not a setting of Focus and is ignored (its one setting is dataDir).']]);
     const res = await routes[0].fetch(req('POST', { op: { op: 'start', kind: 'focus', durationMs: 600000 } }));
     const body = await res.json();
@@ -523,8 +523,15 @@ test('the footer button: named in words for each state; it opens DSH\'s dialog, 
     assert.match(find(tree, (e) => e.type === 'Tooltip').props.label, /^Focus · 1[78]:\d\d left$/);
     assert.equal(all(tree, (e) => e.type === 'span' && /fc-dot/.test(e.props.className)).length, 1, 'the running dot');
 
+    // Just started, read with a clock a tick older than the start: never more than its length.
+    state = STATE({ rev: 3, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: Date.now() + 1505000, running: true, doneAt: null }, sessions: { date: '2026-10-26', focus: 2 } });
+    find(find(w.overlay(), (e) => e.type === 'Modal').props.footer, (e) => 'data-focus-primary' in e.props).props.onClick();
+    await w.settle();
+    assert.equal(textIn(find(w.overlay(), (e) => 'data-focus-time' in e.props)), '25:00');
+    assert.equal(footerButton(w.button()).props['aria-label'], 'Focus timer: Focus, 25 minutes left');
+
     // Paused.
-    state = STATE({ rev: 3, timer: { kind: 'short', durationMs: 300000, remainingMs: 160000, endAt: null, running: false, doneAt: null } });
+    state = STATE({ rev: 4, timer: { kind: 'short', durationMs: 300000, remainingMs: 160000, endAt: null, running: false, doneAt: null } });
     find(find(w.overlay(), (e) => e.type === 'Modal').props.footer, (e) => 'data-focus-primary' in e.props).props.onClick();
     await w.settle();
     panel = w.overlay();

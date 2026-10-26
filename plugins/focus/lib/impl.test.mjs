@@ -35,7 +35,7 @@ async function start(dataDir) {
   await apply(ctx, { dataDir });
   const def = route();
   assert.equal(def.path, '/api/focus/state');
-  assert.deepEqual(def.methods, ['GET', 'POST']);
+  assert.deepEqual(def.methods, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']); // the last three get the 405
   assert.equal(def.requestBody, 'buffered');
   return def.fetch;
 }

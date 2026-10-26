@@ -108,6 +108,10 @@ Wallpaper's contract it reads only `body.wp-still`: while Wallpaper's Motion swi
 footer dot and the ring stop moving. The system's Reduce Motion stops them too. Focus never writes
 anything on `<body>`.
 
+With the sidebar folded to its narrow rail, DSH puts the footer buttons in one row; next to another
+plugin's footer button (Wallpaper's, for one), Focus's button sits at the rail's edge, partly hidden.
+Unfold the sidebar to reach it; the timer keeps running either way.
+
 ## API
 
 One route, served by DSH's own window server (signed in, the window's origin), `cache-control: no-store`.
@@ -146,7 +150,7 @@ changes nothing, its settings included.
 | --- | --- |
 | 200 | Done, or nothing to do (`changed: false`). |
 | 400 | The body is not JSON or not an object, an unknown op or kind, a length that is not a number, `chime` not true or false. The error says which and what to send. |
-| 405 | Another method than GET or POST (`Allow: GET, POST`). |
+| 405 | PUT, PATCH or DELETE (`Allow: GET, POST`). DSH answers 404 for any other method. |
 | 409 | `start` or `set` while a timer runs: "A timer is already running. Pause or reset it first." |
 | 500 | Something unexpected; the error says what, and `focus.log` has it. |
 

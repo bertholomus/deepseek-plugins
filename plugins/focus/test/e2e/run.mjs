@@ -110,6 +110,8 @@ async function focus(method = 'GET', body, { raw } = {}) {
     return { status: res.status, headers: res.headers, body: value, text };
 }
 const op = (o, extra = {}) => focus('POST', { op: o, ...extra });
+/** True once `fn` holds, within 5 s; false if it never does (the check then prints what is there). */
+const settles = (fn, ms = 5000) => waitFor(fn, 'the window', ms, 100).then(() => true, () => false);
 /** After a start, the route may come up a moment after the bridge: wait for it. */
 const focusUp = (what) => waitFor(async () => Boolean((await focus()).body?.timer), `Focus's route (${what})`, 60000, 300);
 const completesIn = (from) => (read(logFile).slice(from).match(/ complete focus /g) ?? []).length;
@@ -142,7 +144,7 @@ try {
         check('the state is in the instance\'s own DSH_HOME/focus/state.json', existsSync(stateFile) && JSON.parse(read(stateFile)).rev === 0, stateFile);
         check('focus.log says the first start and the route', /first start: default state written to/.test(read(logFile)) && /started; serving \/api\/focus\/state/.test(read(logFile)), read(logFile));
         const client = await run.clientOf('dsh-plugin-focus');
-        check('DSH serves Focus\'s window half', client.status === 200 && client.text.includes('dsh-plugin-focus:open'), `${client.status} ${client.url}`);
+        check('DSH serves Focus\'s window half', client.status === 200 && client.text.includes('"dsh-plugin-focus"') && client.text.includes('sidebar.footer.action') && client.text.includes('shell.overlay'), `${client.status} ${client.url}`);
     });
 
     // ── refusals in words ────────────────────────────────────────────────
@@ -153,8 +155,10 @@ try {
         check('an unknown op: 400, naming the ops', unknown.status === 400 && /start, pause, resume, reset, set, complete/.test(unknown.body?.error ?? ''), unknown.text);
         const minutes = await focus('POST', { settings: { focusMin: 'lots' } });
         check('a length that is not a number: 400, with the range', minutes.status === 400 && /from 1 to 180/.test(minutes.body?.error ?? ''), minutes.text);
-        const put = await focus('PUT', {});
-        check('PUT: 405 with Allow: GET, POST', put.status === 405 && put.headers.get('allow') === 'GET, POST', `${put.status} ${put.headers.get('allow')}`);
+        for (const method of ['PUT', 'PATCH', 'DELETE']) {
+            const other = await focus(method, method === 'DELETE' ? undefined : {});
+            check(`${method}: 405 with Allow: GET, POST, in words`, other.status === 405 && other.headers.get('allow') === 'GET, POST' && other.body?.error === 'Use GET or POST here.', `${other.status} ${other.headers.get('allow')} ${other.text}`);
+        }
         const started = await op({ op: 'start', kind: 'custom', durationMs: 600000 });
         const again = await op({ op: 'start', kind: 'focus', durationMs: 1500000 });
         const set = await focus('POST', { op: { op: 'set', kind: 'short', durationMs: 300000 }, settings: { chime: false } });
@@ -329,14 +333,17 @@ try {
             // Lengths: a preset, a custom one, one out of range.
             await preset.click();
             await waitFor(async () => (await focus()).body.timer.kind === 'short', 'the short break', 10000, 200);
-            check('a preset: the host sets it, the panel shows it pressed', (await panel.locator('[data-focus-time]').textContent()) === '5:00' && (await preset.getAttribute('aria-pressed')) === 'true');
+            // The host changes before its answer reaches the window: give the panel a moment to take it.
+            const pressed = await settles(async () => (await panel.locator('[data-focus-time]').textContent()) === '5:00' && (await preset.getAttribute('aria-pressed')) === 'true');
+            check('a preset: the host sets it, the panel shows it pressed', pressed, pressed ? '' : `${await panel.locator('[data-focus-time]').textContent()} pressed=${await preset.getAttribute('aria-pressed')}`);
             const custom = dialog.getByLabel('Custom length in minutes');
             await custom.fill('500');
             check('a custom length out of range: Set is off and the panel says the range', (await dialog.getByRole('button', { name: 'Set', exact: true }).isDisabled()) && (await panel.getByText('From 1 to 180 minutes.').count()) === 1);
             await custom.fill('2');
             await dialog.getByRole('button', { name: 'Set', exact: true }).click();
             await waitFor(async () => (await focus()).body.timer.kind === 'custom', 'the custom length', 10000, 200);
-            check('a custom length: 2 min', (await focus()).body.timer.durationMs === 120000 && (await panel.locator('[data-focus-time]').textContent()) === '2:00');
+            const two = await settles(async () => (await panel.locator('[data-focus-time]').textContent()) === '2:00');
+            check('a custom length: 2 min', (await focus()).body.timer.durationMs === 120000 && two, two ? '' : await panel.locator('[data-focus-time]').textContent());
 
             // The chime switch and the preset lengths.
             const chime = dialog.getByRole('switch', { name: 'Chime when a timer ends' }).or(dialog.getByRole('checkbox', { name: 'Chime when a timer ends' })).first();
@@ -349,7 +356,8 @@ try {
             await shortField.fill('7');
             await shortField.press('Enter');
             await waitFor(async () => (await focus()).body.settings.shortMin === 7, 'the short break length', 10000, 200);
-            check('a preset length, typed: kept at the host, the preset button says it', (await dialog.getByRole('button', { name: 'Short break 7 min', exact: true }).count()) === 1);
+            const said = await settles(async () => (await dialog.getByRole('button', { name: 'Short break 7 min', exact: true }).count()) === 1);
+            check('a preset length, typed: kept at the host, the preset button says it', said, said ? '' : (await panel.locator('[data-focus-preset]').allTextContents()).join(' | '));
             await shortField.fill('0');
             await shortField.press('Enter');
             check('a preset length out of range: refused in the field, the host unchanged', (await shortField.getAttribute('aria-invalid')) === 'true' && (await focus()).body.settings.shortMin === 7);
