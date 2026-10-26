@@ -942,6 +942,7 @@ try {
         await card.getByRole('button', { name: 'Start again', exact: true }).click();
         const backAgain = await waitAgent(agents.quiet, (a) => a.status === 'idle' && a.ready && a.launches > back.launches, 'it to come back after its tab closed', 30000);
         check('Start again after its tab closed: running and idle, under the same id', backAgain.conversationId === id && shows(await screen(agents.quiet), `exec standin --session-id ${id}`), json({ status: backAgain.status, launches: backAgain.launches }));
+        await card.scrollIntoViewIfNeeded().catch(() => {});
         await shot(page, shots, 'no-message-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-no-message');
@@ -1014,9 +1015,10 @@ try {
         const lines = await screen(agents.app);
         check('it starts again in a terminal with the same id, resuming its conversation', back.terminalId === before.terminalId && back.conversationId === before.conversationId
             && shows(lines, `exec standin --resume ${before.conversationId}`) && shows(lines, `Resumed conversation ${before.conversationId}`), lines);
-        const log = await history((e) => e.agent === agents.app && e.kind === 'restart');
-        check('What happened says it started again after the restart, and why', log[0]?.text === 'Started App agent again after DSH restarted'
-            && log[0]?.why === 'DSH ended its terminal when it quit. It resumes its conversation in a new terminal with the same name, so its tab finds it.', json(log[0]));
+        // Started again is said once the program holds (its screen settles and it still runs), so the entry may follow its screen.
+        const log = await waitFor(async () => (await history((e) => e.agent === agents.app && e.kind === 'restart' && e.at >= restartedAt))[0], 'its restart logged once it holds', 30000, 300);
+        check('What happened says it started again after the restart, once it held, and why', log.text === 'Started App agent again after DSH restarted' && log.state === 'done'
+            && log.why === 'DSH ended its terminal when it quit. It resumes its conversation in a new terminal with the same name, so its tab finds it.', json(log));
         const plain = await waitAgent(agents.plain, (a) => a.status === 'stopped', 'the plain agent to be stopped');
         check('a program that cannot resume is not started again, and says why', plainBefore.status === 'running' && plain.ended?.why === 'restart'
             && plain.ended.text === 'DSH restarted, which ended its terminal. This program cannot resume a conversation, so it was not started again: Start again runs it anew.', json(plain.ended));

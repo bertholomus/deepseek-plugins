@@ -367,7 +367,7 @@ node --test test/agent-terminals.test.js test/agent-terminals-client.test.js   #
 node scripts/e2e.mjs agent-terminals                                           # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (CHECKS checks, about SECONDS seconds a build) starts DSH from
+The real-DSH test (148 checks, four to five minutes a build) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH, each in a throwaway home with a throwaway
 home folder for its shell, with Session Watch, Decisions, Agent Terminals
 and a stand-in neighbour plugin that draws in the same places. Stand-in
@@ -401,8 +401,9 @@ are once it is fixed). An agent started without a message is stopped,
 started again, has its tab closed and is started again: each time it comes
 back running and idle under its id, never with a resume its program would
 refuse, and its card offers no **Start anew**. A `continue` stand-in is
-typed to. It restarts DSH (agents resume under the same terminal id; the
-agent without a message starts again under its id, logged once it holds;
+typed to. It restarts DSH (agents resume under the same terminal id, each
+logged as started again once it holds; the agent without a message starts
+again under its id;
 the `continue` one is resumed with `--continue`; a `plain` one says why it
 was not started again; a session's first turn the restart cut is settled,
 not left *sending*, and the session is listed; the window's tab shows the
