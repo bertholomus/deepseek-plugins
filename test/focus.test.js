@@ -595,6 +595,35 @@ test('the end, said once: a toast in DSH\'s words when a new doneAt comes, never
     w.close();
 });
 
+test('after a timer ends the main button offers the next step: a short break, a long one after every fourth focus session, focus after a break', async () => {
+    let rev = 10;
+    const done = (kind, focus, durationMs = 1500000) => STATE({ rev: (rev += 1), timer: { kind, durationMs, remainingMs: durationMs, endAt: null, running: false, doneAt: Date.now() - 3600000 }, sessions: { date: '2026-10-26', focus }, settings: { focusMin: 30, shortMin: 6, longMin: 20, chime: true } });
+    let state = done('focus', 1);
+    const w = await window(() => [200, state]);
+    footerButton(w.button()).props.onClick({ currentTarget: null });
+    await w.settle();
+    const main = () => find(find(w.overlay(), (e) => e.type === 'Modal').props.footer, (e) => 'data-focus-primary' in e.props);
+    assert.equal(textIn(main().children), 'Start short break');
+    main().props.onClick();
+    await w.settle();
+    assert.deepEqual(w.calls.at(-1).body, { op: { op: 'start', kind: 'short', durationMs: 360000 } });
+    for (const [s, label, body] of [
+        [done('focus', 4), 'Start long break', { op: 'start', kind: 'long', durationMs: 1200000 }],
+        [done('short', 2, 360000), 'Start focus', { op: 'start', kind: 'focus', durationMs: 1800000 }],
+        [done('long', 4, 1200000), 'Start focus', { op: 'start', kind: 'focus', durationMs: 1800000 }],
+        [done('custom', 4, 120000), 'Start', { op: 'start', kind: 'custom', durationMs: 120000 }],
+    ]) {
+        state = s;
+        footerButton(w.button()).props.onClick({ currentTarget: null });
+        await w.settle();
+        assert.equal(textIn(main().children), label, s.timer.kind);
+        main().props.onClick();
+        await w.settle();
+        assert.deepEqual(w.calls.at(-1).body, { op: body }, s.timer.kind);
+    }
+    w.close();
+});
+
 test('error states: no state at all says what to check, with Try again; a later failed read keeps the state and says it may be out of date; a refusal is a toast in the host\'s words', async () => {
     let mode = 'down';
     const w = await window(({ method }) => {

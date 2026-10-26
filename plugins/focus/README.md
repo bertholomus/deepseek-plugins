@@ -40,8 +40,11 @@ The panel says the state in words at the top:
 | ready | `Focus · ready, 25:00` | Start |
 | running | `Focus · running, ends at 10:25 AM` | Pause |
 | paused | `Focus · paused, 12:40 left` | Resume |
-| done | `Focus · done at 10:25 AM` | Start (the same length again) |
+| done | `Focus · done at 10:25 AM` | Start short break (after focus; Start long break after every fourth today), Start focus (after a break), Start (a custom timer, again) |
 
+- **The next step.** When a timer ends, the main button offers the pomodoro's next step: a short
+  break after a focus session (a long break after every fourth one today), focus after a break. The
+  presets choose anything else.
 - **Lengths.** The three preset buttons set the timer to that length; the pressed one is the current
   length. Type a custom length (1 to 180 minutes) and press Set or Enter. While a timer runs, the
   lengths are locked and the panel says "Pause or reset to choose another length." — a click never

@@ -79,6 +79,9 @@ Hand-written React, no build step: `window.__ModuleLoader__.load({ id: "dsh-plug
 - States in words at the top of the panel: `<Kind> · ready, 25:00`, `· running, ends at 10:25 AM`,
   `· paused, 12:40 left`, `· done at 10:25 AM`. The footer button's name says the minutes left; its
   tooltip the exact time.
+- The next step: in the done state the main button starts the pomodoro's next timer: after `focus` a
+  `short` break (`long` when today's count is a multiple of 4), after a break `focus`, at the preset
+  lengths; after `custom` the same timer again.
 - Errors: no state at all → "Focus can't reach its timer: <why>. Check that the Focus plugin is on in
   Plugins, then try again." with Try again; a later failed read keeps the state with a note; a refused
   op → a toast "Not changed: <the host's words>"; the host's `problems` at the bottom of the panel.

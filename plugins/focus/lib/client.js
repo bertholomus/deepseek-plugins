@@ -36,6 +36,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			stale: (why) => `Focus can't reach its timer right now (${why}); this may be out of date. It tries again every few seconds.`,
 			retry: "Try again",
 			start: "Start", pause: "Pause", resume: "Resume", reset: "Reset",
+			startNext: (kind) => (kind === "focus" ? "Start focus" : kind === "long" ? "Start long break" : "Start short break"),
 			lengths: "Length",
 			custom: "Custom",
 			customLabel: "Custom length in minutes",
@@ -86,6 +87,13 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			const rem = remainingOf(t, now);
 			if (rem > 0 && rem < t.durationMs) return "paused";
 			return t.doneAt && !t.running && rem === t.durationMs ? "done" : "ready";
+		};
+
+		/** The pomodoro's next step after a timer of `kind` ended: { kind, min }, or null for a custom timer. */
+		const nextOf = (kind, settings, focusToday) => {
+			if (kind === "focus") return focusToday > 0 && focusToday % 4 === 0 ? { kind: "long", min: settings.longMin || 15 } : { kind: "short", min: settings.shortMin || 5 };
+			if (kind === "short" || kind === "long") return { kind: "focus", min: settings.focusMin || 25 };
+			return null;
 		};
 
 		// ------------------------------------------------------------ the host
@@ -255,6 +263,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			}
 			const t = st.timer || {};
 			const settings = st.settings || {};
+			const sessions = st.sessions?.focus ?? 0;
 			const total = Math.max(0, t.durationMs || 0);
 			const rem = remainingOf(t, now);
 			const phase = phaseOf(t, now);
@@ -271,16 +280,19 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 				: phase === "paused" ? `${KIND[t.kind] || KIND.focus} · paused, ${fmtTime(rem)} left`
 					: phase === "done" ? `${KIND[t.kind] || KIND.focus} · done at ${clock(t.doneAt)}`
 						: `${KIND[t.kind] || KIND.focus} · ready, ${fmtTime(total)}`;
+			// After a timer ends, the main button offers the pomodoro's next step: a break after focus (a long one
+			// after every fourth session today), focus after a break; a custom timer offers itself again.
+			const next = phase === "done" ? nextOf(t.kind, settings, sessions) : null;
 			const primary = running ? { label: TEXT.pause, run: () => op({ op: "pause" }) }
 				: phase === "paused" ? { label: TEXT.resume, run: () => op({ op: "resume" }) }
-					: { label: TEXT.start, run: () => op({ op: "start", kind: t.kind || "focus", durationMs: total > 0 ? total : 25 * 60000 }) };
+					: next ? { label: TEXT.startNext(next.kind), run: () => op({ op: "start", kind: next.kind, durationMs: next.min * 60000 }) }
+						: { label: TEXT.start, run: () => op({ op: "start", kind: t.kind || "focus", durationMs: total > 0 ? total : 25 * 60000 }) };
 			// A preset's new length also applies to the idle timer of that kind when it was not started.
 			const savePreset = (kind, key) => (n) => {
 				const body = { settings: { [key]: n } };
 				if (!t.running && t.kind === kind && rem === total) body.op = { op: "set", kind, durationMs: n * 60000 };
 				send(body);
 			};
-			const sessions = st.sessions?.focus ?? 0;
 			const problems = Array.isArray(st.problems) ? st.problems : [];
 			return modal([
 				load.error ? h("div", { key: "stale", className: "fc-note fc-error", role: "status", "data-focus-stale": "" }, TEXT.stale(load.error)) : null,
@@ -299,9 +311,12 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 				running ? h("p", { key: "hint", className: "fc-meta" }, TEXT.runningHint) : custom.trim() !== "" && !customValid ? h("p", { key: "hint", className: "fc-meta fc-error" }, TEXT.rangeHint) : null,
 				h("p", { key: "sessions", className: "fc-meta", "data-focus-sessions": "" }, TEXT.sessions(sessions)),
 				h("div", { key: "settings", className: "fc-settings" },
-					has("Switch")
-						? h(ui.Switch, { checked: settings.chime !== false, label: TEXT.chime, disabled: busy, onChange: (on) => send({ settings: { chime: !!on } }) })
-						: h("label", { className: "fc-row" }, h("input", { type: "checkbox", checked: settings.chime !== false, disabled: busy, onChange: (e) => send({ settings: { chime: e.target.checked } }) }), TEXT.chime),
+					// DSH's Switch has no text of its own: its words sit beside it, in a label, so a click on them switches it too.
+					h("label", { className: "fc-row fc-switch", "data-focus-chime": "" },
+						h("span", { className: "fc-switch-text" }, TEXT.chime),
+						has("Switch")
+							? h(ui.Switch, { checked: settings.chime !== false, label: TEXT.chime, disabled: busy, onChange: (on) => send({ settings: { chime: !!on } }) })
+							: h("input", { type: "checkbox", checked: settings.chime !== false, disabled: busy, onChange: (e) => send({ settings: { chime: e.target.checked } }) })),
 					h("div", { className: "fc-fields", role: "group", "aria-label": TEXT.presetsTitle },
 						h("span", { className: "fc-meta" }, TEXT.presetsTitle),
 						h(MinutesField, { label: KIND.focus, field: "focusMin", value: settings.focusMin || 25, disabled: busy, onCommit: savePreset("focus", "focusMin") }),
@@ -356,6 +371,8 @@ input.fc-num:focus-visible,.fc-num input:focus-visible{outline:2px solid ${RING}
 .fc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}
 .fc-note{font:var(--dsw-font-xs-13);padding:10px 12px;border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-2,transparent)}
 .fc-settings{display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l3)}
+.fc-switch{justify-content:space-between;cursor:pointer}
+.fc-switch-text{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary)}
 .fc-fields{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
 .fc-fields>.fc-meta{flex:1 0 100%}
 .fc-field{display:inline-flex;align-items:center;gap:6px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}
