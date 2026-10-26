@@ -38,7 +38,7 @@
  *   GET /health and the bridge's log while it keeps working; enabled: false
  *   (nothing listens, nothing written) and back; a socket path another
  *   program answers on is refused and left alone, and DSH shows the plugin
- *   as failed until the row is fixed.
+ *   as failed, still after the row is fixed, until it is switched off and on.
  * - Plugins: its title, sentence and icon; switched off (no socket left)
  *   and on again.
  * - The window: the bridged session in DSH's sidebar, and a prompt sent
@@ -449,7 +449,7 @@ try {
         check('on again: it answers', await answers());
     });
 
-    await step('a socket another program answers on is never taken over: refused in words, and that program keeps it', async () => {
+    await step('a socket another program answers on is never taken over: refused in words, shown as failed in Plugins until switched off and on, and that program keeps it', async () => {
         const otherDir = mkdtempSync(join(base, 'o-'));
         const otherSock = join(otherDir, 'bridge.sock');
         const other = createServer((req, res) => {
@@ -462,20 +462,31 @@ try {
             await waitFor(() => read(newLog).includes(`not listening on ${otherSock}: another program answers on ${otherSock}`), 'the refusal in the log', 30000, 300);
             const still = await call('GET', '/health', undefined, { sock: otherSock });
             check('the bridge refused it, in its log, and the other program still answers there', still.body?.other === true, still.text);
-            const failed = await waitFor(async () => (await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null, 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
-            check('DSH shows the plugin as failed (its Plugins page says Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json(failed));
-        } finally {
+            const failed = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null), 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
+            check('DSH shows the plugin as failed (its Plugins page tags it Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json({ ...failed, meta: undefined }));
+            // The row fixed and saved: DSH leaves a plugin that failed to start as it is (it does not run it again).
+            const logged = read(newLog).length;
             writeRow({ logFile: newLog });
-            await waitFor(() => answers(), 'the bridge back on its own socket', 30000, 300);
+            const back = await waitFor(() => answers(), 'the bridge back on its own socket', 15000, 300).then(() => true, () => false);
+            const added = read(newLog).slice(logged).trim();
+            const entry = await bridgeEntry();
+            check('the row fixed and saved: DSH does not start the failed plugin again (nothing new in its log), so it stays failed, as the README says', !back && added === '' && entry?.fiberPhase === 'failed', json({ back, added, phase: entry?.fiberPhase }));
+        } finally {
             await new Promise((r) => other.close(r));
         }
-        check('pointed back at its own socket, it answers again, and DSH shows it running', (await answers()) && (await waitFor(async () => (await bridgeEntry())?.fiberPhase === 'active', 'the plugin to run', 30000, 300).catch(() => false)));
+        const off = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: false });
+        const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: true });
+        await waitFor(() => answers(), 'the bridge back after off and on', 30000, 300).catch(() => {});
+        const entry = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'active' ? bridgeEntry() : null), 'the plugin to run', 30000, 300).catch(() => bridgeEntry());
+        check('switched off and on in Plugins: it answers on its own socket again, and DSH shows it running', off.ok === true && on.ok === true && (await answers()) && entry?.fiberPhase === 'active', json({ off, on, phase: entry?.fiberPhase }));
     });
 
     // ── Plugins ───────────────────────────────────────────────────────
     await step('the Plugins page presents it as DSH presents its own: a title, a plain sentence and an icon', async () => {
         const entry = await bridgeEntry();
-        check('its title and sentence, not the package id', entry?.meta?.title === 'Session Bridge' && /^Lets scripts and scheduled jobs/.test(entry.meta.description ?? ''), json(entry));
+        // DSH hands the meta on per language ({en: …}), from locale/en.json.
+        const words = (v) => (typeof v === 'string' ? v : v?.en);
+        check('its title and sentence, not the package id', words(entry?.meta?.title) === 'Session Bridge' && /^Lets scripts and scheduled jobs/.test(words(entry?.meta?.description) ?? ''), json({ ...entry?.meta, icon: undefined }));
         check('its icon is its own SVG', /svg/.test(json(entry?.meta?.icon ?? '')), json(entry?.meta?.icon ?? null).slice(0, 200));
     });
 
