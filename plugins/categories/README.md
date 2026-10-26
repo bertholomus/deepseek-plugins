@@ -58,40 +58,55 @@ Each start reads the store from its file. Switched off in DSH's Plugins page (or
 
 ### Config
 
-Optional, in the profile's `cordis.patch.yml`, addressing the plugin's row by id:
+Optional, in the profile's `cordis.patch.yml`, addressing the plugin's row by id. A patch row replaces the row's whole `config`, so list every key you set:
 
 ```yaml
 - id: categories
   config:
+    enabled: true
     storeFile: ~/.dsh/categories/categories.json
     logFile: ~/.dsh/categories/categories.log
     projectsStoreFile: ~/.dsh/projects/projects.json
 ```
 
-| Key | Default | What it is |
-| --- | --- | --- |
-| `enabled` | `true` | Off: no headers, no endpoints; DSH's list as it is. |
-| `storeFile` | `~/.dsh/categories/categories.json` | The categories and their workspaces. |
-| `logFile` | `~/.dsh/categories/categories.log` | Action log (ids and counts). Empty turns it off. |
-| `projectsStoreFile` | `~/.dsh/projects/projects.json` | The projects plugin's store, read once at the first start. Empty skips that move. |
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `enabled` | true or false | `true` | Off: no headers, no chip, no changes to DSH's workspace order; the Categories page says it is off and how to switch it on. The store is kept as it is. |
+| `storeFile` | a file path | `~/.dsh/categories/categories.json` | The categories and their workspaces (mode 600, in a folder of mode 700). |
+| `logFile` | a file path, or empty | `~/.dsh/categories/categories.log` | The action log (ids and counts only). Empty turns it off. |
+| `projectsStoreFile` | a file path, or empty | `~/.dsh/projects/projects.json` | The projects plugin's store, read once at the first start (see above). Empty skips that move. |
 
-A path under `~/.dsh` follows `$DSH_HOME`.
+A path under `~/.dsh` follows `$DSH_HOME`. A change to the row restarts the plugin with it.
+
+**A wrong value never stops the plugin.** A value of the wrong type (`enabled: "no"`, a number for a path, an empty `storeFile`) counts as that key's default, DSH's log warns once at start (`categories: a setting is wrong: enabled must be true or false, but it is "no"; it counts as true until you change it`), and the Categories page names it in a note until it is fixed. Every endpoint answers in words: a change it can't make is refused with the reason, and anything else is answered "Categories could not do that: …" and logged.
+
+## Switching it off
+
+- **Just the categories**: set `enabled: false` in its row. DSH's session list is DSH's own again (no header, not even Other workspaces), the chip goes, DSH's workspace order is left as it is, and the Categories page says the categories are off and how to switch them on. Your categories stay in the store; `enabled: true` brings them back as they were.
+- **The whole plugin**: its switch on DSH's Plugins page. Its headers, its marks on DSH's list, the chip, the Categories entry and page, and its style sheet all leave the window; DSH's list shows every workspace as DSH draws it. Switched on again, it reads its store from the file and draws everything once.
+
+## Rollback
+
+- To an earlier version: point the profile at the earlier checkout of this folder (or `git checkout <earlier commit> -- plugins/categories`) and restart DSH. The store's format is unchanged, so an earlier version reads it as it is; a profile row with a value of the wrong type stops an earlier version, which checked types strictly.
+- To before this plugin: remove `dsh-plugin-categories` from the profile's `package.json` (`dependencies`, which `dsh plugin --profile desktop remove dsh-plugin-categories` does, and `dsh.profile.bundles`) and restart DSH. DSH keeps the workspace order the plugin last set; nothing else in DSH changes. The projects plugin's store was only read, and `from-projects.json` holds the copy taken at the first start. Delete `~/.dsh/categories/` to leave nothing behind.
 
 ## Tests
 
 ```bash
-node plugins/categories/test/smoke.mjs
-node plugins/categories/test/client.mjs
+npm test                                   # the whole repository: these host and window tests included
+node --test test/categories-host.test.js   # the host half (plugins/categories/test/smoke.mjs)
+node --test test/categories.test.js        # the browser half (plugins/categories/test/client.mjs)
+node scripts/e2e.mjs categories            # real DSH: every build under .e2e/ and the installed app's own
 ```
 
-The smoke tests run the host half against a fake Host: categories and their workspaces in DSH's order, the refusals, the one-time move from the projects store (its categories exactly as they are with the old sidebar left unread, groups from before them without a project that has a coordinator in its own workspace, nothing to move, a store that can't be read yet), a switch-off and on that reads the file again, the old sidebar's import and the preview script.
+The host tests run the host half against a fake Host: categories and their workspaces in DSH's order, the refusals, the one-time move from the projects store (its categories exactly as they are with the old sidebar left unread, groups from before them without a project that has a coordinator in its own workspace, nothing to move, a store that can't be read yet), a switch-off and on that reads the file again, the old sidebar's import and the preview script, settings of the wrong type (each in words, counting as its default), `enabled: false` (the list says off, a change is refused in words, nothing written) and a failure that isn't a refusal (answered in words and logged). DSH's packages come from the newest runtime under `.e2e/` (`test/peers.mjs`), and DSH's data folder is a throwaway one, so they never read yours.
 
-The browser half's tests load `lib/client.js` the way DSH does, with stand-ins for React and DSH's own parts, and draw its views: the session list by category with its headers' menus, keys and drags, New workspace… through DSH's own Add workspace, the Categories page with its tree, keys, moves and find, the chip at the top of a session, the endpoints over DSH's connection, and that the projects plugin's data changes nothing here. They need no DSH, and `npm test` runs them too.
+The browser half's tests load `lib/client.js` the way DSH does, with stand-ins for React and DSH's own parts, and draw its views: the session list by category with its headers' menus, keys and drags, New workspace… through DSH's own Add workspace, the Categories page with its tree, keys, moves and find, its off state and a wrong setting's note, the chip at the top of a session, the endpoints over DSH's connection, the style sheet only while it runs, the CSS against DESIGN.md (an unpainted page root on a glass card, DSH's tokens, motion stopped under Wallpaper's Still, the drop line under DSH's menus), and that the projects plugin's data changes nothing here.
 
-The end-to-end test boots a real DSH (the web profile, in a temporary `DSH_HOME`) with this plugin and session-bridge. A first start makes DSH's workspaces; then a projects store shaped like the user's (four categories, one with a ◆ project's id, a placement of a workspace that's gone) and an old sidebar file still naming deleted categories are put where the user's are, and the next start moves the categories over once, exactly as they are, without reading the old file (the projects store and the old file untouched, a copy kept, the files private). It checks DSH's own workspace order, that DSH serves the browser half and it parses, the endpoints as the window calls them (make, file before another, move, rename, delete, the refusals) and a restart that changes nothing. With `COORDINATOR=1` the coordinator plugin runs beside it: each answers only for its own, the projects store stays as it was, and the coordinator logs nothing about categories.
+The end-to-end test (`test/e2e/run.mjs`) boots a real DSH (the web profile, in a temporary `DSH_HOME`, with a scripted model) with this plugin and session-bridge. A first start makes DSH's workspaces; then a projects store shaped like the user's (four categories, one with a ◆ project's id, a placement of a workspace that's gone) and an old sidebar file still naming deleted categories are put where the user's are, and the next start moves the categories over once, exactly as they are, without reading the old file (the projects store and the old file untouched, a copy kept, the files private). It checks DSH's own workspace order, that DSH serves the browser half and it parses, the endpoints as the window calls them (make, file before another, move, rename, delete, the refusals) and a restart that changes nothing. Then, in a real Chromium window: the session list by category with every workspace still there, folding by click and by Enter with the keyboard kept on the header and its ring, the Categories page on its glass card with find, the chip at the top of a chat, light and dark, 760 px and every text at 4.5:1 or more, and switched off from Plugins it leaves no header, mark, class or style sheet behind, then on again draws one of everything. Pictures go to `.e2e/shots/categories/<DSH version>/`. With `COORDINATOR=1` the coordinator plugin runs beside it: each answers only for its own, the projects store stays as it was, and the coordinator logs nothing about categories.
 
 ```bash
-npm install --prefix /tmp/dsh @deepseek-ai/dsh
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/categories/test/e2e/run.mjs
-DSH_BIN=/tmp/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js COORDINATOR=1 node plugins/categories/test/e2e/run.mjs
+node scripts/e2e.mjs categories                 # each DSH under .e2e/ and the app's own, with the live DSH's fingerprint before and after
+DSH_BIN=.e2e/dsh-0.2.1-rc.1/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/categories/test/e2e/run.mjs
+DSH_BIN=.e2e/dsh-0.2.1-rc.1/node_modules/@deepseek-ai/dsh/lib/bin.js COORDINATOR=1 node plugins/categories/test/e2e/run.mjs
 ```
