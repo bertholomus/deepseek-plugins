@@ -4,8 +4,8 @@
  * page, and every coordinating chat would lose its thread tools over one
  * typo. Instead each wrong setting falls back to its default, and the
  * plugin says which setting is wrong, what it must be and what it uses
- * meanwhile: in DSH's log, in the plugin's own log, and on its page (Plugins
- * → Coordinator).
+ * meanwhile: on its page (Plugins → Coordinator) and in its own log. It
+ * warns DSH's logger too, which DSH keeps in memory and does not print.
  *
  * The schema in index.js gives defaults only (any value passes it, the
  * live ones too); the types and ranges live here. Pure, no host imports.
@@ -44,8 +44,11 @@ function shown(value) {
     }
 }
 
-/** A setting's problem, in words: what it must be, what it is, and what the plugin does meanwhile. */
-const problem = (key, must, value, instead) => ({ key, message: `${key} must be ${must} (it is ${shown(value)}), so the plugin uses ${instead} until you fix it.` });
+/**
+ * A setting's problem, in words: what it must be, what it is, and what the plugin does meanwhile
+ * (`instead` is what it uses, or with `{ does: true }` what it does, such as "trusts no machine").
+ */
+const problem = (key, must, value, instead, { does = false } = {}) => ({ key, message: `${key} must be ${must} (it is ${shown(value)}), so the plugin ${does ? instead : `uses ${instead}`} until you fix it.` });
 
 /** Words YAML or a person may use for on and off. */
 const ON = new Set(['true', 'on', 'yes', '1']);
@@ -136,7 +139,7 @@ export function guardedToolsOf(value) {
         }
         return bad ? { value: out, problem: problem('guardedTools', 'a list of names, or a map from each name to a list of the words you call it by', value, 'each name without the words it could not read') } : { value: out };
     }
-    return { value: [], problem: problem('guardedTools', 'a list of names, or a map from each name to a list of the words you call it by', value, 'none') };
+    return { value: [], problem: problem('guardedTools', 'a list of names, or a map from each name to a list of the words you call it by', value, 'holds no tool back', { does: true }) };
 }
 
 /** What each live text setting falls back to while its value is not text. */
@@ -171,5 +174,5 @@ export function trustedHostsOf(value) {
         const hosts = value.filter((host) => typeof host === 'string' && host.trim() !== '');
         return hosts.length === value.length ? { value: hosts } : { value: hosts, problem: problem('trustedHosts', 'a list of host names or addresses', value, `only the names in it (${hosts.length})`) };
     }
-    return { value: [], problem: problem('trustedHosts', 'a list of host names or addresses', value, 'none, so every send asks') };
+    return { value: [], problem: problem('trustedHosts', 'a list of host names or addresses', value, 'trusts no machine (every send asks)', { does: true }) };
 }

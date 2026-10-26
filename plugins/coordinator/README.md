@@ -227,7 +227,7 @@ Every key is optional. *Live* keys apply while DSH runs; DSH starts the plugin a
 
 A path under `~/.dsh` follows DSH's own data folder: with `DSH_HOME` set (a second DSH for testing, say), the store, notes and log live under it instead.
 
-A wrong value never stops the plugin. Each one falls back to its default, and the plugin names it, says what it must be and what it uses meanwhile, in DSH's log, in its own log (`config-problem <key>`) and at the top of its page in **Plugins → Coordinator**, for example *maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.* What YAML or a person means is taken as meant: `"30"` for 30, `on`/`off` and `yes`/`no` for true and false, a bare `off` for `autoHandback: off`. A live text key that isn't text (a bare `5`) counts as not set.
+A wrong value never stops the plugin. Each one falls back to its default, and the plugin names it, says what it must be and what it uses meanwhile, at the top of its page in **Plugins → Coordinator** and in its own log (`config-problem <key>`), for example *maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.* What YAML or a person means is taken as meant: `"30"` for 30, `on`/`off` and `yes`/`no` for true and false, a bare `off` for `autoHandback: off`. A live text key that isn't text (a bare `5`) counts as not set.
 
 ## Tools
 

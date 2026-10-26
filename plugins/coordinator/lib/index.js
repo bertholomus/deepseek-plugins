@@ -102,7 +102,7 @@ export const Config = z.object({
 });
 
 export function apply(ctx, given) {
-    // A wrong setting falls back to its default and is named in DSH's log, the plugin's log and on its page.
+    // A wrong setting falls back to its default and is named on the plugin's page and in its log (and to DSH's logger).
     const { config, problems } = checkConfig(given);
     if (!config.enabled) {
         // Switched off in its settings: no chat coordinates and no thread tool is offered. The window still asks the
