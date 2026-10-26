@@ -860,7 +860,8 @@ try {
     const row = answer.ok ? answer.value.projects.find((p) => p.id === coord) : undefined;
     check('the plugin page lists the chat, its settings and where each comes from', row?.coordinator === coord && row.name === CHAT && row.paused === false && row.off === false
         && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadModel.source === 'chat setting' && row.settings.threadEffort.source === 'plugin default'
-        && row.access.threadPermission.value === 'workspace-write' && row.threads.open > 0 && Object.keys(answer.value).sort().join() === 'guarded,permissions,projects',
+        && row.access.threadPermission.value === 'workspace-write' && row.threads.open > 0 && Object.keys(answer.value).sort().join() === 'guarded,permissions,problems,projects'
+        && answer.value.problems.length === 0,
         JSON.stringify(answer).slice(0, 600));
 
     // 21b. News: what threads hand back or finish waits for the user, from anywhere in the window, until they open the chat.
@@ -1498,6 +1499,34 @@ try {
     check('DSH\'s own Unarchive on the chat\'s row brings them back', cameBack === true && project().archived === undefined
         && new RegExp(`archive ${coord} via=dsh sessions=\\d+\\n[^]*restore ${coord} via=dsh sessions=\\d+`).test(readText(logFile)),
         readText(logFile).split('\n').filter((l) => /archive|restore/.test(l)).join('\n'));
+
+    // 31. Wrong settings never stop the plugin. Saved while DSH runs, DSH starts the plugin again with them: each
+    // falls back to its default, DSH's log and the plugin's name them, its page lists them in words, and the chat
+    // still coordinates. Put right, the page has nothing to fix again.
+    const startsBad = starts();
+    writePatch(model.port, { threadEffort: 'high', maxHandbacksPerHour: 0, autoHandback: 'sometimes', trustedHosts: { nas: true } });
+    await waitFor(() => starts() > startsBad && /config-problem autoHandback\n/.test(readText(logFile)), 'the plugin to start again with the wrong settings', 30000);
+    answer = await waitFor(async () => {
+        const got = await webApi(web, 'dsh-plugin-coordinator/list', {});
+        return got.ok && (got.value.problems ?? []).length === 3 ? got : null;
+    }, 'the page to name the wrong settings', 30000).catch(() => null);
+    const badWords = answer?.value.problems ?? [];
+    check('wrong settings don\'t stop the plugin: its page names each one, what it must be and what the plugin uses meanwhile',
+        badWords.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.')
+        && badWords.includes('autoHandback must be "idle" or "off" (it is "sometimes"), so the plugin uses "idle" until you fix it.')
+        && badWords.some((line) => line.startsWith('trustedHosts must be a list of host names or addresses'))
+        && /config-problem maxHandbacksPerHour\n[^]*config-problem autoHandback\n/.test(readText(logFile))
+        && /coordinator: maxHandbacksPerHour must be a whole number/.test(readText(dshLog)), JSON.stringify(answer).slice(0, 600));
+    mark = model.requests.length;
+    await say(coord, 'Are threads still on?');
+    check('with wrong settings the chat still coordinates and has its thread tools', since(mark, 'coordinator').length > 0
+        && since(mark, 'coordinator').every((r) => r.tools.includes('thread_start')), describe(since(mark)));
+    writePatch(model.port, { threadEffort: 'high' });
+    answer = await waitFor(async () => {
+        const got = await webApi(web, 'dsh-plugin-coordinator/list', {});
+        return got.ok && Array.isArray(got.value.problems) && got.value.problems.length === 0 ? got : null;
+    }, 'the page with nothing to fix', 30000).catch(() => null);
+    check('put right, the page has nothing to fix', answer !== null, JSON.stringify(answer).slice(0, 300));
     check('no errors in the coordinator log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;
