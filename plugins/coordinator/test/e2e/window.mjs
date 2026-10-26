@@ -166,6 +166,11 @@ try {
     await step('the chat in the window: Threads menu in its header, thread cards in the chat, rows nested under it', async () => {
         window = await openWindow(run, pw, { width: 1280, height: 860 });
         const { page } = window;
+        // DSH's first-run Preview Notice can come later than openWindow watches for (once on 0.2.0-rc.2, mid-test,
+        // its mask took every click): whenever it stands in a step's way, it is put away first, as a person would.
+        await page.addLocatorHandler(page.getByText('Preview Notice', { exact: true }), async () => {
+            await page.getByRole('button', { name: 'Continue', exact: true }).first().click();
+        });
         await openChat(page, ids.chat);
         const button = trigger(page);
         await button.waitFor({ state: 'visible', timeout: 30000 });
