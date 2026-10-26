@@ -51,6 +51,10 @@ export const SEEN9 = join(DEV, 'seen9');
 export const HOLDOUT10 = join(DEV, 'holdout10');
 export const SEEN10 = join(DEV, 'seen10');
 export const HOLDOUT11 = join(DEV, 'holdout11');
+/** Real GLM-5.3 Flash turns from DSH Test sessions, labelled by the builder, tuned on. */
+export const LIVE = join(DEV, 'live');
+/** Probes written apart from the code: a fresh writer's and the round-3 judge's, tuned on. */
+export const PROBES = join(DEV, 'probes');
 /** The labels of a claim in a case's `claims` list. */
 export const CLAIM_LABELS = ['shown', 'unshown', 'wrong'];
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);

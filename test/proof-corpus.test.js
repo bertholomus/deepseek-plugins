@@ -26,13 +26,18 @@
  * true claims contradicted (floor at most 1). It is not tuned on (OPEN-QUESTIONS
  * #36), so its shape is a plain test and its floors a `todo` test that runs and
  * prints the miss on every run without hiding a new failure behind it (#39).
+ *
+ * Two more tuned sets carry `claims` on every case and are held to the dev bar:
+ * `live/` holds real GLM-5.3 Flash turns from DSH Test sessions (the model's
+ * own reply shapes, labelled by the builder), and `probes/` holds probes
+ * written apart from the code, by a fresh writer and by the round-3 judge.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OTHER_NAMES } from './helpers/client.mjs';
-import { CLAIM_LABELS, DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, LABELS, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, TOOL_NAMES, claimsOf, earlierTurns, loadCorpus, measure, measureClaims, normal } from './helpers/proof-corpus.mjs';
+import { CLAIM_LABELS, DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, LABELS, LIVE, PROBES, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, TOOL_NAMES, claimsOf, earlierTurns, loadCorpus, measure, measureClaims, normal } from './helpers/proof-corpus.mjs';
 
 const DEV_COUNTS = { honest: 114, 'no-claim': 60, unbacked: 80, contradicted: 56 };
 const SEEN_COUNTS = { honest: 40, 'no-claim': 20, unbacked: 25, contradicted: 25 };
@@ -121,7 +126,7 @@ test('the dev corpus is well formed: 310 turns, unique ids, the four labels, onl
 });
 
 test('per claim on the tuned sets: bad turns caught for the right claim, rarely a flag on another, no true claim called contradicted', () => {
-    for (const [where, dir] of [['dev', DEV], ['first hold-out', SEEN], ['second hold-out', SEEN2], ['third hold-out', SEEN3], ['fourth hold-out', SEEN4], ['fifth hold-out', SEEN5], ['sixth hold-out', SEEN6], ['seventh hold-out', SEEN7], ['ninth hold-out, tuned on', SEEN9], ['tenth hold-out, tuned on', SEEN10]]) {
+    for (const [where, dir] of [['dev', DEV], ['first hold-out', SEEN], ['second hold-out', SEEN2], ['third hold-out', SEEN3], ['fourth hold-out', SEEN4], ['fifth hold-out', SEEN5], ['sixth hold-out', SEEN6], ['seventh hold-out', SEEN7], ['ninth hold-out, tuned on', SEEN9], ['tenth hold-out, tuned on', SEEN10], ['real model turns', LIVE], ['probes', PROBES]]) {
         if (!present(dir)) continue;
         claimAim(loadCorpus(dir), where);
     }
@@ -344,8 +349,27 @@ test('tenth hold-out, once tuned on (seen10/): well formed, apart from the corpo
     assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}`), []);
 });
 
+/** The real model's turns (`live/`) and the probes written apart from the code (`probes/`): their sizes. */
+const LIVE_COUNTS = { honest: 24, 'no-claim': 9, unbacked: 2, contradicted: 1 };
+const PROBE_COUNTS = { honest: 54, 'no-claim': 26, unbacked: 21, contradicted: 22 };
+
+for (const [where, dir, counts] of [['real model turns (live/)', LIVE, LIVE_COUNTS], ['probes written apart from the code (probes/)', PROBES, PROBE_COUNTS]]) {
+    test(`${where}: well formed, apart from every other corpus, and held to the dev bar`, () => {
+        const corpus = loadCorpus(dir);
+        for (const label of LABELS) assert.equal(corpus[label].length, counts[label], label);
+        const ids = checkShape(corpus, where);
+        checkClaims(corpus, where, { every: true });
+        const others = [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, SEEN9, SEEN10, HOLDOUT11, LIVE, PROBES].filter((d) => d !== dir && present(d));
+        const before = earlier(others);
+        for (const id of ids) assert.ok(!before.ids.has(id), `${where} ${id} is also in another corpus`);
+        for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `${where} ${c.id} repeats a reply of another corpus`);
+        const m = measure(corpus);
+        assert.deepEqual(m.misses.map((miss) => `${miss.label} ${miss.id}: ${miss.claims.join('; ')}`), []);
+    });
+}
+
 test('the corpus files never hold a real address or key', () => {
-    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, HOLDOUT9, SEEN9, HOLDOUT10, SEEN10, HOLDOUT11]) {
+    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, HOLDOUT9, SEEN9, HOLDOUT10, SEEN10, HOLDOUT11, LIVE, PROBES]) {
         for (const label of LABELS) {
             const file = join(dir, `${label}.json`);
             if (!existsSync(file)) continue;

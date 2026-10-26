@@ -285,6 +285,29 @@ const QUALITY = /^(?:(train|training|val|valid|validation|dev|test|eval|holdout|
 const LOWER_QUALITY = /^(loss|perplexity|ppl|wer|cer|mae|mse|rmse)$/i;
 const READING = /(?<![\w.])([a-z][\w-]{0,30}?)\s*(?:[:=]\s*|\s{1,8})(-?\d*\.\d+|-?\d+)(?![\w.%])/gi;
 
+/**
+ * A coverage report's figures in percent, `{ statements?, branches?, functions?, lines?, total? }`: istanbul's table
+ * ("All files | 81.42 | 70.1 | 79.3 | 82.06") or summary ("Statements : 81.42% ( 570/700 )"), coverage.py's
+ * "TOTAL … 82%", go's "coverage: 81.4% of statements", tarpaulin's "81.42% coverage, 570/700 lines covered".
+ */
+export function coverageIn(text) {
+    if (typeof text !== 'string' || !/coverage|%\s*Stmts|Statements\s*:|^TOTAL\s/im.test(text)) return undefined;
+    const cov = {};
+    const all = /%\s*Stmts\s*\|\s*%\s*Branch\s*\|\s*%\s*Funcs\s*\|\s*%\s*Lines/i.test(text) ? /^\s*All files\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)/im.exec(text) : null;
+    if (all) Object.assign(cov, { statements: Number(all[1]), branches: Number(all[2]), functions: Number(all[3]), lines: Number(all[4]) });
+    for (const [key, word] of [['statements', 'Statements'], ['branches', 'Branches'], ['functions', 'Functions'], ['lines', 'Lines']]) {
+        const m = new RegExp(`^\\s*${word}\\s*:\\s*([\\d.]+)%`, 'im').exec(text);
+        if (m && cov[key] === undefined) cov[key] = Number(m[1]);
+    }
+    const py = /^TOTAL\s+(?:\d+\s+){2,4}([\d.]+)%\s*$/m.exec(text);
+    if (py) cov.total = Number(py[1]);
+    const go = [...new Set([...text.matchAll(/\bcoverage:\s*([\d.]+)%\s+of\s+statements\b/gi)].map((m) => m[1]))];
+    if (go.length === 1 && cov.statements === undefined) cov.statements = Number(go[0]);
+    const tp = /\b([\d.]+)%\s+coverage,\s+\d+\/\d+\s+lines\s+covered\b/i.exec(text);
+    if (tp && cov.lines === undefined) cov.lines = Number(tp[1]);
+    return Object.keys(cov).length ? cov : undefined;
+}
+
 /** A model's quality readings in output order: `[{ l: 'val_acc', m: 'acc', s: 'val', v: 0.871 }]`, at most 24. */
 export function readingsIn(text) {
     if (typeof text !== 'string' || text === '') return [];
@@ -828,6 +851,8 @@ export function itemOf({ name, args, text, isError = false }) {
     if (table.length) facts.ab = true;
     if (nums.length) facts.nums = nums;
     if (pairs.length) facts.pairs = pairs;
+    const coverage = coverageIn(out);
+    if (coverage) facts.coverage = coverage;
     const readings = readingsIn(out);
     if (readings.length) facts.readings = readings;
     const search = searchOf(tool, args, out, command);
@@ -1332,6 +1357,8 @@ function namedChecks(claim, list, prompt = '') {
     }
     // Every figure must have printed, but an amount or a factor ("40% less", "3x faster") may follow from one metric's
     // before and after. A reading ("p95 is 120 ms") and both sides of "from X to Y" must print as they are.
+    const covered = coverageClash(claim, list);
+    if (covered) return covered;
     const required = claim.metrics ?? [];
     // "Last run the median was 240 ms": a figure the person's message gave needs no output of this turn.
     const given = typeof prompt === 'string' && prompt ? numsIn(prompt) : [];
@@ -1340,6 +1367,32 @@ function namedChecks(claim, list, prompt = '') {
         return { verdict: 'unbacked', evidence: [], why: `It quotes ${listed(missing.slice(0, 3).map((m) => m.text))}, which no output in this turn shows.` };
     }
     return undefined;
+}
+
+/** "statement coverage is 95%", "95% line coverage", "coverage is above 80%": the measure, a bound, and the figure. */
+const COVERAGE_SAID = /\b(?:(statements?|stmts?|lines?|branch(?:es)?|functions?|funcs?)\s+)?coverage\s+(?:is\s+|was\s+|sits\s+|stands\s+|reached\s+|hit\s+|hits\s+|of\s+|at\s+|now\s+|:\s*|=\s*)*(?:now\s+|at\s+)?(over|above|more\s+than|at\s+least|under|below|less\s+than|about|around|roughly|~)?\s*(\d+(?:\.\d+)?)\s*%|(\d+(?:\.\d+)?)\s*%\s+(?:(statements?|stmts?|lines?|branch(?:es)?|functions?|funcs?)\s+)?coverage\b/i;
+
+/**
+ * "statement coverage is 95%" when the turn's coverage report shows another figure for it (81.42%): contradicted, or
+ * undefined. A figure said to move ("from 78% to 92%") is left to the before-and-after checks.
+ */
+function coverageClash(claim, list) {
+    const text = String(claim.part ?? claim.text ?? '');
+    const m = COVERAGE_SAID.exec(text);
+    if (!m || (claim.metrics ?? []).some((x) => x.arrow) || /\b(?:from|was|were|up|down)\s+~?\d+(?:\.\d+)?\s*%/i.test(text)) return undefined;
+    const report = list.filter((i) => i.coverage && i.ok !== false).at(-1);
+    if (!report) return undefined;
+    const value = Number(m[3] ?? m[4]);
+    const word = (m[1] ?? m[5] ?? '').toLowerCase();
+    const key = /^st/.test(word) ? 'statements' : /^line/.test(word) ? 'lines' : /^branch/.test(word) ? 'branches' : /^func/.test(word) ? 'functions' : '';
+    const bound = (m[2] ?? '').toLowerCase().replace(/\s+/g, ' ');
+    const shown = key ? [report.coverage[key] ?? (key === 'statements' || key === 'lines' ? report.coverage.total : undefined)].filter((v) => v !== undefined) : Object.values(report.coverage);
+    if (shown.length === 0) return undefined;
+    const fits = (v) => (/^(?:over|above|more than|at least)$/.test(bound) ? v >= value : /^(?:under|below|less than)$/.test(bound) ? v <= value
+        : Math.abs(v - value) <= (/^(?:about|around|roughly|~)$/.test(bound) ? 1.5 : Number.isInteger(value) ? 1 : 0.05));
+    if (shown.some(fits)) return undefined;
+    const said_ = key ? `${shown[0]}% of ${key}` : listed(Object.entries(report.coverage).map(([k, v]) => `${v}% of ${k === 'total' ? 'the total' : k}`));
+    return { verdict: 'contradicted', evidence: [said(report)], why: `It says ${key ? `${key.replace(/s$/, '')} ` : ''}coverage is ${bound ? `${bound} ` : ''}${value}%; the coverage report in this turn shows ${said_}.` };
 }
 
 /** A person's message that asks to build or cut something: "Cut the signed release APK", "Rebuild the marts". */
