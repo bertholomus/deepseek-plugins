@@ -618,6 +618,38 @@ test('the store asks the host\'s version and reads state again only when it move
     assert.deepEqual(plain(store.notices().map((n) => n.text)), ['Another one.']);
 });
 
+test('a choice from the settings menu shows at once, is saved, and a refusal puts back what the host has', async () => {
+    let prefs = { hideWeekends: false, weekNumbers: false };
+    let refuse = false;
+    let release;
+    const link = {
+        async call(method, args) {
+            if (method === 'state') return { ok: true, value: { version: 1, calendars: [], accounts: [], prefs } };
+            if (method === 'setPrefs') {
+                await new Promise((resolve) => { release = resolve; });
+                if (refuse) return { ok: false, error: { code: 'calendar/failed', message: 'No.' } };
+                prefs = { ...prefs, ...args.patch };
+                return { ok: true, value: { prefs } };
+            }
+            return { ok: true, value: {} };
+        },
+    };
+    const store = I.calendarStore(link);
+    await store.loadState();
+    let saving = store.choose({ weekNumbers: true });
+    assert.equal(store.state().prefs.weekNumbers, true, 'shown before the host answers');
+    release();
+    assert.equal((await saving).ok, true);
+    assert.equal(store.state().prefs.weekNumbers, true, 'and kept once saved');
+    refuse = true;
+    saving = store.choose({ hideWeekends: true });
+    assert.equal(store.state().prefs.hideWeekends, true);
+    release();
+    assert.equal((await saving).ok, false);
+    assert.equal(store.state().prefs.hideWeekends, false, 'refused: what the host has');
+    assert.equal(store.state().prefs.weekNumbers, true);
+});
+
 test('what was emailed, in a sentence', () => {
     assert.equal(I.emailedText({ what: 'an update', to: ['ann@example.com', 'bob@example.com'] }), 'Emailed an update to ann@example.com and bob@example.com.');
     assert.equal(I.emailedText({ what: 'the invitation', to: ['a@x.org', 'b@x.org', 'c@x.org', 'd@x.org', 'e@x.org'] }), 'Emailed the invitation to a@x.org, b@x.org, c@x.org and 2 others.');
@@ -969,7 +1001,7 @@ test('the look is DSH\'s (DESIGN.md): its tokens deepened for glass, its ring, i
         assert.match(value, /^(var\(--dsw-|color-mix\(in srgb,var\(--dsw-)/, `${name} is ${value}`);
     }
     // Secondary text deepened toward DSH's label colour, as section 3 does.
-    assert.ok(tokens.includes('--cal-meta:color-mix(in srgb,var(--dsw-alias-label-secondary) 65%,var(--dsw-alias-label-primary))'));
+    assert.ok(tokens.includes('--cal-meta:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,var(--dsw-alias-label-primary))'));
     // No token DSH doesn't define, and Wallpaper read only by its public values.
     assert.ok(!/--dsh-font-mono|--dsh-color-bg-hover|--wp-(?!blur|tint)[\w-]+/.test(css));
     assert.ok(css.includes('var(--ds-font-family-code,'));
@@ -996,6 +1028,23 @@ test('the look is DSH\'s (DESIGN.md): its tokens deepened for glass, its ring, i
         assert.match(rule, /border:\.5px solid var\(--dsw-alias-border-l4\);border-radius:var\(--dsw-radius-lg\);background:var\(--dsw-alias-bg-layer-1\)/, name);
         assert.ok(!rule.includes('backdrop-filter'), name);
     }
+});
+
+test('corners, type and motion are DSH\'s (DESIGN.md sections 5 and 6): its radius tokens, its ladder of sizes, its durations', () => {
+    const css = I.CSS;
+    // Every corner one of DSH's (or a circle).
+    for (const radius of css.match(/border-radius:[^;}]+/g)) assert.match(radius, /^border-radius:(var\(--dsw-radius-(xs|sm|md|lg|xl|panel)\)|50%)$/, radius);
+    // Every size a step of DSH's ladder, by its token, with the step's own value if a DSH lacks it.
+    for (const size of css.match(/font-size:[^;}]+/g)) {
+        if (size === 'font-size:.95em') continue; // a code word in a sentence, a little smaller than the sentence
+        const step = /^font-size:var\(--dsw-font-(xxxs|xxs|xs|s|base|l|xl)-(\d+)-font-size,(\d+)px\)$/.exec(size);
+        assert.ok(step && step[2] === step[3] && ['11', '12', '13', '14', '16', '20', '24'].includes(step[2]), size);
+    }
+    // The pop-in on DSH's durations and easing; nothing else moves but the spinner and the loading bar.
+    const moves = css.match(/animation:[^;}]+/g).filter((a) => !a.includes('none!important'));
+    assert.deepEqual(plain(moves.filter((a) => a.startsWith('animation:dshcal-in')).map((a) => /^animation:dshcal-in var\(--ds-transition-duration(-fast)?,\.[12]s\) var\(--ds-ease-in-out,/.test(a))), [true, true]);
+    assert.deepEqual(plain(moves.filter((a) => !a.startsWith('animation:dshcal-in')).map((a) => a.split(' ')[0])).sort(), ['animation:dshcal-slide', 'animation:dshcal-spin']);
+    assert.ok(!/transition:(?!none)/.test(css), 'no transitions of its own');
 });
 
 test('toasts are DSH\'s Toast: a done one with its green check, a failure holding longer with its warning glyph', () => {

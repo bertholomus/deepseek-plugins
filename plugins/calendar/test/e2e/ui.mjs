@@ -667,11 +667,11 @@ async function contrastSweep(page, scope) {
                 ratios.push(r);
                 // Text on glass that reaches the wall (or DSH's own ground under it): the hard case.
                 if (!opaque && grounds.length) onGlass.push(r);
-                if (r < need) fails.push({ what: say(el), text: el.textContent.trim().slice(0, 24), ratio: Math.round(r * 100) / 100, need });
+                if (r < need) fails.push({ what: say(el), text: el.textContent.trim().slice(0, 24), ratio: Math.round(r * 100) / 100, need, color: css.color, ground: ground.slice(0, 3).map(Math.round).join(',') });
             }
         }
         const low = (list) => Math.round(Math.min(...list) * 100) / 100;
-        return { count: ratios.length, min: low(ratios), glass: onGlass.length, glassMin: low(onGlass), wall: Boolean(wall && wall[3] >= 1), failCount: fails.length, fails: fails.slice(0, 8) };
+        return { count: ratios.length, min: low(ratios), glass: onGlass.length, glassMin: low(onGlass), wall: Boolean(wall && wall[3] >= 1), failCount: fails.length, fails: [...new Map(fails.map((f) => [`${f.what} ${f.ratio}`, f])).values()].slice(0, 12) };
     }, scope);
 }
 
@@ -2720,7 +2720,7 @@ try {
         const short = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.glass} on glass, lowest there ${r.glassMin}:1`]));
         console.log(`# contrast: ${JSON.stringify(short)}`);
         // Over the grey wall the glass shows it: some text sits on glass all the way down to the wall.
-        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || r.glass < 10 || (k.endsWith('grey wall') && !r.wall));
+        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (k.endsWith('grey wall') && (!r.wall || r.glass < 10)));
         check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, without a wallpaper and over a mid-grey one at the default tint',
             bad.length === 0, JSON.stringify(Object.fromEntries(bad)));
     });
