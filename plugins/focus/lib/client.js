@@ -222,7 +222,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			const button = h("button", { type: "button", className: "fc-footbtn", "aria-label": label, "aria-haspopup": "dialog", "data-focus-open": "", onClick: (e) => openPanel(e.currentTarget) },
 				timerIcon(18),
 				phase === "running" ? h("span", { className: "fc-dot", "aria-hidden": "true" }) : phase === "paused" ? h("span", { className: "fc-dot fc-dot-paused", "aria-hidden": "true" }) : null);
-			return has("Tooltip") ? h(ui.Tooltip, { label: tip, side: "top" }, button) : button;
+			return has("Tooltip") ? h(ui.Tooltip, { label: tip, side: "top", portal: true }, button) : button; // in a portal, so the sidebar never clips it
 		};
 
 		// ------------------------------------------------------------ the panel: DSH's own dialog
@@ -369,7 +369,7 @@ input.fc-num:focus-visible,.fc-num input:focus-visible{outline:2px solid ${RING}
 .fc-bad,.fc-bad input{border-color:var(--dsw-alias-state-error-primary)}
 .fc-meta{margin:0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}
 .fc-error{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary))}
-.fc-note{font:var(--dsw-font-xs-13);padding:10px 12px;border-radius:var(--dsw-radius-md,12px);background:var(--dsw-alias-bg-layer-2,transparent)}
+.fc-note{font:var(--dsw-font-xs-13);padding:10px 12px;border-radius:var(--dsw-radius-md,12px);border:.5px solid var(--dsw-alias-border-l3)}
 .fc-settings{display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l3)}
 .fc-switch{justify-content:space-between;cursor:pointer}
 .fc-switch-text{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary)}

@@ -110,6 +110,8 @@ async function focus(method = 'GET', body, { raw } = {}) {
     return { status: res.status, headers: res.headers, body: value, text };
 }
 const op = (o, extra = {}) => focus('POST', { op: o, ...extra });
+/** After a start, the route may come up a moment after the bridge: wait for it. */
+const focusUp = (what) => waitFor(async () => Boolean((await focus()).body?.timer), `Focus's route (${what})`, 60000, 300);
 const completesIn = (from) => (read(logFile).slice(from).match(/ complete focus /g) ?? []).length;
 
 /** The patch's Focus row: none, or one with `config`. DSH applies a changed patch while it runs. */
@@ -127,6 +129,7 @@ let second;
 try {
     run.writeProfile(model.port);
     await run.boot('first start');
+    await focusUp('first start');
 
     // ── first start ──────────────────────────────────────────────────────
     await step('first start: the default state, written to DSH_HOME/focus, served on /api/focus/state', async () => {
@@ -185,6 +188,7 @@ try {
         const endAt = started.body?.timer?.endAt;
         await run.stop();
         await run.boot('restart under a running timer');
+        await focusUp('restart');
         const back = (await focus()).body;
         check('after a restart: still running, the same end', back?.timer?.running === true && back.timer.endAt === endAt && back.timer.kind === 'custom', json(back?.timer));
         await op({ op: 'reset' });
@@ -196,6 +200,7 @@ try {
         check('DSH was closed before the timer ended', Date.now() < shortEnd, `${shortEnd - Date.now()} ms left`);
         if (Date.now() < shortEnd + 6000) await sleep(shortEnd + 6000 - Date.now());
         await run.boot('start after the end');
+        await focusUp('start after the end');
         const after = (await focus()).body;
         check('at the next start: ended as of its end, counted once',
             after?.timer?.running === false && after.timer.doneAt === shortEnd && after.sessions.focus === before + 1, json(after));
@@ -213,11 +218,11 @@ try {
         check('focus.log says the setting', /setting: dataDir must be a full path/.test(read(logFile)), read(logFile).slice(-400));
         const own = join(run.root, 'focus-own');
         focusRow({ dataDir: own });
-        await waitFor(() => existsSync(join(own, 'state.json')), 'the state in the configured folder', 30000, 400);
+        await waitFor(async () => existsSync(join(own, 'state.json')) && (await focus()).body?.rev === 0, 'the timer served from the configured folder', 30000, 400);
         const good = (await focus()).body;
         check('a full dataDir: the timer lives there (a first start of its own), no problems', json(good.problems) === '[]' && good.rev === 0 && existsSync(join(own, 'focus.log')), json(good));
         focusRow(null);
-        await waitFor(async () => (await focus()).body?.rev >= rev, 'the default folder back', 30000, 400);
+        await waitFor(async () => (await focus()).body?.rev >= rev && rev > 0, 'the default folder back', 30000, 400);
         const back = (await focus()).body;
         check('no row again: back on the default folder, its state as it was', json(back.problems) === '[]' && back.rev >= rev && back.sessions.focus >= 2, json(back));
         await op({ op: 'set', kind: 'focus', durationMs: 1500000 });
