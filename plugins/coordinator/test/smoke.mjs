@@ -3344,6 +3344,12 @@ test('changes: the Changes tab draws each edit\'s hunks as DSH\'s own diff card 
     assert.equal(placeIn('/w', '/w/x/y.md'), 'x/y.md');
     assert.equal(placeIn('/w', '/wx/y.md'), '/wx/y.md');
     assert.equal(placeIn('', './z.md'), 'z.md');
+    // macOS: /var, /tmp and /etc are links into /private; DSH may name the folder one way and a tool the file the other.
+    assert.equal(placeIn('/private/var/folders/q/ws', '/var/folders/q/ws/b.txt'), 'b.txt');
+    assert.equal(placeIn('/var/folders/q/ws', '/private/var/folders/q/ws/sub/b.txt'), 'sub/b.txt');
+    assert.equal(placeIn('/private/tmp/ws/', '/tmp/ws/c.md'), 'c.md');
+    assert.equal(placeIn('/private/var/folders/q/ws', '/var/folders/q/wsx/b.txt'), '/var/folders/q/wsx/b.txt');
+    assert.equal(placeIn('/private/varnish/ws', '/varnish/ws/b.txt'), '/varnish/ws/b.txt');
 });
 
 test('changes: a thread\'s Changes tab reads its own edits and its subagents\' from their logs', async () => {

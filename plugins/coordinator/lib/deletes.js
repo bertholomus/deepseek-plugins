@@ -567,6 +567,25 @@ function tempRoots() {
 /** Whether a path is inside a folder (not the folder itself). */
 const inside = (path, root) => path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 
+/**
+ * A path with its links resolved, as far as it exists: the real path of its
+ * deepest folder that exists, then the rest as written. Never throws.
+ */
+function realOf(path) {
+    const rest = [];
+    let at = String(path);
+    for (let depth = 0; depth < 64; depth++) {
+        try {
+            return rest.length === 0 ? realpathSync(at) : join(realpathSync(at), ...rest);
+        } catch {}
+        const up = dirname(at);
+        if (up === at) break;
+        rest.unshift(basename(at));
+        at = up;
+    }
+    return String(path);
+}
+
 /** How far a file's times may be from the clock that read them: a file system stamps them with a coarse clock (FAT's is 2 s). */
 export const CLOCK_SLACK_MS = 2000;
 /** How many things on the disk the check reads for one thing a command deletes, at most; past that it asks. */
@@ -681,13 +700,16 @@ export function isFree(d, { work = [], mine: given = {} } = {}) {
     if (d.temp) return true;
     const mine = { made: given.made ?? new Map(), spans: Array.isArray(given.spans) ? given.spans : [], foreign: given.foreign };
     const roots = tempRoots();
-    const inWork = (path) => work.some((w) => path === w || inside(path, w));
-    const holdsWork = (path) => work.some((w) => w === path || inside(w, path));
+    // The workspace by the path it was given and by its real one: a folder reached through a link (macOS's /var is
+    // /private/var) is still the workspace, never a temp folder outside it.
+    const works = [...new Set(work.flatMap((w) => [w, realOf(w)]))];
+    const inWork = (path) => [path, realOf(path)].some((p) => works.some((w) => p === w || inside(p, w)));
+    const holdsWork = (path) => [path, realOf(path)].some((p) => works.some((w) => w === p || inside(w, p)));
     if (typeof d.glob === 'string') {
         // The folder its matches are in, and the start of their names there.
         const folder = d.glob.endsWith('/') || d.glob.endsWith(sep) ? resolve(d.glob) : dirname(resolve(d.glob));
         const start = d.glob.endsWith('/') || d.glob.endsWith(sep) ? '' : basename(resolve(d.glob));
-        const mayMatchWork = work.some((w) => w === folder || inside(w, folder) && (start === '' || resolve(w).slice(folder.length + 1).startsWith(start)));
+        const mayMatchWork = [folder, realOf(folder)].some((f) => works.some((w) => w === f || inside(w, f) && (start === '' || resolve(w).slice(f.length + 1).startsWith(start))));
         if (!inWork(folder) && !mayMatchWork && roots.some((r) => inside(folder, r) || (folder === r && start !== ''))) return true;
         return !folder.split(sep).includes('.git') && owned(folder, mine);
     }

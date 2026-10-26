@@ -233,3 +233,18 @@ test('deletes: code deletes by its calls; its strings count as commands only whe
     assert.deepEqual(paths("console.log('rm -rf build')"), []);
     assert.deepEqual(paths("print('call os.remove on it')"), []);
 });
+
+test('a workspace in the OS temp folder, named through a link (macOS /var is /private/var), is still the workspace', () => {
+    // Its user files ask before they go, whichever spelling the command or DSH uses; never "a temp file outside it".
+    const base = mkdtempSync(join(tmpdir(), 'deletes-link-'));
+    mkdirSync(join(base, 'real', 'ws', 'legacy'), { recursive: true });
+    writeFileSync(join(base, 'real', 'ws', 'legacy', 'notes.txt'), 'the user\'s notes\n');
+    symlinkSync(join(base, 'real'), join(base, 'link'), 'dir');
+    const real = join(base, 'real', 'ws');
+    const viaLink = join(base, 'link', 'ws');
+    const asked = (command, work) => deletesOf(command, { cwd: work }).some((d) => !isFree(d, { work: [work] }));
+    assert.equal(asked(`rm -rf ${join(viaLink, 'legacy')}`, real), true, 'the command names the link, DSH the real folder');
+    assert.equal(asked(`rm -rf ${join(real, 'legacy')}`, viaLink), true, 'the command names the real folder, DSH the link');
+    assert.equal(asked(`rm -rf ${join(viaLink, 'legacy', '*.txt')}`, real), true, 'a pattern too');
+    assert.equal(asked(`rm -rf ${join(viaLink, 'legacy')}`, viaLink), true);
+});
