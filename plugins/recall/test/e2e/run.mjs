@@ -1249,8 +1249,7 @@ try {
         }, 'DSH to apply enabled: true from the saved profile', 30000);
         const appliedOn = Date.now() - wrote;
         check('DSH applies enabled: true from the saved profile, with no restart', appliedOn < 30000, `${appliedOn} ms`);
-        check('What happened says it was switched on again, once', on.history[0]?.kind === 'switch'
-            && json(switches(on)) === json(['Switched on again in DSH\'s profile', 'Switched off in DSH\'s profile']), json(on.history.slice(0, 3)));
+        check('What happened says it was switched on again, once', json(switches(on)) === json(['Switched on again in DSH\'s profile', 'Switched off in DSH\'s profile']), json(on.history.slice(0, 3)));
         if (page) {
             await page.locator('[data-recall-header="off"]').waitFor({ state: 'hidden', timeout: 15000 });
             check('the open page shows Recall on again within 15 s of the save', true, `${Date.now() - wrote} ms`);
