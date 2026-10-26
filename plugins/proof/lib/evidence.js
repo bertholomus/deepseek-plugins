@@ -1499,7 +1499,7 @@ function namedCounts(text) {
 }
 
 /** The tests other than the failing ones: "the other tests", "the remaining 2", "the others", "the rest". */
-const OTHERS_PASS = /\b(?:the\s+)?(?:other|remaining)\s+(?:\d+\s+|two\s+|three\s+|four\s+|five\s+)?(?:tests?|specs?|cases?|ones?|checks?)\b|\bthe\s+(?:other|remaining)\s+\d+\b|\bthe\s+others\b|\bthe\s+rest\b/i;
+const OTHERS_PASS = /\b(?:the\s+)?(?:other|remaining)\s+(?:\d+\s+|two\s+|three\s+|four\s+|five\s+)?(?:tests?|specs?|cases?|ones?|checks?)\b|\bthe\s+(?:other|remaining)\s+\d+\b|\bthe\s+others\b|\bthe\s+rest\b|\beverything\s+else\b|\ball\s+(?:the\s+)?(?:others|rest)\b|\b(?:all|every)\s+other\s+(?:tests?|specs?|cases?|ones?)\b/i;
 /** A pass said to hold on every round: "reliably", "every time", "five times in a row", "no longer flaky". */
 const REPEAT_PASS = /\b(?:reliabl[ey]|consistently|every\s+(?:single\s+)?(?:time|run|round)|each\s+(?:time|run|round)|(?:\w+|\d+)\s+times\s+in\s+a\s+row|(?:all|each)\s+(?:\w+|\d+)\s+(?:runs|rounds|times)|\d+\s*\/\s*\d+\s+(?:runs|rounds|times)|no\s+longer\s+flak\w*|not\s+flaky(?:\s+any\s*more)?|stable\s+now|deterministic(?:ally)?)\b/i;
 
@@ -1707,11 +1707,14 @@ function failNamesOf(last) {
 /** Whether a failing test's line in the run shares a word with what the claim names ("empty input" and "✖ handles empty input"). */
 function failsOnClaim(last, claim) {
     const said_ = significant(String(claim.part ?? claim.text ?? '').replace(/^\W*(?:fixed|repaired|resolved)\b/i, ''));
+    // A failing name meets the claim when it shares two of its words with it (one, when the name has one): "parses ISO
+    // dates" meets "the ISO date parsing"; "sum adds every number" does not meet "the single-number test".
+    const meets = (l) => { const own = [...significant(l.replace(/\(\d[\d.]*\s*m?s\)/g, ''))]; return own.filter((w) => said_.has(w)).length >= Math.min(2, own.length) && own.length > 0; };
     // The failing tests by name when the lines give them (not the file they sit in or the error), else the lines that are
     // not a run's summary ("1 failed, 23 passed, 24 total").
     const names = failNamesOf(last);
     const lines = names.length ? names : (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string' && !/\b\d+\s+(?:failed|passed|failing|passing|failures?)\b/i.test(l));
-    return lines.some((l) => [...significant(l.replace(/\(\d[\d.]*\s*m?s\)/g, ''))].some((w) => said_.has(w)));
+    return lines.some(meets);
 }
 /**
  * Whether the reply itself says what still fails, and it fits the run: the count it gives is the run's, and a test it names
