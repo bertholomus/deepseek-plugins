@@ -791,6 +791,21 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(control.props.value, '');
     assert.equal(control.props.className, 'dshx-seg-none');
     assert.ok(kit.css.some((rule) => rule.includes('.dshx-seg-none>[aria-hidden="true"]{visibility:hidden}')), 'its pill is hidden');
+    // A changed switch or choice is marked as DSH's own field marks a typed value: "Changed", then "Use the default", one look.
+    for (const name of ['resume', 'mode']) {
+        const badges = elementsOf(row(name)).find((e) => e.props?.className === 'dshx-set-badges');
+        assert.ok(badges, name);
+        const tag = elementsOf(badges).find((e) => e.type === 'Tag');
+        assert.equal(tag?.props.tone, 'neutral', name);
+        assert.equal(textIn(tag), 'Changed', name);
+        const reset = elementsOf(badges).find((e) => e.type === 'button');
+        assert.equal(textIn(reset), 'Use the default', name);
+        assert.equal(reset.props['aria-label'], `Use the default for ${fields.find((f) => f.name === name).title}`);
+    }
+    const resetRule = kit.css.find((rule) => rule.startsWith('.dshx-set-reset{'));
+    assert.match(resetRule, /font-size:12px;line-height:1\.5;color:var\(--dsw-alias-label-secondary\)/, 'as DSH draws its own');
+    assert.doesNotMatch(resetRule, /underline|--dsw-alias-link/);
+    assert.ok(kit.css.includes('.dshx-settings .dshx-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}'), '"Changed" in the suite\'s secondary text, as on its pages');
 });
 
 test('kit: a number saved in quotes (#32) is flagged as the form opens, says the quotes are what is wrong, and the number typed without them saves', () => {
