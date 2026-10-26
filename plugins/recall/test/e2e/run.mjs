@@ -867,7 +867,6 @@ try {
             check('Wallpaper on at a low tint (.2) over a mid picture: the small text reads at 4.5:1 or more, light and dark', ['light', 'dark'].every((m) => low[m].count > 10 && low[m].ratio >= 4.5), json(low));
             // A narrow window: the kind switcher inside its row, every choice whole; nothing wider than the page.
             await page.setViewportSize({ width: 420, height: 900 });
-            await page.waitForTimeout(500);
             const fit = () => page.evaluate(() => {
                 const row = document.querySelector('[data-recall-filters]');
                 const list = row?.querySelector('[data-suite-choice="dshrc-kind"] [role="tablist"]');
@@ -875,8 +874,12 @@ try {
                 const l = list?.getBoundingClientRect();
                 const tabs = [...(list?.querySelectorAll('[role="tab"]') ?? [])].map((t) => ({ text: t.textContent, whole: t.scrollWidth <= t.clientWidth + 1 }));
                 const pageEl = document.querySelector('[data-recall-page]');
-                return { row: r ? [Math.round(r.left), Math.round(r.right)] : null, list: l ? [Math.round(l.left), Math.round(l.right)] : null, tabs, spill: pageEl.scrollWidth - pageEl.clientWidth };
+                return { width: Math.round(pageEl.getBoundingClientRect().width), row: r ? [Math.round(r.left), Math.round(r.right)] : null, list: l ? [Math.round(l.left), Math.round(l.right)] : null, tabs, spill: pageEl.scrollWidth - pageEl.clientWidth };
             });
+            // DSH folds its sidebar into a rail at this width, a moment after the resize on some builds (the app's own
+            // took more than half a second under load): measure once the page has the window's width, not before.
+            await waitFor(async () => (await fit()).width >= 300, 'DSH\'s narrow layout', 10000, 200).catch(() => {});
+            await page.waitForTimeout(300);
             const narrow = await fit();
             check('at 420 px the kind switcher fits inside its row with every choice whole, and nothing spills sideways',
                 narrow.row && narrow.list && narrow.list[0] >= narrow.row[0] && narrow.list[1] <= narrow.row[1] && narrow.tabs.length === 4 && narrow.tabs.every((t) => t.whole) && narrow.spill <= 1, json(narrow));
