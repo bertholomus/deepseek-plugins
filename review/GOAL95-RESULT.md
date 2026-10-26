@@ -4,13 +4,13 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 2:50 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 2:53 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
 | --- | --- | --- | --- | --- | --- |
 | Agent Terminals | 9.0 (round 4) | 44ce483 | goal95/agent-terminals | NOT YET | a message sent twice back to back is proven by the first one's transcript line, so after a restart the second is never typed yet reads delivered (`provenIn()` in `lib/transcripts.js`) |
-| Autopilot | not judged yet (earlier best 8.5, round 3, ea10517) | db0453a | goal95/autopilot | NOT YET | builder working |
+| Autopilot | being judged (round 5; earlier best 8.5, round 3, ea10517) | f9f84e7 | goal95/autopilot | NOT YET | judge working |
 | Calendar | 8.0 (round 1) | 8b7983c | goal95/calendar | NOT YET | DSH's approval for a chat's change does not say what changes; reminders are stored but never fire |
 | Canon | being judged (round 4; earlier best 8.0) | b98506f | goal95/canon | NOT YET | judge working |
 | Categories | being judged (round 1) | 70977a1 | goal95/categories | NOT YET | judge working |
