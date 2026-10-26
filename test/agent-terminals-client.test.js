@@ -344,6 +344,27 @@ test('an agent\'s messages: each one\'s state in words, why it waits, and Take b
     assert.deepEqual(acts.at(-1), ['cancel', { key: 'k1', id: 'm5' }]);
 });
 
+test('an agent\'s messages: one that failed or was not proven offers Send again, once; Start again says what the host says it does', async () => {
+    const { client } = loadClient(CLIENT);
+    const { AgentCard, saidText } = client.internals;
+    const acts = [];
+    const act = async (method, args) => { acts.push(plain([method, args])); return undefined; };
+    const item = (id, state, more = {}) => ({ id, text: `message ${id}`, by: 'you', at: now - 30000, state, ...more });
+    const agent = view({ deliveries: [item('m4', 'failed', { why: 'DSH restarted twice before the agent read it. Send it again.' }), item('m3', 'not proven'), item('m2', 'failed', { resent: 'm4' }), item('m1', 'delivered')] });
+    const draw = (a) => AgentCard({ agent: a, act, busyKey: undefined, onOpen: () => {}, openTerminal: () => {}, spot: undefined });
+    const rows = withAttr(draw(agent), 'data-agent-terminals-message');
+    assert.deepEqual(rows.map((r) => Boolean(button(r, 'Send again'))), [true, true, false, false], 'not for one sent again already, nor one delivered');
+    assert.match(button(rows[1], 'Send again').props.title, /may still be in its input box/);
+    await button(rows[0], 'Send again').props.onClick();
+    assert.deepEqual(acts.at(-1), ['resend', { key: 'k1', id: 'm4' }], 'the host sends its whole text, not the shortened one shown');
+    assert.equal(withAttr(draw({ ...agent, followed: false }), 'data-agent-terminals-resend').length, 0, 'nothing that acts while it does not follow its agents');
+    assert.equal(saidText('resend', agent, { delivery: { state: 'queued' } }), 'Queued for “helper · app” again. It is typed in when the agent is ready, and marked delivered once its transcript shows it.');
+    // Start again and Start anew say what they did, and a stop says what Start again will do, in the host's words.
+    assert.equal(saidText('startAgain', agent, {}, { fresh: true }), 'Started “helper · app” anew, with a new conversation.');
+    assert.equal(saidText('startAgain', agent, {}, { fresh: false }), 'Started “helper · app” again.');
+    assert.equal(saidText('stop', agent, { agent: { ...agent, again: 'Start again starts it again (it has no conversation to resume yet).' } }), 'Stopped “helper · app”. Start again starts it again (it has no conversation to resume yet).');
+});
+
 test('the page: reads the agents, shows each, and says what an action did, in words and where the keyboard is', async (t) => {
     const { react, mount } = statefulReact();
     const { client } = loadClient(CLIENT, { react });
@@ -443,7 +464,7 @@ test('the start form: programs found and used before, how it resumes, where it w
             { program: 'helper', style: 'flags', conversations: 12, latest: now - 3600000, path: '/usr/local/bin/helper' },
             { program: 'worker', style: 'subcommand', data: '~/.worker', conversations: 1, latest: 0 },
         ],
-        recent: [{ program: 'tool', args: ['--model', 'small one'], style: 'plain' }],
+        recent: [{ program: 'tool', args: ['--model', 'small one'], style: 'plain' }, { program: '/opt/helper', args: [], style: 'flags', data: '~/elsewhere', folder: '/Users/me/elsewhere' }],
     };
     const started = [];
     const form = mount(StartCard, { data, onStarted: (agent, problem) => started.push([agent?.key, problem]), formRef: { current: undefined } });
@@ -456,6 +477,7 @@ test('the start form: programs found and used before, how it resumes, where it w
     assert.match(text, /1 conversation · not found where DSH looks for programs/);
     assert.match(text, /Used here before/);
     assert.match(text, /tool --model small one/);
+    assert.match(text, /Starts with --session-id, resumes with --resume · conversations in \/Users\/me\/elsewhere/, 'a program used with another conversations folder says which');
     // Nothing to start yet: the button waits and says what is missing.
     assert.equal(startButton().props.disabled, true);
     assert.match(textIn(form.tree), /Name the program first\./);

@@ -42,31 +42,34 @@ export const name = 'agent-terminals';
 export const inject = [];
 
 /**
- * Settings: types and defaults here, the rest in checkConfig (lib/config.js),
- * so a wrong value is said in words on its page instead of stopping it at
- * start. The live ones are on its page in Plugins and apply when saved.
+ * Settings: their defaults here; their types and ranges in checkConfig
+ * (lib/config.js). Every key takes any value, so a wrong type in the profile
+ * (a number in quotes, "yes" for a switch) is said in words on its page, as
+ * a value out of range is, instead of stopping Agent Terminals at start or
+ * being dropped without a word on a live edit. The live ones are on its page
+ * in Plugins and apply when saved.
  */
 export const Config = z.object({
     /** Profile only. false keeps Agent Terminals loaded but idle: it starts and types nothing, and its page says so. */
-    enabled: z.boolean().default(true),
+    enabled: z.any().default(true),
     /** Start the agents again, resuming their conversations, after DSH restarts. */
-    resumeAfterRestart: live(z.boolean().default(true)),
+    resumeAfterRestart: live(z.any().default(true)),
     /** Give a new agent's session one short turn by its model, so DSH lists it in the sidebar. */
-    listNewSessions: live(z.boolean().default(true)),
+    listNewSessions: live(z.any().default(true)),
     /** Open an agent's terminal tab when its session is on screen (once per agent and window). */
-    openTabs: live(z.boolean().default(true)),
+    openTabs: live(z.any().default(true)),
     /** Type messages in while the agent works (never while it runs a tool). Off: they wait until it is idle. */
-    typeWhileWorking: live(z.boolean().default(false)),
+    typeWhileWorking: live(z.any().default(false)),
     /** Seconds without proof, while the agent is idle, before Enter is pressed again (2 to 120). */
-    proofSeconds: live(z.number().default(8)),
+    proofSeconds: live(z.any().default(8)),
     /** How many more times Enter is pressed (0 to 5). */
-    enterRetries: live(z.number().default(2)),
+    enterRetries: live(z.any().default(2)),
     /** Seconds a tool call may wait for its result before the agent counts as asking you (5 to 600). */
-    askAfterSeconds: live(z.number().default(20)),
+    askAfterSeconds: live(z.any().default(20)),
     /** A system notification when an agent waits on you, through the notifications plugin. */
-    notify: live(z.boolean().default(true)),
+    notify: live(z.any().default(true)),
     /** Profile only: "auto", "direct" (into the terminal's process) or "attached" (DSH's terminal input). */
-    typing: z.string().default('auto'),
+    typing: z.any().default('auto'),
 });
 
 export function apply(ctx, config) {

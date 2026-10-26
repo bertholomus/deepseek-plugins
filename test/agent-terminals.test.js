@@ -272,6 +272,8 @@ test('typist: a message is pasted when the program asked for it, else typed with
     assert.deepEqual(messageKeys('one line', undefined).paste, false, 'unknown: one line is safe as keys');
     assert.deepEqual(messageKeys('a\nb', undefined).paste, true, 'unknown: more lines need a paste');
     assert.equal(messageKeys('esc\x1b[201~ape', true).data, `${PASTE_START}esc[201~ape${PASTE_END}`, 'a message cannot end the paste early');
+    assert.deepEqual(messageKeys('stop\x03 now\x04 and\x7f\x9b go\tthere', false), { data: 'stop now and go\tthere', paste: false, flattened: false }, 'no control key goes in typed as keys: only tabs and line breaks stay');
+    assert.equal(messageKeys('a\x1a\nb', true).data, `${PASTE_START}a\rb${PASTE_END}`);
     assert.equal(pasteSwitch('x\x1b[?2004hy\x1b[?2004l'), false);
     assert.equal(pasteSwitch('\x1b[?2004h'), true);
     assert.equal(pasteSwitch('nothing'), undefined);
@@ -343,6 +345,33 @@ test('config: every setting is checked in words, and a save says what changed', 
     settings.proofSeconds = 8;
     assert.match(savedEntry(check, [['proofSeconds']]).text, /Settings fixed/);
     assert.equal(savedEntry(check, []), undefined);
+});
+
+test('config: every key of its schema takes any value, so a wrong type in the profile is said in words and never stops it at start', () => {
+    const text = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'plugins', 'agent-terminals', 'lib', 'index.js'), 'utf8');
+    const start = text.indexOf('export const Config = z.object({');
+    assert.ok(start >= 0, 'lib/index.js has a Config schema');
+    const block = text.slice(start, text.indexOf('\n});', start)).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const keys = [...block.matchAll(/^\s+(\w+):\s*(.+?),?\s*$/gm)].map(([, key, schema]) => ({ key, schema }));
+    assert.deepEqual(keys.map((k) => k.key).sort(), Object.keys(DEFAULTS).sort(), 'DEFAULTS lists every key of its schema');
+    for (const { key, schema } of keys) {
+        assert.match(schema, /^(?:live\()?z\.any\(\)\.default\(.+\)\)?$/, `${key} is ${schema}`);
+        assert.equal(schema.startsWith('live('), LIVE_SETTINGS.includes(key), `${key}: live in the schema exactly when its page can change it`);
+        assert.deepEqual(JSON.parse(schema.match(/\.default\((.+?)\)\)?$/)[1].replace(/'/g, '"')), DEFAULTS[key], `${key}: the schema's default is the one in DEFAULTS`);
+    }
+    // A number in quotes, "yes" for a switch, a number for a choice: each is named, with the value as the profile has it.
+    const wrong = (value) => (typeof value === 'boolean' ? (value ? 'yes' : 'no') : typeof value === 'number' ? String(value) : 5);
+    for (const key of Object.keys(DEFAULTS)) {
+        const value = wrong(DEFAULTS[key]);
+        assert.throws(() => checkConfig({ ...DEFAULTS, [key]: value }), (error) => {
+            assert.equal(error.name, 'SettingError', key);
+            assert.equal(error.key, key, key);
+            assert.ok(error.message.startsWith(`${SETTING_TITLES[key]} (${key}) must be `), error.message);
+            assert.ok(error.message.endsWith(`(it is ${JSON.stringify(value)})`), error.message);
+            return true;
+        }, `${key} = ${JSON.stringify(value)}`);
+    }
+    assert.throws(() => checkConfig({ ...DEFAULTS, proofSeconds: '8' }), /^SettingError: Seconds without proof before Enter is pressed again \(proofSeconds\) must be a whole number of seconds from 2 to 120 \(it is "8"\)$/);
 });
 
 test('start form: what is sent is checked in words', () => {
@@ -422,6 +451,10 @@ test('saved state: a broken or older file never stops it', () => {
     assert.match(exitWords({ program: '/opt/bin/nope' }, 127), /“which nope” in a terminal shows it/);
     assert.doesNotMatch(exitWords({ program: 'nope' }, 127), /`/, 'no code marks in words people read');
     assert.match(exitWords({ program: 'x' }, 0, 'Start again runs it anew.'), /runs it anew/);
+    // What the program printed last says why it ended; nothing points at a terminal that may be gone.
+    assert.equal(exitWords({ program: 'x' }, 1, 'Start again resumes its conversation.', 'No conversation found with session ID: c1'), 'It exited with code 1: “No conversation found with session ID: c1”. Start again resumes its conversation.');
+    assert.equal(exitWords({ program: 'x' }, 1, 'Start again resumes its conversation.'), 'It exited with code 1. Start again resumes its conversation.');
+    assert.equal(parseData({ agents: { k2: { sessionId: 's2', program: 'agent', cutAt: 42 } } }).agents.k2.cutAt, 42, 'the job cut last is kept, so it is logged once');
 });
 
 // ── The stand-in agent on its own ──────────────────────────────────────
@@ -681,7 +714,7 @@ function fakeWatch() {
     };
 }
 
-function engine({ dir = tmp('engine'), watch = fakeWatch(), controller = new FakeController(), config = {}, store, working } = {}) {
+function engine({ dir = tmp('engine'), watch = fakeWatch(), controller = new FakeController(), config = {}, store, working, pid } = {}) {
     let n = 0;
     const notices = [];
     const settings = { ...DEFAULTS, proofSeconds: 1, askAfterSeconds: 1, ...config };
@@ -700,7 +733,7 @@ function engine({ dir = tmp('engine'), watch = fakeWatch(), controller = new Fak
     const typist = new Typist({ controller: () => controller, method: () => settings.typing, wait });
     const agents = new AgentTerminals({
         watch, controller: () => controller, sessions, typist, config: settings, store: theStore, journal, home: dir,
-        notify: (item) => notices.push(item), tickMs: 100, wait, startCheckMs: 500, ...(working ? { working } : {}),
+        notify: (item) => notices.push(item), tickMs: 100, wait, startCheckMs: 500, ...(working ? { working } : {}), ...(pid ? { pid } : {}),
     });
     return { agents, watch, controller, settings, store: theStore, journal, notices, dir };
 }
@@ -952,12 +985,12 @@ test('engine: a DSH restart in the middle of a job or an approval leaves the age
 });
 
 /** A DSH restart: its terminals end, and the saved state is read by a new Agent Terminals. */
-function restartDsh(before, { dir, watch, controller, key, config = {} }) {
+function restartDsh(before, { dir, watch, controller, key, config = {}, pid }) {
     before.agents.stop();
     controller.restart();
     before.store.data.agents[key].hostPid = 1;
     before.store.flush();
-    const after = engine({ dir, watch, controller, config, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
+    const after = engine({ dir, watch, controller, config, pid, store: new JsonStore(join(dir, 'state.json'), { parse: parseData, delayMs: 5 }) });
     after.agents.start();
     return after;
 }
@@ -1408,4 +1441,227 @@ test('engine: typing through a terminal input this DSH lacks is refused before a
         fourth.agents.stop();
         controller.restart();
     }
+});
+
+test('engine: an agent that never got a message comes back under its id after a Stop, a closed terminal and a restart, never told to resume what it does not have', async () => {
+    const dir = tmp('no-message');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const data = join(dir, 'data');
+    const first = engine({ dir, watch, controller });
+    first.agents.start();
+    let key;
+    let id;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(data), style: 'flags', data, folder: dir, name: 'Quiet' });
+        key = agent.key;
+        id = agent.conversationId;
+        const record = first.agents.records[key];
+        await until(() => first.agents.view(record).ready, 'it to be ready');
+        assert.equal(first.agents.view(record).canResume, false, 'no transcript yet: no conversation to resume');
+        assert.equal(first.agents.view(record).again, 'Start again starts it again (it has no conversation to resume yet).');
+        await first.agents.stopAgent(key);
+        assert.equal(record.ended.text, 'You stopped it. Start again starts it again (it has no conversation to resume yet).');
+        assert.equal((await first.agents.startAgain(key)).problem, undefined, 'Start again works');
+        assert.equal(record.conversationId, id, 'under the same id');
+        await until(() => controller.terminal(record.sessionId, record.terminalId)?.output.includes(`exec ${FAKE} --style flags --data ${data} --session-id ${id}`), 'started under its id, not resumed');
+        await until(() => first.agents.view(record).ready, 'ready again');
+        assert.equal(first.agents.view(record).status, 'idle');
+        // Its terminal closed (its tab): Start again does the same.
+        await controller.close(await watch.resolveAgent(record.sessionId), record.terminalId);
+        await until(() => first.agents.view(record).status === 'stopped', 'stopped with its terminal');
+        assert.equal(record.ended.text, 'Its terminal was closed (closing an agent\'s terminal tab ends the agent). Start again starts it again (it has no conversation to resume yet).');
+        assert.equal((await first.agents.startAgain(key)).problem, undefined);
+        await until(() => first.agents.view(record).ready, 'ready after its terminal closed');
+        const starts = first.journal.list().filter((e) => e.agent === key && e.kind === 'start');
+        assert.deepEqual(starts.map((e) => [e.text, e.state]), [['Started Quiet again', 'done'], ['Started Quiet again', 'done'], ['Started Quiet', 'done']]);
+        assert.equal(starts[0].why, 'You started it again under the same id: it had no conversation to resume yet (its program writes one with its first message).');
+    } catch (error) {
+        first.agents.stop();
+        throw error;
+    }
+    const restartedAt = Date.now();
+    const second = restartDsh(first, { dir, watch, controller, key });
+    try {
+        const again = second.agents.records[key];
+        const entry = await until(() => second.journal.list().find((e) => e.kind === 'restart' && e.agent === key), 'the restart logged once it holds', 30000);
+        assert.deepEqual([entry.text, entry.state], ['Started Quiet again after DSH restarted', 'done']);
+        assert.match(entry.why, /^DSH ended its terminal when it quit\. It had no conversation to resume yet .* so it starts again under the same id/);
+        const output = controller.terminal(again.sessionId, again.terminalId).output;
+        assert.ok(output.includes(`--session-id ${id}`) && !output.includes('--resume'), output.slice(-400));
+        assert.equal(second.agents.view(again).status, 'idle');
+        assert.ok(!second.journal.list().some((e) => e.agent === key && e.kind === 'ended' && e.at >= restartedAt), 'it did not end');
+        // Its first message makes its conversation: from then on it resumes.
+        second.agents.send(key, '#work=20 hello there');
+        await until(() => second.agents.view(again).deliveries[0]?.state === 'delivered', 'its first message');
+        assert.equal(second.agents.view(again).canResume, true);
+        assert.equal(second.agents.view(again).again, 'Start again resumes its conversation.');
+    } finally {
+        second.agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: a program that fails as it starts again after a restart is logged as not started, with what it printed, and Start anew is offered', async () => {
+    const dir = tmp('fails-again');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const data = join(dir, 'data');
+    const program = join(dir, 'agent-wrapper');
+    writeFileSync(program, `#!/bin/sh\nif [ -f "${join(dir, 'broken')}" ]; then echo "Its settings file cannot be read" >&2; exit 3; fi\nexec "${process.execPath}" "${FAKE}" "$@"\n`, { mode: 0o755 });
+    const first = engine({ dir, watch, controller });
+    first.agents.start();
+    let key;
+    try {
+        const { agent } = await first.agents.launch({ program, args: fakeArgs(data), style: 'flags', data, folder: dir, name: 'Brittle', task: '#work=20 hello' });
+        key = agent.key;
+        await until(() => first.agents.view(first.agents.records[key]).deliveries[0]?.state === 'delivered', 'its first message');
+    } catch (error) {
+        first.agents.stop();
+        throw error;
+    }
+    writeFileSync(join(dir, 'broken'), '');
+    const second = restartDsh(first, { dir, watch, controller, key });
+    try {
+        const again = second.agents.records[key];
+        const entry = await until(() => second.journal.list().find((e) => e.kind === 'restart' && e.agent === key), 'the restart logged', 30000);
+        const words = 'It exited with code 3: “Its settings file cannot be read”. Start again tries to resume it once more; Start anew starts a new conversation.';
+        assert.deepEqual([entry.text, entry.state, entry.why], ['Could not start Brittle again after DSH restarted', 'failed', words]);
+        assert.ok(!second.journal.list().some((e) => e.agent === key && /^Started Brittle again/.test(e.text)), 'never said to have started');
+        const view = second.agents.view(again);
+        assert.deepEqual([view.status, view.detail, view.canResume], ['stopped', words, true]);
+    } finally {
+        second.agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: a job cut by a restart is logged once, however many restarts follow before the next message', async () => {
+    const dir = tmp('cut-once');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const data = join(dir, 'data');
+    const first = engine({ dir, watch, controller });
+    first.agents.start();
+    let key;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(data), style: 'flags', data, folder: dir, name: 'Long', task: '#work=60000 a long job' });
+        key = agent.key;
+        const record = first.agents.records[key];
+        await until(() => first.agents.view(record).status === 'working', 'it to work');
+    } catch (error) {
+        first.agents.stop();
+        throw error;
+    }
+    let before = first;
+    for (const n of [1, 2, 3]) {
+        const after = restartDsh(before, { dir, watch, controller, key });
+        before = after;
+        await until(() => after.agents.view(after.agents.records[key]).ready && after.agents.view(after.agents.records[key]).status === 'idle', `idle after restart ${n}`, 20000);
+        await until(() => after.journal.list().some((e) => e.kind === 'restart' && e.agent === key && e.state === 'done' && e.at >= Date.now() - 30000), `restart ${n} logged`, 30000);
+        assert.equal(after.journal.list().filter((e) => e.kind === 'cut').length, 1, `restart ${n}: the cut is logged once`);
+    }
+    // A new job, cut by the next restart: that one is logged.
+    try {
+        before.agents.send(key, '#work=60000 another long job');
+        await until(() => before.agents.view(before.agents.records[key]).status === 'working', 'it to work again', 20000);
+    } catch (error) {
+        before.agents.stop();
+        throw error;
+    }
+    const last = restartDsh(before, { dir, watch, controller, key });
+    try {
+        await until(() => last.journal.list().filter((e) => e.kind === 'cut').length === 2, 'the new cut logged', 20000);
+        assert.match(last.journal.list().find((e) => e.kind === 'cut').why, /another long job/);
+    } finally {
+        last.agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: at its first start it settles what an earlier run of DSH left open in its log: first turns, starts, and a forgotten agent\'s messages', async () => {
+    const dir = tmp('stale');
+    const watch = fakeWatch();
+    const old = new Journal(join(dir, 'events.jsonl'));
+    const sent = Date.now() - 60000;
+    const cut = old.add({ kind: 'session', agent: 'a1', sessionId: 'cut', text: 'Giving its session a first turn', state: 'sending', by: 'Agent Terminals', pid: 1 });
+    const done = old.add({ kind: 'session', agent: 'a2', sessionId: 'done', text: 'Giving its session a first turn', state: 'sending', by: 'Agent Terminals', pid: 1 });
+    const stopped = old.add({ kind: 'session', agent: 'a3', sessionId: 'stopped', text: 'Giving its session a first turn', state: 'sending', by: 'Agent Terminals', pid: 1 });
+    const start = old.add({ kind: 'start', agent: 'gone', sessionId: 'x', text: 'Starting Gone', state: 'starting', by: 'you', pid: 1 });
+    const message = old.add({ kind: 'message', agent: 'gone', sessionId: 'x', text: 'Message for Gone', state: 'queued', by: 'you' });
+    const mine = old.add({ kind: 'session', agent: 'a4', sessionId: 'mine', text: 'Giving its session a first turn', state: 'sending', by: 'Agent Terminals', pid: process.pid });
+    const ends = { cut: { end: { kind: 'completed', at: sent - 1000 } }, done: { end: { kind: 'completed', at: Date.now() } }, stopped: { end: { kind: 'aborted', at: Date.now() } } };
+    watch.fullState = async (sessionId) => ends[sessionId];
+    const { agents, journal } = engine({ dir, watch });
+    agents.start();
+    try {
+        const state = (entry) => journal.get(entry.id);
+        await until(() => state(cut).state !== 'sending' && state(done).state !== 'sending' && state(stopped).state !== 'sending', 'the first turns settled');
+        assert.deepEqual([state(cut).text, state(cut).state, state(cut).reason], ['Its session\'s first turn was cut off', 'stopped', 'DSH quit before the turn ended. The session is listed in the sidebar all the same.']);
+        assert.deepEqual([state(done).text, state(done).state], ['Gave its session a first turn', 'done']);
+        assert.deepEqual([state(stopped).text, state(stopped).state, state(stopped).reason], ['Its session\'s first turn did not finish', 'stopped', 'The turn was stopped, as DSH quit. The session is listed in the sidebar all the same.']);
+        assert.deepEqual([state(start).text, state(start).state, state(start).reason], ['Could not start Gone', 'failed', 'DSH quit before it started.']);
+        assert.deepEqual([state(message).state, state(message).reason], ['cancelled', 'Its agent was forgotten before it was typed in.']);
+        assert.equal(state(mine).state, 'sending', 'one this DSH still waits on is left to end');
+    } finally {
+        agents.stop();
+    }
+});
+
+test('engine: forgetting an agent closes its messages, and an answer it held is not raised again', async () => {
+    const { agents, watch, controller, journal, dir } = engine();
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Leaving' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'ready');
+        await agents.stopAgent(agent.key);
+        const { delivery } = agents.send(agent.key, 'for later');
+        assert.equal(record.deliveries.find((d) => d.id === delivery.id).state, 'waiting');
+        await agents.forget(agent.key);
+        const entry = journal.list().find((e) => e.kind === 'message' && e.delivery === delivery.id);
+        assert.deepEqual([entry.state, entry.reason], ['cancelled', 'Its agent was forgotten before it was typed in.']);
+        assert.equal(watch.asks.size, 0);
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: a message that failed is sent again whole, once; one on its way or delivered is not', async () => {
+    const { agents, controller, dir } = engine();
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Retry' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'ready');
+        const long = `#work=20 ${'a long message '.repeat(40)}end`;
+        const { delivery } = agents.send(agent.key, long);
+        await until(() => record.deliveries.find((d) => d.id === delivery.id).state === 'delivered', 'it delivered');
+        assert.throws(() => agents.resend(agent.key, delivery.id), /^Error: Its transcript shows it already\.$/);
+        // Lost (as to two restarts): sent again whole, not the 400 characters the page shows.
+        const item = record.deliveries.find((d) => d.id === delivery.id);
+        item.state = 'failed';
+        assert.ok(agents.view(record).deliveries.find((d) => d.id === delivery.id).text.length <= 400);
+        const { delivery: again } = agents.resend(agent.key, delivery.id);
+        assert.equal(record.deliveries.find((d) => d.id === again.id).text, long);
+        assert.equal(agents.view(record).deliveries.find((d) => d.id === delivery.id).resent, again.id, 'the page offers it no second time');
+        assert.throws(() => agents.resend(agent.key, delivery.id), /sent again already/);
+        await until(() => record.deliveries.find((d) => d.id === again.id).state === 'delivered', 'the new one delivered');
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: programs used before are listed once, with their conversations folder when it is not the default', () => {
+    const { agents, dir } = engine();
+    agents.remember({ program: '/x/standin', args: [], style: 'flags' });
+    agents.remember({ program: '/x/standin', args: [], style: 'flags', data: join(dir, '.standin') });
+    agents.remember({ program: '/x/standin', args: [], style: 'flags', data: '~/.standin' });
+    assert.equal(agents.recent.length, 1, 'the default folder, given as ~/… or in full, is one folder');
+    agents.remember({ program: '/x/standin', args: [], style: 'flags', data: '~/elsewhere' });
+    assert.deepEqual(agents.recent.map((r) => r.folder), [join(dir, 'elsewhere'), undefined], 'one that differs says where');
+    agents.store.data.recent = [...agents.store.data.recent, { program: '/x/standin', args: [], style: 'flags', data: join(dir, 'elsewhere') }];
+    assert.equal(agents.recent.length, 2, 'an older list with look-alikes reads once each');
 });

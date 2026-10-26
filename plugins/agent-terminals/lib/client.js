@@ -1403,7 +1403,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const folderName = (folder) => String(folder ?? '').replace(/\/+$/, '').split('/').pop() || String(folder ?? '');
 
         /** How a stopped agent comes back, in words. */
-        const againText = (agent) => (agent.canResume ? 'Start again resumes its conversation.' : 'Start again runs it anew: this program cannot resume a conversation.');
+        const againText = (agent) => (typeof agent.again === 'string' && agent.again ? agent.again
+            : agent.canResume ? 'Start again resumes its conversation.' : 'Start again runs it anew: this program cannot resume a conversation.');
 
         /**
          * The line under the list, kept true: a message you sent says where
@@ -1431,15 +1432,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** What an action did, in a line (shown where the person is looking, and read out). */
-        function saidText(method, agent, value) {
+        function saidText(method, agent, value, args) {
             const name = agent?.name ? `“${agent.name}”` : 'The agent';
             switch (method) {
                 case 'send':
-                    if (value?.delivery?.state === 'waiting' && value.delivery.why) return `Queued for ${name}: ${String(value.delivery.why).replace(/\.$/, '')}.`;
-                    return agent?.keepsTranscript === false ? `Queued for ${name}. It is typed in when the agent is ready.` : `Queued for ${name}. It is typed in when the agent is ready, and marked delivered once its transcript shows it.`;
+                case 'resend':
+                    if (value?.delivery?.state === 'waiting' && value.delivery.why) return `Queued for ${name}${method === 'resend' ? ' again' : ''}: ${String(value.delivery.why).replace(/\.$/, '')}.`;
+                    return agent?.keepsTranscript === false ? `Queued for ${name}${method === 'resend' ? ' again' : ''}. It is typed in when the agent is ready.` : `Queued for ${name}${method === 'resend' ? ' again' : ''}. It is typed in when the agent is ready, and marked delivered once its transcript shows it.`;
                 case 'cancel': return 'Taken back before it was typed in.';
                 case 'stop': return `Stopped ${name}. ${againText(value?.agent ?? agent ?? {})}`;
-                case 'startAgain': return value?.problem ? '' : `Started ${name} again.`;
+                case 'startAgain': return value?.problem ? '' : args?.fresh ? `Started ${name} anew, with a new conversation.` : `Started ${name} again.`;
                 case 'forget': return `Forgot ${name}. Its session stays in DSH.`;
                 default: return '';
             }
@@ -1528,8 +1530,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return null;
         }
 
-        function MessageRow({ item, busy, onCancel }) {
+        function MessageRow({ item, busy, onCancel, onResend }) {
             const word = deliveryWord(item);
+            // A message that did not go in, or was not proven: sent again as it was (its whole text, from the host).
+            const again = onResend && !item.resent && (item.state === 'failed' || item.state === 'not proven');
             return h('li', { className: `${P}-msg`, 'data-agent-terminals-message': item.state },
                 h('div', { className: `${P}-msg-main` },
                     h('div', { className: `${P}-msg-text` }, item.text),
@@ -1540,7 +1544,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     item.why && item.state !== 'delivered' ? h('div', { className: `${P}-why` }, item.why) : null),
                 h('div', { className: `${P}-item-side` },
                     h(kit.StateTag, { word }),
-                    OPEN.has(item.state) ? h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void onCancel(item) }, 'Take back') : null));
+                    OPEN.has(item.state) ? h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void onCancel(item) }, 'Take back') : null,
+                    again ? h(ui.Button, {
+                        variant: 'ghost',
+                        size: 'sm',
+                        disabled: busy,
+                        'data-agent-terminals-resend': '',
+                        title: item.state === 'not proven' ? 'Look at its terminal first: the message may still be in its input box.' : undefined,
+                        onClick: () => void onResend(item),
+                    }, 'Send again') : null));
         }
 
         function SendBox({ agent, busy, send }) {
@@ -1702,7 +1714,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 agent.lastReply?.text ? h(LastReply, { agent }) : null,
                 messages.length ? h('div', { className: `${P}-details` },
                     h('div', { className: `${P}-label` }, `Messages (${messages.length})`),
-                    h('ul', { className: `${P}-msgs` }, ...shown.map((item) => h(MessageRow, { key: item.id, item, busy, onCancel: (m) => doing('cancel', { id: m.id }) }))),
+                    h('ul', { className: `${P}-msgs` }, ...shown.map((item) => h(MessageRow, { key: item.id, item, busy, onCancel: (m) => doing('cancel', { id: m.id }), onResend: followed ? (m) => doing('resend', { id: m.id }) : undefined }))),
                     messages.length > shown.length ? h('div', { style: { marginTop: '6px' } }, h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => setAll(true) }, `Show all ${messages.length}`)) : null) : null,
                 followed ? h(SendBox, { agent, busy, send }) : null,
                 failure ? h('p', { className: `${P}-alert`, role: 'alert', tabIndex: -1, ref: alertRef, 'data-agent-terminals-error': '' }, /^Not /.test(failure) ? failure : `Not done: ${failure}`) : null,
@@ -1806,7 +1818,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             className: `${P}-chip`,
                             'data-agent-terminals-recent': String(i),
                             onClick: () => pick(r),
-                        }, h('span', { className: `${P}-code` }, [r.program, ...(r.args ?? [])].join(' ')), h('span', { className: `${P}-chip-sub` }, data.styles.find((s) => s.id === r.style)?.label ?? '')))) : null) : null,
+                        }, h('span', { className: `${P}-code` }, [r.program, ...(r.args ?? [])].join(' ')), h('span', { className: `${P}-chip-sub` }, [data.styles.find((s) => s.id === r.style)?.label ?? '', typeof r.folder === 'string' && r.folder ? `conversations in ${r.folder}` : ''].filter(Boolean).join(' · '))))) : null) : null,
                     h('div', { className: `${P}-row2` },
                         h('div', { className: `${P}-field` },
                             h('label', { className: `${P}-label`, htmlFor: ids.program }, 'Program'),
@@ -1896,9 +1908,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const { problem, value } = await run(method, args);
                 setBusyKey(undefined);
                 if (!problem) {
-                    const text = method === 'startAgain' && value?.problem ? '' : saidText(method, agent, value);
+                    const text = method === 'startAgain' && value?.problem ? '' : saidText(method, agent, value, args);
                     // A message you sent: the line follows it (typed in, delivered, not proven).
-                    const follow = method === 'send' && value?.delivery?.id ? { delivery: value.delivery.id, key: agent?.key } : {};
+                    const follow = (method === 'send' || method === 'resend') && value?.delivery?.id ? { delivery: value.delivery.id, key: agent?.key } : {};
                     if (text) setSaid((was) => ({ text, n: was.n + 1, at: Date.now(), ...follow }));
                     if (method === 'startAgain' && value?.problem) return `It could not start: ${value.problem}`;
                 }
