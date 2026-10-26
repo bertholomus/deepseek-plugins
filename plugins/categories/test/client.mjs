@@ -135,6 +135,20 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     assert.match(CSS, /\.dshc-sb-head\{/);
     assert.match(CSS, /\.dshc-tree-row\{/);
     assert.doesNotMatch(CSS, /dshp-|data-projects-/);
+    // DESIGN.md: its page leaves its root unpainted and sets its content on one glass card at tint + .2, near-opaque
+    // under reduced transparency; only DSH's tokens (no undefined ones, no system colours); its motion stops under
+    // Wallpaper's Still as under reduced motion; its drop line stays under DSH's floating layers (menus at 100).
+    const pageRule = /\.dshc-pg\{display:flex[^}]*\}/.exec(CSS)?.[0] ?? '';
+    assert.ok(pageRule && !/background/.test(pageRule), `the page's root paints no ground: ${pageRule}`);
+    assert.match(CSS, /\.dshc-pg\{--dshc-conv:rgba\(10,13,12,calc\(var\(--wp-tint,\.55\) \+ \.2\)\)/);
+    assert.match(CSS, /body:not\(\[data-ds-dark-theme\]\) \.dshc-pg\{--dshc-conv:rgba\(250,250,246,calc\(var\(--wp-tint,\.55\) \+ \.2\)\)\}/);
+    assert.match(CSS, /\.dshc-pg-scroll\{[^}]*background:var\(--dshc-conv\);-webkit-backdrop-filter:blur\(var\(--wp-blur,22px\)\) saturate\(140%\);backdrop-filter:blur\(var\(--wp-blur,22px\)\) saturate\(140%\);border:1px solid var\(--dsw-alias-border-l2\);border-radius:var\(--dsw-radius-lg\)\}/);
+    assert.match(CSS, /@media \(prefers-reduced-transparency:reduce\)\{\.dshc-pg\{--dshc-conv:rgba\(10,13,12,\.95\)\}/);
+    assert.doesNotMatch(CSS, /--dsh-color-bg-hover|Highlight|opacity:\.6|opacity:\.7/);
+    assert.match(CSS, /body\.wp-still \.dshc-sb-chev\{transition:none\}/);
+    assert.match(CSS, /@media \(prefers-reduced-motion:reduce\)\{\.dshc-sb-chev\{transition:none\}\}/);
+    for (const [, layer] of CSS.matchAll(/z-index:(\d+)/g)) assert.ok(Number(layer) < 100, `z-index ${layer} stays under DSH's floating layers`);
+    assert.doesNotMatch(CSS, /(^|[},])\s*(:root|html|body)\s*\{/);
     present = {};
     loadClient({ document });
     assert.equal(heads.length, 1, 'a second load adds no second sheet');
