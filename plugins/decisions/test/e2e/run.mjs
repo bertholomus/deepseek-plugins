@@ -764,6 +764,8 @@ try {
     // A tool waits on an approval Decisions holds when DSH quits: after the restart, the log says what became of it.
     ids.cutOff = await run.newSession(writeOutside('cut-off.txt', 'It writes the notes before DSH quits.'), 'Cut off by a restart');
     const held = await waitCard(ids.cutOff, 'approval');
+    // The list shows a held request at once; its "new" line follows on the next look: count once it is there.
+    await entryFor(held.id, 'new', undefined, 15000);
     const before = await state();
     const newBefore = before.history.filter((e) => e.kind === 'new').length;
     await restart('a restart');
@@ -777,7 +779,9 @@ try {
         const stopped = await entryFor(held.id, 'elsewhere', 'stopped');
         check('the approval the restart cut off is gone, and the log says the turn stopped before anyone answered',
             !after.waiting.some((c) => c.id === held.id) && stopped.text === 'The turn stopped before anyone answered' && stopped.sessionId === ids.cutOff && !existsSync(join(outside, 'cut-off.txt')), json(stopped));
-        check('nothing is announced again', after.history.filter((e) => e.kind === 'new').length === newBefore, `${after.history.filter((e) => e.kind === 'new').length} vs ${newBefore}`);
+        const seenBefore = new Set(before.history.filter((e) => e.kind === 'new').map((e) => `${e.cardId}@${e.at}`));
+        check('nothing is announced again', after.history.filter((e) => e.kind === 'new').length === newBefore,
+            `${after.history.filter((e) => e.kind === 'new').length} vs ${newBefore}: ${json(after.history.filter((e) => e.kind === 'new' && !seenBefore.has(`${e.cardId}@${e.at}`)))}`);
         check('the settings saved in Plugins survive: replies stay off', after.sources.replies === false, json(after.sources));
         // Its session is not loaded after the restart, and its saved state leaves the reply out: read from its log.
         const report = await waitFor(async () => (await state()).waiting.find((c) => c.id === cards.report.id && c.context), 'the report card\'s lines after the restart', 20000, 300).catch(() => undefined);
