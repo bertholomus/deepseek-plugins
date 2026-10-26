@@ -1,8 +1,11 @@
 /**
- * dsh-plugin-session-watch, browser half: its one setting on its page in
- * Plugins (DSH's `plugins.bundle.config`), saved through DSH's own settings
- * form and used as soon as it is saved. The watcher itself has no page:
- * Autopilot, Decisions and Agent Terminals show what it sees.
+ * dsh-plugin-session-watch, browser half: its page in Plugins. Its one
+ * setting there (DSH's `plugins.bundle.config`), saved through DSH's own
+ * settings form and used as soon as it is saved; and a section under it
+ * (DSH's `plugins.detail.section`) with what it watches now: how many
+ * sessions in each state, a wrong setting's effect, and which of the
+ * plugins that read sessions through it are on. The watcher has no page of
+ * its own: Autopilot, Decisions and Agent Terminals show what it sees.
  *
  * Hand-written in the module format DSH serves to the browser (no build
  * step). Nothing here may throw at load: DSH joins every plugin's browser
@@ -1103,15 +1106,130 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const SETTINGS_SUMMARY = 'How long a message from Autopilot, Decisions or Agent Terminals may wait to be read.';
         const SETTINGS_NOTE = 'Session Watch reads every session for Autopilot, Decisions and Agent Terminals; they stop working while it is off. A change applies as soon as you save.';
 
+        // ── What it watches: a section on its page in Plugins ─────────────
+
+        /** The plugins that read sessions through Session Watch. */
+        const USERS = Object.freeze([
+            { name: 'Autopilot', pkg: 'dsh-plugin-autopilot' },
+            { name: 'Decisions', pkg: 'dsh-plugin-decisions' },
+            { name: 'Agent Terminals', pkg: 'dsh-plugin-agent-terminals' },
+        ]);
+        /** State words in the order the section lists them: what waits on a person first, then what runs, then the rest. */
+        const WORD_ORDER = ['waiting for approval', 'waiting for your answer', 'waiting on you', 'cut off', 'failed', 'blocked', 'cut short', 'running', 'working', 'stopped', 'idle', 'new'];
+        const P = 'dshsw';
+        const CSS = [
+            `.${P}-watching{margin:28px 0 0;min-width:0;color:var(--dsw-alias-label-primary)}`,
+            `.${P}-watching-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}`,
+            `.${P}-watching-count{font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
+            `.${P}-words{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px 14px}`,
+            `.${P}-word{display:inline-flex;align-items:center;gap:6px;font:var(--dsw-font-xs-13)}`,
+            `.${P}-watching .${P}-note{max-width:72ch}`,
+        ];
+
+        const api = kit.link(BUNDLE, { name: 'Session Watch' });
+        const pluginList = kit.link('pluginManager', { name: 'DSH' });
+
+        /** How many sessions read each state word, in WORD_ORDER (unknown words last, most first). */
+        function wordCounts(items) {
+            const counts = new Map();
+            for (const row of Array.isArray(items) ? items : []) {
+                const word = typeof row?.word === 'string' && row.word ? row.word : 'unknown';
+                counts.set(word, (counts.get(word) ?? 0) + 1);
+            }
+            const rank = (word) => {
+                const at = WORD_ORDER.indexOf(word);
+                return at < 0 ? WORD_ORDER.length : at;
+            };
+            return [...counts.entries()].sort((a, b) => rank(a[0]) - rank(b[0]) || b[1] - a[1]).map(([word, count]) => ({ word, count }));
+        }
+
+        /** Each user plugin as DSH's plugin list has it: on, off, not running (on but not started), or not installed; undefined when DSH cannot say. */
+        function usersOf(rows) {
+            if (!Array.isArray(rows)) return undefined;
+            return USERS.map((user) => {
+                const mine = rows.filter((row) => kit.isRecord(row) && row.moduleName === user.pkg);
+                const state = mine.length === 0 ? 'not installed'
+                    : mine.some((row) => row.enabled !== false && row.fiberPhase === 'active') ? 'on'
+                        : mine.every((row) => row.enabled === false) ? 'off' : 'not running';
+                return { ...user, state };
+            });
+        }
+
+        async function readWatching() {
+            const [sessions, status, plugins] = await Promise.all([
+                api.read('sessions'),
+                api.read('status'),
+                pluginList.call('listPlugins').catch(() => undefined),
+            ]);
+            const items = Array.isArray(sessions?.items) ? sessions.items : [];
+            return {
+                total: items.length,
+                words: wordCounts(items),
+                ...(kit.isRecord(status?.problem) ? { problem: status.problem } : {}),
+                users: plugins?.ok ? usersOf(plugins.value) : undefined,
+            };
+        }
+
+        /** "a, b and c". */
+        const listed = (parts) => (parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
+        const sessionsWord = (n) => `${n} session${n === 1 ? '' : 's'}`;
+
+        /** What it watches, from what `readWatching` gave: pure, for the tests. */
+        function WatchingView({ data, error, onRetry }) {
+            const head = [h('h2', { key: 'title', className: `${P}-h2`, id: `${P}-watching-title` }, 'What it watches')];
+            let body;
+            if (!data) {
+                body = error ? h(kit.ErrorLine, { text: error, onRetry, lead: 'Couldn\'t read the sessions' }) : h(kit.Loading, { text: 'Reading the sessions' });
+            } else {
+                const running = data.words.find((w) => w.word === 'running')?.count ?? 0;
+                head.push(h('span', { key: 'count', className: `${P}-watching-count ${P}-num` }, data.total === 0 ? 'none yet' : `${sessionsWord(data.total)} · ${running} running`));
+                body = [
+                    data.total === 0
+                        ? h('p', { key: 'none', className: `${P}-note` }, 'No sessions yet. Each new session shows here as soon as DSH makes it.')
+                        : h('ul', { key: 'words', className: `${P}-words`, 'aria-label': 'Sessions by state' },
+                            data.words.map(({ word, count }) => h('li', { key: word, className: `${P}-word` }, h(kit.StateTag, { word }), h('span', { className: `${P}-num` }, String(count))))),
+                    data.users ? h('p', { key: 'users', className: `${P}-note`, 'data-session-watch-users': '' },
+                        `Autopilot, Decisions and Agent Terminals read sessions through it. ${listed(data.users.map((u) => `${u.name} is ${u.state}`))}.`) : null,
+                    data.problem ? h('p', { key: 'problem', className: `${P}-note`, 'data-session-watch-problem': '' },
+                        `Until the setting above is fixed, a message may wait the default ${kit.spanText(DEFAULT_WAIT)} to be read.`) : null,
+                    error ? h(kit.ErrorLine, { key: 'error', text: error, onRetry }) : null,
+                ];
+            }
+            return h('section', { className: `${P}-pane ${P}-watching`, 'aria-labelledby': `${P}-watching-title`, 'data-session-watch-watching': '' },
+                h('div', { className: `${P}-watching-head` }, head), body);
+        }
+
+        function Watching() {
+            const live = kit.useLive(readWatching, ['sessions', 'settings'], { delayMs: 800 });
+            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh });
+        }
+
+        /** On Session Watch's own page in Plugins only. */
+        function WatchingSection({ subject }) {
+            if (subject?.kind !== 'bundle' || subject.pkg?.name !== BUNDLE || subject.pkg.enabled === false) return null;
+            return h(Watching);
+        }
+
+        const DEFAULT_WAIT = SETTINGS[0].default;
+
         const inject = ['slots'];
 
         function apply(ctx) {
             try {
-                kit.injectStyle([]);
+                kit.injectStyle(CSS);
             } catch (error) {
                 console?.warn?.('dsh-plugin-session-watch: style:', error);
             }
             ctx.effect?.(() => () => kit.removeStyle(), 'session-watch: style');
+            // The window's DSH connection, for the section's reads and the one request per window.
+            ctx.inject(['connection'], (scope) => scope.effect(() => {
+                kit.setConnection(scope.connection);
+                const detach = kit.hub.attach();
+                return () => {
+                    detach();
+                    kit.setConnection(undefined);
+                };
+            }, 'session-watch: connection'));
             // Its setting on its page in Plugins, through DSH's own settings form.
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
                 try {
@@ -1120,12 +1238,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     console?.warn?.('dsh-plugin-session-watch: settings:', error);
                 }
             });
+            // What it watches, under its setting on the same page.
+            try {
+                ctx.slots.inject('plugins.detail.section', () => ctx.slots.register({ name: 'plugins.detail.section', id: `${BUNDLE}:watching`, order: 10, label: 'Session Watch' }, WatchingSection));
+            } catch (error) {
+                console?.warn?.('dsh-plugin-session-watch: section:', error);
+            }
         }
 
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE };
+        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, wordCounts, usersOf, readWatching, WatchingView, WatchingSection };
         return module.exports;
     },
 });

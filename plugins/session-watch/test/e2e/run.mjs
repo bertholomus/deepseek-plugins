@@ -389,6 +389,37 @@ try {
             await setDark(page, true);
             await shot(page, shots, 'settings-in-quotes-dark');
             await setDark(page, false);
+            // Under the form, on the same page: what it watches now.
+            const watching = page.locator('[data-session-watch-watching]');
+            await watching.waitFor({ state: 'visible', timeout: 15000 });
+            const items = (await watchApi('sessions')).value.items;
+            const counts = new Map();
+            for (const row of items) counts.set(row.word, (counts.get(row.word) ?? 0) + 1);
+            const seen = await waitFor(async () => {
+                const text = (await watching.innerText()).replace(/\n+/g, ' ');
+                return text.includes(`${items.length} sessions · ${counts.get('running') ?? 0} running`) ? text : null;
+            }, 'the section to show the sessions', 15000, 300).catch(async () => (await watching.innerText()).replace(/\n+/g, ' '));
+            const tags = await watching.locator('li').allInnerTexts();
+            check('under the form, what it watches: every session counted by its state word, as the watcher has them',
+                seen.includes(`What it watches ${items.length} sessions · ${counts.get('running') ?? 0} running`) && tags.length === counts.size
+                && [...counts].every(([word, n]) => tags.some((t) => t.replace(/\s+/g, ' ').trim() === `${word} ${n}`)), `${seen} | ${JSON.stringify([...counts])}`);
+            check('which plugins read sessions through it, as DSH\'s plugin list has them',
+                seen.includes('Autopilot, Decisions and Agent Terminals read sessions through it. Autopilot is not installed, Decisions is not installed and Agent Terminals is not installed.'), seen);
+            check('and what the wrong setting means meanwhile', seen.includes('Until the setting above is fixed, a message may wait the default 10 minutes to be read.'), seen);
+            const wronglyNew = [];
+            for (const row of items.filter((r) => r.word === 'new')) {
+                const summary = await run.session(row.sessionId).catch(() => null);
+                if ((summary?.turns?.started ?? 0) > 0) wronglyNew.push({ title: row.title, status: row.status, blank: row.blank, state: row.state, turns: summary.turns });
+            }
+            check('no session that ran a turn reads "new", however many restarts ago it last ran', wronglyNew.length === 0, JSON.stringify(wronglyNew));
+            await watching.scrollIntoViewIfNeeded();
+            await shot(page, shots, 'watching-light', watching);
+            await setDark(page, true);
+            await shot(page, shots, 'watching-dark', watching);
+            await setDark(page, false);
+            ids.live = await run.newSession('E2E:say Counted live.', 'Live count');
+            const grew = await waitFor(async () => (await watching.innerText()).includes(`${items.length + 1} sessions`), 'the new session in the count', 20000, 300).catch(() => false);
+            check('a new session shows in the count by itself, without a reload', grew, (await watching.innerText()).replace(/\n+/g, ' '));
             await page.setViewportSize({ width: 760, height: 860 });
             const wide = await page.evaluate(() => document.documentElement.scrollWidth);
             check('at 760 px its page has no sideways scroll', wide <= 760, `${wide} px`);
@@ -410,6 +441,8 @@ try {
             check('the profile now holds the number, without quotes', new RegExp(`deliveryTimeoutSeconds: ${WAIT_SECONDS}\\b`).test(patch) && !patch.includes(`deliveryTimeoutSeconds: "${WAIT_SECONDS}"`), patch.split('\n').filter((l) => /deliveryTimeout/.test(l)).join(' | '));
             await page.waitForTimeout(500);
             check('the flag is gone once saved', (await page.locator('[data-suite-setting="deliveryTimeoutSeconds"][data-suite-invalid]').count()) === 0);
+            const dropped = await waitFor(async () => (await page.locator('[data-session-watch-problem]').count()) === 0, 'the section to drop the setting line', 15000, 300).catch(() => false);
+            check('and the section drops its line about the setting by itself', dropped);
             await shot(page, shots, 'settings-fixed-light');
             await setDark(page, true);
             await shot(page, shots, 'settings-fixed-dark');
@@ -435,7 +468,7 @@ try {
             check('its window endpoints are gone, said in words', gone.ok === false, JSON.stringify(gone));
             const probe = await run.api('dsh-plugin-session-watch-probe/ready');
             check('its service is gone: the plugin that used it no longer has it', probe.ok && probe.value.ready === false, JSON.stringify(probe));
-            check('it leaves nothing behind in the window: its style sheet is gone', styled === 1 && (await styleCount()) === 0, `${styled} then ${await styleCount()}`);
+            check('it leaves nothing behind in the window: its style sheet and its section are gone', styled === 1 && (await styleCount()) === 0 && (await page.locator('[data-session-watch-watching]').count()) === 0, `${styled} then ${await styleCount()}`);
             await shot(page, shots, 'switched-off-light');
             await watchSwitch.click();
             await waitFor(async () => (await watchApi('status')).ok === true, 'its endpoints to come back', 30000, 300);
@@ -445,6 +478,8 @@ try {
             check('and it delivers with proof again', (await settled(note.id)).state === 'delivered');
             await waitFor(async () => (await styleCount()) === 1, 'its style sheet to come back once', 10000, 200).catch(() => {});
             check('its style sheet is back, once', (await styleCount()) === 1, String(await styleCount()));
+            const back = await page.locator('[data-session-watch-watching]').waitFor({ state: 'visible', timeout: 15000 }).then(() => true, () => false);
+            check('and its section comes back on its page by itself', back && (await page.locator('[data-session-watch-watching]').count()) === 1);
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-switch');
         });

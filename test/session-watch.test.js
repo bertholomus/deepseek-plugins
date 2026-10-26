@@ -441,6 +441,20 @@ test('watcher: after a stop, a session the last run left running reads as its lo
     const found = await second.watch.cutOffSessions({ withinMs: 0 });
     assert.deepEqual(found.map((item) => item.sessionId).sort(), ['crash', 'quit']);
     assert.equal(dsh.agents.size, 0);
+    // Another start, with nothing run in between: DSH's values are still from before; the rows still read as the logs have them.
+    second.watch.close();
+    const third = setup({ dir, clock, dsh });
+    await third.watch.list();
+    await third.watch.readLeftRunning();
+    assert.deepEqual((await third.watch.list(undefined, { maxAgeMs: 0 })).filter((row) => ['quit', 'crash'].includes(row.sessionId)).map((row) => row.word), ['cut off', 'cut off']);
+    assert.deepEqual(Object.keys(third.watch.leftRunning), [], 'only the last run\'s turns are candidates for a carry-on');
+    // Once a turn ends there, DSH saves its values again, and it is no longer kept to fold.
+    dsh.write('quit', 'Carry on.');
+    dsh.end('quit');
+    third.watch.close();
+    const kept = JSON.parse(readFileSync(join(dir, 'running.json'), 'utf8'));
+    assert.deepEqual(Object.keys(kept.unsaved), ['crash']);
+    assert.deepEqual(kept.sessions, {});
 });
 
 test('watcher: running.json follows turns, so a clean stop leaves nothing to resume', async () => {
@@ -574,9 +588,16 @@ test('settings in Plugins: Session Watch\'s page there has its one setting, in D
     };
     client.apply(scope);
     for (const fn of effects) fn();
-    const [entry] = registered;
-    assert.equal(entry.spec.name, 'plugins.bundle.config');
+    const entry = registered.find((r) => r.spec.name === 'plugins.bundle.config');
     assert.equal(entry.spec.key, 'dsh-plugin-session-watch');
+    // Under it, on the same page only: what it watches.
+    const section = registered.find((r) => r.spec.name === 'plugins.detail.section');
+    assert.equal(section.spec.id, 'dsh-plugin-session-watch:watching');
+    const own = { name: 'dsh-plugin-session-watch', enabled: true, installed: true, official: false, rows: [] };
+    assert.equal(section.component({ subject: { kind: 'bundle', pkg: { ...own, name: 'dsh-plugin-autopilot' } } }), null);
+    assert.equal(section.component({ subject: { kind: 'row', pkg: own, row: { rowId: 'session-watch', moduleName: 'dsh-plugin-session-watch', enabled: true } } }), null);
+    assert.equal(section.component({ subject: { kind: 'item', id: 'x' } }), null);
+    assert.match(textIn(section.component({ subject: { kind: 'bundle', pkg: own } })), /^What it watchesReading the sessions/);
     assert.match(entry.component({ view: 'summary' }), /^How long a message from Autopilot, Decisions or Agent Terminals may wait to be read/);
     const page = entry.component({});
     const [field] = elementsOf(page).filter((e) => e.type === 'SettingsValueField');
@@ -589,4 +610,56 @@ test('settings in Plugins: Session Watch\'s page there has its one setting, in D
     const spec = client.internals.kit.fieldSpec(client.internals.SETTINGS[0]);
     assert.equal(spec.parse('5'), undefined);
     assert.equal(JSON.stringify(spec.parse('86400')), '{"kind":"set","value":86400}');
+});
+
+test('its page in Plugins: what it watches, by state word, which plugins read through it, and what a wrong setting means meanwhile', async () => {
+    const { client } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url));
+    const { kit, wordCounts, usersOf, readWatching, WatchingView } = client.internals;
+    // Values made in the client's own realm, compared as plain data.
+    const plain = (value) => JSON.parse(JSON.stringify(value));
+    const rows = [{ word: 'idle' }, { word: 'running' }, { word: 'cut off' }, { word: 'idle' }, { word: 'waiting for approval' }, { word: 'new' }, {}];
+    // What waits on a person first, then what runs, then the rest; a row without a word is counted, not dropped.
+    assert.deepEqual(plain(wordCounts(rows)), [
+        { word: 'waiting for approval', count: 1 }, { word: 'cut off', count: 1 }, { word: 'running', count: 1 },
+        { word: 'idle', count: 2 }, { word: 'new', count: 1 }, { word: 'unknown', count: 1 },
+    ]);
+    const list = [
+        { moduleName: 'dsh-plugin-autopilot', enabled: true, fiberPhase: 'active' },
+        { moduleName: 'dsh-plugin-decisions', enabled: false, fiberPhase: 'pending' },
+        { moduleName: 'dsh-plugin-agent-terminals', enabled: true, fiberPhase: 'failed' },
+    ];
+    assert.deepEqual(plain(usersOf(list).map((u) => `${u.name}: ${u.state}`)), ['Autopilot: on', 'Decisions: off', 'Agent Terminals: not running']);
+    assert.deepEqual(plain(usersOf(list.slice(0, 1)).map((u) => u.state)), ['on', 'not installed', 'not installed']);
+    assert.equal(usersOf(undefined), undefined, 'a DSH that cannot say: the line is left out');
+    // Read from its own endpoints and DSH's plugin list, over the window's connection.
+    const calls = [];
+    let pluginsAnswer = { ok: true, value: list };
+    kit.setConnection({ rpc: { call: async (_api, method) => {
+        calls.push(method);
+        if (method === 'dsh-plugin-session-watch/sessions') return { ok: true, value: { items: rows } };
+        if (method === 'dsh-plugin-session-watch/status') return { ok: true, value: { running: true, problem: { text: 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is "600")', key: 'deliveryTimeoutSeconds', live: true } } };
+        return pluginsAnswer;
+    } } });
+    const data = await readWatching();
+    assert.deepEqual(calls.sort(), ['dsh-plugin-session-watch/sessions', 'dsh-plugin-session-watch/status', 'pluginManager/listPlugins']);
+    assert.equal(data.total, 7);
+    assert.equal(data.problem.key, 'deliveryTimeoutSeconds');
+    const view = WatchingView({ data });
+    const text = textIn(view);
+    assert.match(text, /^What it watches7 sessions · 1 running/);
+    assert.deepEqual(plain(elementsOf(view).filter((e) => e.type === 'Tag').map((e) => `${e.props.tone}:${textIn(e)}`).slice(0, 3)), ['warning:waiting for approval', 'warning:cut off', 'info:running']);
+    assert.match(text, /Autopilot, Decisions and Agent Terminals read sessions through it\. Autopilot is on, Decisions is off and Agent Terminals is not running\./);
+    assert.match(text, /Until the setting above is fixed, a message may wait the default 10 minutes to be read\./);
+    assert.equal(elementsOf(view)[0].props['aria-labelledby'], 'dshsw-watching-title');
+    // DSH's plugin list not there: the users line is left out, the rest stays.
+    pluginsAnswer = { ok: false, error: { code: 'x', message: 'no list' } };
+    const without = await readWatching();
+    assert.equal(without.users, undefined);
+    assert.doesNotMatch(textIn(WatchingView({ data: without })), /read sessions through it/);
+    // None yet, loading, and an error with what to do.
+    assert.match(textIn(WatchingView({ data: { total: 0, words: [], users: undefined } })), /^What it watchesnone yetNo sessions yet\. Each new session shows here as soon as DSH makes it\.$/);
+    assert.match(textIn(WatchingView({})), /Reading the sessions/);
+    const failed = WatchingView({ error: 'Session Watch is not running in DSH.', onRetry: () => {} });
+    assert.match(textIn(failed), /Couldn't read the sessions: Session Watch is not running in DSH\.Retry/);
+    kit.setConnection(undefined);
 });

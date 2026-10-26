@@ -36,6 +36,9 @@ export { stateWord };
 /** Other projections the suite reads (DSH's question box, the coordinator's threads), kept from DSH's list for sessions that are not loaded. */
 export const SHARED_KEYS = Object.freeze(['userQuestions', 'coordinatorSession']);
 
+/** At most this many cut-off sessions are kept to fold from their logs at the next start (the newest). */
+const UNSAVED_MAX = 50;
+
 /** How a watcher event is named for listeners. */
 export const EVENTS = Object.freeze(['turn-start', 'turn-end', 'status', 'state', 'agent', 'delivery', 'ask', 'external']);
 
@@ -127,10 +130,16 @@ export class SessionWatch {
             parse: (value) => ({
                 version: 1,
                 sessions: isRecord(value?.sessions) ? Object.fromEntries(Object.entries(value.sessions).filter(([, v]) => isRecord(v))) : {},
+                // Sessions a stop cut off that have not ended a turn since: DSH's saved values for them are from before the stop.
+                unsaved: isRecord(value?.unsaved) ? Object.fromEntries(Object.entries(value.unsaved).filter(([, v]) => isRecord(v))) : {},
             }),
         });
         /** What the last process left running: the candidates for "cut off by a stop". */
         this.leftRunning = { ...this.running.data.sessions };
+        /** Sessions whose rows are folded from their logs at the start: those, and earlier stops' that have not ended a turn since. */
+        this.toFold = Object.fromEntries(Object.entries({ ...this.running.data.unsaved, ...this.running.data.sessions })
+            .sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0)).slice(0, UNSAVED_MAX));
+        this.running.data.unsaved = { ...this.toFold };
         this.running.data.sessions = {};
         this.running.change();
         this.startedAt = this.now();
@@ -264,21 +273,30 @@ export class SessionWatch {
     }
 
     /**
-     * The sessions the last run left running, folded from their logs once
-     * per start: DSH's saved values for them are from before the stop (a
-     * quit or a crash saves nothing more), so until then a cut-off session
-     * would read as it did before its turn ("new", even). Loaded sessions
-     * keep their live state. Windows are told when it is done.
+     * The sessions a stop cut off, folded from their logs once per start:
+     * those the last run left running, and those an earlier stop cut off
+     * that have not ended a turn since. DSH's saved values for them are from
+     * before the stop (a quit or a crash saves nothing more), so until then a
+     * cut-off session would read as it did before its turn ("new", even).
+     * Loaded sessions keep their live state. Windows are told when it is done.
      * @returns {Promise<void>}
      */
     readLeftRunning() {
         if (!this.leftRead) {
             this.leftRead = (async () => {
                 let changed = false;
-                for (const sessionId of Object.keys(this.leftRunning)) {
+                for (const sessionId of Object.keys(this.toFold)) {
                     if (this.sessionOf(sessionId) || this.cold.get(sessionId)?.full) continue;
                     const read = await this.readLog(sessionId);
-                    if (!read || this.sessionOf(sessionId)) continue;
+                    if (!read) {
+                        // Gone from DSH (deleted): let it go.
+                        if (this.listed.items && !this.rows.has(sessionId)) {
+                            delete this.running.data.unsaved[sessionId];
+                            this.running.change();
+                        }
+                        continue;
+                    }
+                    if (this.sessionOf(sessionId)) continue;
                     this.cold.set(sessionId, { state: read.state, full: true });
                     changed = true;
                 }
@@ -369,6 +387,8 @@ export class SessionWatch {
                 return;
             case 'turn/end': {
                 delete this.running.data.sessions[sessionId];
+                // A turn ended: DSH saves the session's values with it again.
+                delete this.running.data.unsaved[sessionId];
                 this.running.change();
                 const state = this.stateOf(sessionId) ?? applyEvent(undefined, event);
                 this.emit({ type: 'turn-end', sessionId, end: state.end, state });
