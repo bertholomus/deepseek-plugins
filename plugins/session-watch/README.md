@@ -8,9 +8,10 @@ it. Its page in Plugins has its one setting and, under it, **What it
 watches**: how many sessions are in each state (*running*, *waiting for
 approval*, *cut off*, *idle* and so on), which of Autopilot, Decisions and
 Agent Terminals are on, and what a wrong setting means meanwhile. Choose a
-state to list its sessions, newest first (twelve at a time), each with when
-it last changed and **Open**, which shows that session in the window as the
-sidebar does. It follows the sessions as they change, without a reload.
+state to list its sessions, the latest change first (twelve at a time),
+each with when it last changed and **Open**, which shows that session in
+the window as the sidebar does. It follows the sessions as they change,
+without a reload.
 
 ## What it knows about every session
 

@@ -309,6 +309,15 @@ try {
         check('its reply text, which the saved value leaves out, is folded from its log', typeof full?.text === 'string' && full.text.includes('DECISION NEEDED'), JSON.stringify(full).slice(0, 200));
     });
     model.release();
+    // The carry-on turn ends first, so the crash cuts off only the turn started for it.
+    const carriedOn = await waitFor(async () => {
+        if ((await run.session(ids.quit).catch(() => null))?.status === 'running') return false;
+        try {
+            return !Object.hasOwn(JSON.parse(readFileSync(join(run.home, 'session-watch', 'running.json'), 'utf8')).sessions ?? {}, ids.quit);
+        } catch {
+            return false;
+        }
+    }, 'the carry-on turn to end before the crash', 30000, 200).then(() => true, () => false);
     ids.crash = await run.newSession('E2E:slow', 'Long import');
     await runningSession(ids.crash);
     await waitFor(() => {
@@ -325,7 +334,7 @@ try {
     await step('after a crash: the cut-off session is found too', async () => {
         const found = await probeApi('cutOff', { withinMs: 0 });
         check('the session DSH crashed under is found', found.some((f) => f.sessionId === ids.crash), JSON.stringify(found.map((f) => f.title)));
-        check('the one already carried on is not found again', !found.some((f) => f.sessionId === ids.quit), JSON.stringify(found.map((f) => f.title)));
+        check('the one already carried on (its carry-on turn ended before the crash) is not found again', carriedOn && !found.some((f) => f.sessionId === ids.quit), JSON.stringify({ carriedOn, found: found.map((f) => f.title) }));
     });
 
     // ── Questions, outside agents, files ───────────────────────────────
@@ -420,7 +429,7 @@ try {
             ids.live = await run.newSession('E2E:say Counted live.', 'Live count');
             const grew = await waitFor(async () => (await watching.innerText()).includes(`${items.length + 1} sessions`), 'the new session in the count', 20000, 300).catch(() => false);
             check('a new session shows in the count by itself, without a reload', grew, (await watching.innerText()).replace(/\n+/g, ' '));
-            // Choosing a state lists the sessions that read it, newest first, each with when it changed and Open.
+            // Choosing a state lists the sessions that read it, newest change first, each with when it changed and Open.
             const liveRow = await waitFor(async () => {
                 const row = (await watchApi('sessions')).value.items.find((r) => r.sessionId === ids.live);
                 return row && row.word !== 'running' && row.word !== 'new' ? row : null;
@@ -431,7 +440,7 @@ try {
             const chosen = watching.locator(`[data-session-watch-chosen="${liveWord}"]`);
             await chosen.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
             const listedRight = await waitFor(async () => {
-                const expected = (await watchApi('sessions')).value.items.filter((r) => r.word === liveWord).slice(0, 12).map((r) => r.title || 'Untitled session');
+                const expected = (await watchApi('sessions')).value.items.filter((r) => r.word === liveWord).sort((x, y) => y.updatedAt - x.updatedAt).slice(0, 12).map((r) => r.title || 'Untitled session');
                 const shown = (await chosen.locator('li').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
                 return shown.length === expected.length && expected.every((title, i) => shown[i].startsWith(`${title} `) && / Open$/.test(shown[i])) ? shown : null;
             }, 'the chosen state to list its sessions', 15000, 300).catch(async () => `not as the watcher has them: ${JSON.stringify((await chosen.locator('li').allInnerTexts().catch(() => [])))}`);

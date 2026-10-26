@@ -678,7 +678,8 @@ test('its page in Plugins: choosing a state lists the sessions that read it, new
     const plain = (value) => JSON.parse(JSON.stringify(value));
     const at = Date.now() - 5 * 60000;
     const idle = Array.from({ length: SHOWN + 2 }, (_, i) => ({ sessionId: `idle-${i}`, title: `Idle ${i}`, word: 'idle', updatedAt: at - i * 1000 }));
-    const items = [{ sessionId: 'cut', title: '', word: 'cut off', updatedAt: at }, ...idle, { title: 'no id', word: 'idle' }];
+    // DSH's list order is not the newest change first: the list sorts by when each session last changed.
+    const items = [{ sessionId: 'cut', title: '', word: 'cut off', updatedAt: at }, ...idle, { sessionId: 'late', title: 'Late', word: 'idle', updatedAt: at + 1000 }, { title: 'no id', word: 'idle' }];
     kit.setConnection({ rpc: { call: async (_api, method) => (method === 'dsh-plugin-session-watch/sessions' ? { ok: true, value: { items } }
         : method === 'dsh-plugin-session-watch/status' ? { ok: true, value: { running: true } } : { ok: true, value: [] }) } });
     const data = await readWatching();
@@ -689,8 +690,8 @@ test('its page in Plugins: choosing a state lists the sessions that read it, new
     const chips = (view) => elementsOf(view).filter((e) => e.type === 'button' && e.props.className === 'dshsw-word');
     const picks = [];
     const closed = WatchingView({ data, onChoose: (word) => picks.push(word) });
-    assert.deepEqual(plain(chips(closed).map((b) => `${textIn(b)}:${b.props['aria-expanded']}`)), ['cut off1:false', `idle${SHOWN + 3}:false`]);
-    assert.equal(chips(closed)[1].props.title, `Show the ${SHOWN + 3} sessions that read idle`);
+    assert.deepEqual(plain(chips(closed).map((b) => `${textIn(b)}:${b.props['aria-expanded']}`)), ['cut off1:false', `idle${SHOWN + 4}:false`]);
+    assert.equal(chips(closed)[1].props.title, `Show the ${SHOWN + 4} sessions that read idle`);
     assert.equal(chips(closed)[1].props['aria-controls'], undefined);
     assert.equal(elementsOf(closed).some((e) => e.props?.['data-session-watch-chosen'] !== undefined), false, 'nothing listed until a state is chosen');
     chips(closed)[1].props.onClick();
@@ -707,10 +708,10 @@ test('its page in Plugins: choosing a state lists the sessions that read it, new
     assert.equal(elementsOf(list).find((e) => e.type === 'ul').props['aria-label'], 'Sessions that read idle');
     const rows = elementsOf(list).filter((e) => e.type === 'li');
     assert.equal(rows.length, SHOWN);
-    assert.equal(textIn(rows[0]), 'Idle 05 min agoOpen');
-    assert.equal(elementsOf(rows[0]).find((e) => e.type === 'time').props.dateTime, new Date(at).toISOString());
-    assert.match(textIn(list), /and 2 more, older$/);
-    const open = elementsOf(rows[1]).find((e) => e.type === 'button');
+    assert.deepEqual(plain(rows.slice(0, 3).map(textIn)), ['Late5 min agoOpen', 'Idle 05 min agoOpen', 'Idle 15 min agoOpen']);
+    assert.equal(elementsOf(rows[1]).find((e) => e.type === 'time').props.dateTime, new Date(at).toISOString());
+    assert.match(textIn(list), /and 3 more, older$/);
+    const open = elementsOf(rows[2]).find((e) => e.type === 'button');
     assert.equal(open.props['aria-label'], 'Open Idle 1');
     open.props.onClick();
     assert.deepEqual(opened, ['idle-1']);

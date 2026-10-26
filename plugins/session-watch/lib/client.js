@@ -1176,13 +1176,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return {
                 total: items.length,
                 words: wordCounts(items),
-                // Newest first, as the watcher lists them: what a chosen state shows.
+                // What a chosen state shows: newest change first (DSH's list keeps its own order).
                 rows: items.filter((row) => typeof row?.sessionId === 'string' && row.sessionId !== '').map((row) => ({
                     sessionId: row.sessionId,
                     title: typeof row.title === 'string' ? row.title : '',
                     word: typeof row.word === 'string' && row.word ? row.word : 'unknown',
                     updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
-                })),
+                })).sort((a, b) => b.updatedAt - a.updatedAt),
                 ...(kit.isRecord(status?.problem) ? { problem: status.problem } : {}),
                 users: plugins?.ok ? usersOf(plugins.value) : undefined,
             };
