@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 4:00 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 4:06 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -16,7 +16,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Categories | 8.8 (round 1) | 70977a1 | goal95/categories | NOT YET | UX 8: "Add a workspace" shows two blank menu items; a failed save is announced as done and lost at the next restart |
 | Coordinator | 9.0 (round 1) | bf391bf | goal95/coordinator | NOT YET | a held handback reads "Idle · No handback yet"; a handback whose answering turn a quit cut off is never raised again; an unreadable coordinator.json is overwritten with no copy |
 | Decisions | 9.0 (GOAL95 round 1 = round 5) | ad79740 | goal95/decisions | NOT YET | a question with a dot before its "?" shows only the words after the last dot (`askIn` in `shared/host/words.js`) |
-| Discord | 8.0 (round 1); round 2 building (safety fix, Albert's OK at 3:32 PM) | f2b4d73 | goal95/discord (dsh-plugin-discord) | NOT YET | round 2 fixes the two safety findings (which sessions get the bot's tools; ids and channel limits checked); then its last judge |
+| Discord | 8.0 (round 1); round 2 (the safety fix, Albert's OK at 3:32 PM) handed over at 4:05 PM, its last judge running (by 5:30 PM) | d9df9aa | goal95/discord (dsh-plugin-discord) | NOT YET | round 2 fixed the two safety findings (the bot's tools only in its own sessions; every id checked and the channel scope held) and made the workspace folder checked; the judge has it |
 | DNA Studio | 8.0 (round 1) | cdac02e | goal95/dna-studio (local copy, no remote) | NOT YET | a chat never shows the pictures it made; saving the plugin's settings during a page job marks the job cut off, and Rerun then runs it twice |
 | dsh-site | 9.0 (round 2, its last) | af7f673 | goal95/dsh-site (dsh-plugin-dsh-site) | NOT YET | all minor: an answer DSH drops mid-stream stays open on the device; the rest is in the local scorecard (not committed) |
 | Fleet | 8.5 (round 1; card flip 4e24735 and MiniMe's b399db0, b44d7f8 merged) | 3142189 | goal95/fleet (redesign repo) | NOT YET | a power cycle cut off by a restart stays "running" for good and hides that Ascent's alarm; Fleet states facts it never read ("nothing running", "No updates") |
