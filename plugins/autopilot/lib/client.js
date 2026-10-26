@@ -554,6 +554,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      */
     function Choice({ id, label, value, options, busy = false, onChoose, className = '' }) {
         const kept = pendingChoices.get(id);
+        // A kept choice counts only while the saved value is the one it was made against.
+        if (kept && kept.from !== value) pendingChoices.delete(id);
         const [shown, setShownState] = React.useState(kept && kept.from === value ? kept.value : value);
         const sent = React.useRef(undefined);
         const queued = React.useRef(undefined);
@@ -579,7 +581,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // Drawn anew, or moved, with its choice kept and the focus lost to the page: the focus comes back.
         React.useEffect(() => {
             const entry = pendingChoices.get(id);
-            if (!entry?.focused || !doc || !box.current) return;
+            if (!entry?.focused || entry.value !== shown || shown === value || !doc || !box.current) return;
             const active = doc.activeElement;
             if (active && active !== doc.body && active !== doc.documentElement) return;
             const tab = box.current.querySelector?.('[role="tab"][aria-selected="true"]') ?? box.current.querySelector?.('[role="tab"]');

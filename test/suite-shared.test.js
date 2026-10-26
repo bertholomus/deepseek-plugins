@@ -642,6 +642,11 @@ test('kit: a choice commits on a click or on Enter, never on an arrow key; Escap
     assert.equal(other.tree.props['data-suite-pending'], undefined, 'kept for its own control only');
     redrawn.tree.props.onKeyDownCapture({ key: 'Escape', preventDefault() {} });
     assert.equal(mount(kit.Choice, { id: 'rule', label: 'Rule', value: 'off', options: OPTIONS, busy: false, onChoose() {} }).tree.props['data-suite-pending'], undefined, 'Escape drops it for good');
+    // A choice kept against a saved value that has changed since (the rule was changed elsewhere) is dropped.
+    const again = mount(kit.Choice, { id: 'rule', label: 'Rule', value: 'off', options: OPTIONS, busy: false, onChoose() {} });
+    elementsOf(again.tree).find((e) => e.type === 'SegmentedControl').props.onChange('ask');
+    assert.equal(mount(kit.Choice, { id: 'rule', label: 'Rule', value: 'auto', options: OPTIONS, busy: false, onChoose() {} }).tree.props['data-suite-pending'], undefined, 'the saved value moved on');
+    assert.equal(mount(kit.Choice, { id: 'rule', label: 'Rule', value: 'off', options: OPTIONS, busy: false, onChoose() {} }).tree.props['data-suite-pending'], undefined, 'and it is gone');
     key('Escape');
     // A click applies at once (DSH's control ignores a click on the value it shows, so the click is read here).
     click('ask');
