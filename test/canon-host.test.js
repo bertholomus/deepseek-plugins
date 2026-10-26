@@ -241,9 +241,13 @@ test('text: decisions and requests to record, questions about the team or for a 
         'For the record, the ledger stays on Postgres 16.', 'lesson from tonight: never restart two quartz nodes at once']) {
         assert.equal(isDecision(prompt), true, prompt);
     }
-    for (const prompt of ['We decided to keep v1, right?', 'Write a helper and add it to the docs.', 'What did we decide about v1?']) {
+    for (const prompt of ['We decided to keep v1, right?', 'Write a helper and add it to the docs.', 'What did we decide about v1?',
+        // "it" and "this" in work on code are not a request to record.
+        'log it at debug level', 'keep it under 80 chars', 'write this function in go', 'add it to the handler', 'save it to disk as json']) {
         assert.equal(isDecision(prompt), false, prompt);
     }
+    assert.equal(isDecision('we use pnpm now, write that down'), true);
+    assert.equal(isDecision('put that in the notes: backups run at 4am'), true);
     // A question about how the team or its systems work, or for a fact, is not a coding request for a tool's name
     // or a code word in it ...
     for (const prompt of ['Why did we move the job queue off Redis?', 'Is it ok to run a postgres migration during the close?',

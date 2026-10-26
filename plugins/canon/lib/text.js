@@ -464,7 +464,7 @@ const DECIDED = /\b(?:we|i|team|they)(?:\s+(?:have|just|finally|all|now))?(?:'ve
  * "add that to the runbook", "fyi …", "for the record"), or a lesson told
  * ("lesson from tonight: …").
  */
-const RECORD_ASK = /\b(?:save|record|note|jot|log|write|put|add|get|keep)\s+(?:that|this|it)\b(?:\s+(?:down|in|into|to|somewhere))?|\b(?:update|add\s+(?:it|that|this)\s+to)\s+the\s+(?:notes|vault|canon|runbooks?|docs)\b|\b(?:in|into)\s+the\s+(?:notes|vault|canon)\b\s*[.!]?\s*$|^\s*fyi\b|\bfor the record\b|^\s*lessons?\s+(?:from|of)\b/i;
+const RECORD_ASK = /\b(?:save|record|note|jot)\s+(?:that|this|it)\b(?!\s+(?:to|in|into|on)\s+(?:a\s+|the\s+)?(?:disk|file|db|database|cache|redis|s3|bucket|table|db)\b)|\b(?:write|jot|note|put|get)\s+(?:that|this|it)\s+down\b|\b(?:put|add|write|log|keep|save|record)\s+(?:that|this|it)\s+(?:in|into|to|on)\s+(?:the\s+|our\s+)?(?:notes|vault|canon|runbooks?|docs|wiki|records?)\b|\b(?:update|add\s+(?:it|that|this)\s+to)\s+the\s+(?:notes|vault|canon|runbooks?|docs)\b|\b(?:in|into)\s+the\s+(?:notes|vault|canon)\b\s*[.!]?\s*$|^\s*fyi\b|\bfor the record\b|^\s*lessons?\s+(?:from|of)\b/i;
 
 /**
  * Whether a prompt states a decision or a lesson to keep ("we decided …",
