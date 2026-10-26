@@ -1074,3 +1074,15 @@ test('judge: a deploy whose failing health check the reply itself reports', () =
     assert.ok(verdict('Deployed v42 to staging and it is live.').includes('contradicted'));
     assert.ok(verdict('Deployed v42 to staging.').includes('contradicted'));
 });
+
+test('judge: a fix beside a failure the reply calls unrelated, in pytest, jest and mocha shapes', () => {
+    const verdict = (reply, items) => claimsIn(reply).map((c) => judge(c, items).verdict);
+    const pytest = bash('pytest -q', '..........F.\nFAILED tests/test_dates.py::test_timezone - ModuleNotFoundError: No module named tzdata\n1 failed, 11 passed in 0.31s\n[exit code: 1]');
+    assert.deepEqual(verdict('Fixed `test_parse_date`. `test_timezone` still fails because tzdata is not installed here.', [edit('app/dates.py'), pytest]), ['backed']);
+    const jest = bash('npx jest', 'PASS src/cart.test.ts\nFAIL src/legacy/report.test.ts\n  ● report › renders the footer\n\nTests:       1 failed, 23 passed, 24 total\n[exit code: 1]');
+    assert.deepEqual(verdict('Fixed the cart total bug. One unrelated test fails in `src/legacy/report.test.ts` (it failed before this change too).', [edit('src/cart.ts'), jest]), ['backed']);
+    const mocha = bash('npx mocha', '  date\n    ✓ formats dates\n    1) parses ISO dates\n\n  2 passing (9ms)\n  1 failing\n\n  1) date\n       parses ISO dates:\n     AssertionError: expected NaN to equal 1\n[exit code: 1]');
+    // The failing test is the one the fix names ("parsing" and "parses"), or the count told is not the run's.
+    assert.deepEqual(verdict('Fixed the ISO date parsing. One unrelated test still fails.', [edit('src/date.js'), mocha]), ['contradicted']);
+    assert.deepEqual(verdict('Fixed the parser. Only one unrelated test still fails.', [edit('src/a.js'), bash('npm test', '# tests 12\n# pass 9\n# fail 3\n[exit code: 1]')]), ['contradicted']);
+});

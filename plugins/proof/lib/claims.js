@@ -768,10 +768,12 @@ const PASS_COUNT = /\b(\d+)\s*\/\s*\1\b|\ball\s+(\d+)\b|\b(\d+)\s+(?:of|out\s+of
 const passCount = (clause) => shown(clause).match(PASS_COUNT)?.slice(1).find(Boolean);
 
 /** A reply's own word that something still fails: "One test still fails, `rounds totals`", "the tests still fail (2 of 14)". */
-const STILL_FAILS = /\b(?:still|also|continues\s+to|keeps)\s+(?:fail(?:s|ing)?|red|broken|erroring)\b|\b(?:is|are)\s+still\s+(?:failing|red|broken)\b|\b(?:failures?|failing\s+tests?)\s+(?:left|remain(?:s|ing)?)\b|\bremaining\s+failures?\b|\bpre-?existing\s+failures?\b|\bwas\s+(?:already\s+)?failing\s+before\b/i;
+const STILL_FAILS = /\b(?:still|also|continues\s+to|keeps)\s+(?:fail(?:s|ing)?|red|broken|erroring)\b|\b(?:is|are)\s+still\s+(?:failing|red|broken)\b|\b(?:failures?|failing\s+tests?)\s+(?:left|remain(?:s|ing)?)\b|\bremaining\s+failures?\b|\bpre-?existing\s+failures?\b|\bwas\s+(?:already\s+)?failing\s+before\b|\bunrelated\b[^.;]{0,40}\bfail(?:s|ed|ing|ures?)?\b|\bfail(?:s|ed|ing|ures?)?\b[^.;]{0,60}\b(?:unrelated|pre-?existing|before\s+(?:this|my|the)\s+change|already\s+(?:on|in)\s+main|on\s+main\s+too)\b/i;
 const NONE_LEFT = /\b(?:no|none|nothing|zero|0)\s+(?:other\s+|more\s+)?(?:(?:tests?|specs?|failures?)\s+)?(?:still|remain|left)\b|\bno\s+(?:longer|more)\b/i;
 const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-const TOLD_COUNT = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:other\s+|more\s+|unrelated\s+|remaining\s+)?(?:tests?|specs?|cases?|failures?)\b|\((\d+)\s+(?:of|out\s+of)\s+\d+\)/i;
+const N_WORD = String.raw`(\d+|one|two|three|four|five|six|seven|eight|nine|ten)`;
+/** How many the reply says still fail: "one unrelated test still fails", "the 1 failing", "2 failures left", "still fail (2 of 14)". */
+const TOLD_COUNT = new RegExp(String.raw`\b${N_WORD}\s+(?:other\s+|more\s+|unrelated\s+|remaining\s+|pre-?existing\s+)?(?:tests?|specs?|cases?)\s+(?:still\s+|also\s+)?(?:fail|fails|failing|failed|remain|remains|left)\b|\b${N_WORD}\s+(?:still\s+)?failing\b|\b${N_WORD}\s+(?:unrelated\s+|pre-?existing\s+|remaining\s+)?failures?\b|\bstill\s+fail(?:s|ing)?\s+\((\d+)\s+(?:of|out\s+of)\s+\d+\)`, 'i');
 /** A status a check answered with, as a reply reports it: "answers 503", "returns a 404". */
 const TOLD_CODE = /(?<![\w.\/:-])([45]\d\d)(?![\w.\/:-])/g;
 const TOLD_DOWN = /\b(?:down|unhealthy|not\s+(?:healthy|up|ready|responding|serving)|crash(?:ing|looping|es)?|failing|erroring)\b/i;
@@ -790,7 +792,7 @@ function toldIn(sentences) {
         if (TOLD_DOWN.test(plainS)) down = true;
         if (!STILL_FAILS.test(plainS) || NONE_LEFT.test(plainS)) continue;
         const c = TOLD_COUNT.exec(plainS);
-        const n = c ? (c[2] ?? c[1]) : undefined;
+        const n = c ? c.slice(1).find((x) => x !== undefined) : undefined;
         const count = n === undefined ? undefined : WORD_NUMBERS[n.toLowerCase()] ?? Number(n);
         const names = [...s.matchAll(new RegExp(`${OPEN}([^${CLOSE}\\n]{3,80})${CLOSE}`, 'g'))].map((m) => m[1]);
         fails = fails ?? { ...(count !== undefined ? { count } : {}), ...(names.length ? { names: names.slice(0, 6) } : {}) };

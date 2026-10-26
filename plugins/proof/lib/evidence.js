@@ -1681,13 +1681,15 @@ const BARE_TESTS = /^\W*(?:and\s+|so\s+|now\s+)*(?:the\s+)?(?:(?:unit|integratio
 const wholeClaim = (words) => WHOLE_CLAIM.test(words) || BARE_TESTS.test(words) || partOfAll(words);
 /** Words that name nothing in particular, left out when a claim's words are held against a failing test's name. */
 const PLAIN_WORDS = new Set('test tests testing spec specs case cases check checks fail fails failed failing failure failures pass passes passed passing error errors expected actual should handles returns works with from that this when then into after before every their there which while about fixed fixes still green'.split(' '));
-const significant = (text) => new Set(String(text).toLowerCase().replace(/([a-z])([A-Z])/g, '$1 $2').split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !PLAIN_WORDS.has(w) && !/^\d+$/.test(w)));
+// Each word by its first four letters, so "parsing" meets "parses" and "date" meets "dates".
+const significant = (text) => new Set(String(text).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !PLAIN_WORDS.has(w) && !/^\d+$/.test(w)).map((w) => w.slice(0, 4)));
 /** The names of the tests a run's failing lines name: TAP's "not ok 3 - name", "✖ name (1ms)", pytest's "FAILED a.py::name", go's "--- FAIL: Name". */
 function failNamesOf(last) {
     const lines = (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string');
     const names = [];
     for (const l of lines) {
-        const m = /^\s*not ok \d+ - (.+?)(?:\s+#.*)?$/.exec(l) ?? /^\s*[✖✗✘×✕]\s+(.+?)(?:\s+\(\d[\d.]*\s*m?s\))?$/.exec(l) ?? /::([\w.[\]-]+)/.exec(l) ?? /--- FAIL: (\S+)/.exec(l) ?? /^\s*(?:FAIL(?:ED)?:?)\s+(\S.*?)\s*$/.exec(l);
+        const m = /^\s*not ok \d+ - (.+?)(?:\s+#.*)?$/.exec(l) ?? /^\s*[✖✗✘×✕●]\s+(.+?)(?:\s+\(\d[\d.]*\s*m?s\))?$/.exec(l) ?? /::([\w.[\]-]+)/.exec(l) ?? /--- FAIL: (\S+)/.exec(l)
+            ?? /^\s*\d+\)\s+(.+?):?\s*$/.exec(l) ?? /^\s*(?:FAIL(?:ED)?:?)\s+(\S.*?)\s*$/.exec(l);
         if (m) names.push(m[1].trim());
     }
     return names;
@@ -1695,7 +1697,10 @@ function failNamesOf(last) {
 /** Whether a failing test's line in the run shares a word with what the claim names ("empty input" and "✖ handles empty input"). */
 function failsOnClaim(last, claim) {
     const said_ = significant(String(claim.part ?? claim.text ?? '').replace(/^\W*(?:fixed|repaired|resolved)\b/i, ''));
-    const lines = (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string');
+    // The failing tests by name when the lines give them (not the file they sit in or the error), else the lines that are
+    // not a run's summary ("1 failed, 23 passed, 24 total").
+    const names = failNamesOf(last);
+    const lines = names.length ? names : (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string' && !/\b\d+\s+(?:failed|passed|failing|passing|failures?)\b/i.test(l));
     return lines.some((l) => [...significant(l.replace(/\(\d[\d.]*\s*m?s\)/g, ''))].some((w) => said_.has(w)));
 }
 /**
