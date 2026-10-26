@@ -560,7 +560,10 @@ What it checks:
   the brackets, `"yes"` for a switch): Recall runs, names them, refuses
   searches and offers no tool. It starts with a wrong setting, named and
   then fixed through the form. It checks Recall's file modes and loads it
-  with `enabled: false` (What happened says so first).
+  with `enabled: false` (What happened says so first). Then it saves
+  `enabled: true` and `false` again in the profile while DSH runs: DSH
+  applies each save with no restart, the open page follows, What happened
+  says each switch once, and the turn made while Recall was off is read.
 
 No real session is read: every session, transcript and note it reads is
 made by the test.

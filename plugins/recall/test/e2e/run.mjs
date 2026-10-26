@@ -31,7 +31,10 @@
  *   hold), marked "Found by Recall", the turn's rows marked and brought to
  *   the top; Back to the results keeps the search; Done takes the marks off;
  *   the filters; the reading view for a transcript and a note; the tool's
- *   card in the agent's chat and its Open; the index card, a folder that is
+ *   card in the agent's chat and its Open, then Back to the results (the
+ *   card's search) and Back to the chat; a running turn's row that follows
+ *   it to "stopped" with no new search, and the line above the message box
+ *   when it is opened while it runs; the index card, a folder that is
  *   not there, Look for changes now; a narrow window; light and dark; focus
  *   back on the button that opened the reading view after Turn before and
  *   Back; Wallpaper on (a stand-in for it in this window) over a light and a
@@ -47,14 +50,18 @@
  *   checked and kept.
  * - Recall switched off and on in Plugins: no failure; its entry, marks and
  *   style go and come back.
- * - Without Session Watch, the open page follows new turns.
+ * - Without Session Watch, the open page follows new turns and never asks
+ *   for Session Watch's endpoint.
  * - Wrong types in the profile (one folder without the brackets, "yes" for a
  *   switch): Recall starts, names the setting and how to write it, refuses
  *   searches and offers no tool.
  * - A wrong setting: Recall starts, refuses searches, offers no tool, and
  *   its page says which setting; fixed through the form.
- * - Its folder is 700 and its files 600. `enabled: false`: idle, and its
- *   page says so.
+ * - Its folder is 700 and its files 600. `enabled: false`: idle, its page
+ *   says so and What happened says it first; `enabled` saved in the profile
+ *   while DSH runs, true then false: applied with no restart, the open page
+ *   follows, each switch said once, and the turn made while it was off is
+ *   read.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/recall/test/e2e/run.mjs
  *
@@ -65,7 +72,7 @@
  * Playwright the run fails, unless NO_WINDOW=1 says to run without the
  * window checks.
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
 import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
@@ -478,7 +485,11 @@ try {
             const { page } = window;
             await openRecall(page);
             const line = (await page.locator('[data-recall-index-line]').textContent()) ?? '';
-            check('the header says what Recall holds and that it is up to date', /^Recall has \d+ turns from \d+ sessions and files\. Up to date\.$/.test(line), line);
+            const held = (await pageState()).index.totals;
+            const sections = held.sections ?? 0;
+            const heldWords = `${held.turns - sections} turn${held.turns - sections === 1 ? '' : 's'}${sections ? ` and ${sections} note section${sections === 1 ? '' : 's'}` : ''}`;
+            check('the header says what Recall holds, turns and note sections apart, and that it is up to date',
+                sections > 0 && line === `Recall has ${heldWords} from ${held.files} sessions and files. Up to date.`, `${line} | ${json(held)}`);
             await page.locator('[data-recall-result]').first().waitFor({ state: 'visible', timeout: 15000 });
             const first = (await page.locator('[data-recall-count]').textContent()) ?? '';
             check('with nothing typed, the newest turns are listed', /^The newest turns first\./.test(first) && (await page.locator('[data-recall-result]').count()) > 0, first);
@@ -667,9 +678,94 @@ try {
             const mark = page.locator('[data-recall-mark]').filter({ visible: true }).first();
             await mark.waitFor({ state: 'visible', timeout: 20000 });
             check('Open on the card opens the long session at turn 2, marked', /Found by Recall · turn 2, for “narwhal exporter”/.test(await mark.innerText()) && (await turnPlace(page, 2)).marked > 0);
-            await page.getByRole('button', { name: 'Done: take the mark off this turn' }).first().click();
+            check('its mark offers Back to the results and Back to the chat the card is in', /Back to the results/.test(await mark.innerText()) && /Back to the chat/.test(await mark.innerText()), await mark.innerText());
+            // Back to the results: the agent's search, not the page's own earlier one ("decide about the exporter").
+            await mark.getByRole('button', { name: 'Back to the results' }).click();
+            await page.locator('[data-recall-page]').waitFor({ state: 'visible', timeout: 15000 });
+            const agentSaw = await search({ text: 'narwhal exporter', kind: 'session', prefix: true });
+            const landed = await waitFor(async () => {
+                const count = page.locator('[data-recall-count]');
+                return (await searchBox(page).inputValue()) === 'narwhal exporter' && (await count.count()) > 0 && (await count.getAttribute('data-recall-count')) === String(agentSaw.total)
+                    && (await page.locator('[data-recall-result]').first().getAttribute('data-recall-id')) === `${agentSaw.results[0].file}.${agentSaw.results[0].turn}`;
+            }, 'the page to show the card\'s search', 10000, 200).then(() => true, () => false);
+            const kindShown = await page.locator('[id="dshrc-kind-session"][aria-selected="true"]').count();
+            check('Back to the results from the card shows the search the agent made (its words and its kind filter), not the page\'s earlier one',
+                landed && kindShown === 1, `${await searchBox(page).inputValue()} | kind session shown: ${kindShown} | ${await page.locator('[data-recall-count]').textContent().catch(() => '')}`);
+            await shot(page, shots, 'tool-back-light');
+            await setDark(page, true);
+            await shot(page, shots, 'tool-back-dark');
+            await setDark(page, false);
+            // Back to the chat: from the card's turn again, then to the chat the card is in.
+            await searchFor(page, '"decide about the exporter"', { total: 1 });
+            await page.locator('[data-recall-open]').first().click();
+            await page.locator('[data-recall-mark]').filter({ visible: true }).first().waitFor({ state: 'visible', timeout: 20000 });
+            for (let i = 0; i < 6 && (await folded.count()) > 0; i += 1) {
+                await folded.first().click();
+                await sleep(300);
+            }
+            await card.waitFor({ state: 'visible', timeout: 20000 });
+            // The card may still be open from before: open it only when its result does not show.
+            if (!(await result.waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false))) await card.getByText(/Searched past work for/).first().click();
+            await result.waitFor({ state: 'visible', timeout: 10000 });
+            await result.getByRole('button', { name: 'Open' }).click();
+            await waitFor(async () => /for “narwhal exporter”/.test((await mark.innerText().catch(() => '')) ?? ''), 'the long session\'s mark again', 20000, 200);
+            await mark.getByRole('button', { name: 'Back to the chat' }).click();
+            const back = await waitFor(async () => (await page.getByText('What did we decide about the exporter?').filter({ visible: true }).count()) > 0, 'the agent\'s chat', 15000, 200).then(() => true, () => false);
+            check('Back to the chat from the mark goes to the chat the card is in', back, (await page.locator('[data-chat-flow]').first().innerText().catch(() => '')).slice(0, 300));
+            const done = page.getByRole('button', { name: 'Done: take the mark off this turn' }).filter({ visible: true });
+            if (await done.count()) await done.first().click().catch(() => {});
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-tool-card');
+        });
+
+        await step('rows already on the page follow their turns: a shown running turn, stopped from the chat, reads "stopped" with no search again; opened while it runs, it gets a line above the composer', async () => {
+            const { page } = window;
+            ids.ocelot = await run.newSession('Roll out the ocelot canary.\nE2E:hang The ocelot canary waits.', 'Ocelot canary');
+            await waitFor(async () => (await run.session(ids.ocelot)).status === 'running', 'the ocelot turn to start', 20000, 200);
+            await found({ text: 'ocelot' }, 'the running ocelot turn to be read', 20000, (r) => r.results[0]?.state === 'running');
+            await openRecall(page);
+            await searchFor(page, 'ocelot canary', { total: 1 });
+            const row = page.locator('[data-recall-result]').first();
+            check('the running turn is listed as still running', /turn 1 · still running/.test((await row.innerText()).replace(/\n+/g, ' ')), await row.innerText());
+            // Opened while it runs: DSH draws no tail for a running turn, so no mark; the way back is a line above the composer.
+            await page.locator('[data-recall-open]').first().click();
+            const dock = page.locator('[data-recall-dock]').filter({ visible: true }).first();
+            const docked = await dock.waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
+            const dockText = docked ? (await dock.innerText()).replace(/\n+/g, ' ') : '';
+            check('a running turn opened from the page: a line above the composer says which turn, with Back to the results and Done',
+                /Found by Recall · turn 1, still running, for “ocelot canary”/.test(dockText) && /Back to the results/.test(dockText) && /Done/.test(dockText), dockText);
+            if (docked) {
+                await shot(page, shots, 'running-dock-light');
+                await setDark(page, true);
+                await shot(page, shots, 'running-dock-dark');
+                await setDark(page, false);
+                await dock.getByRole('button', { name: 'Back to the results' }).click();
+            } else await openRecall(page);
+            await page.locator('[data-recall-page]').waitFor({ state: 'visible', timeout: 15000 });
+            await row.waitFor({ state: 'visible', timeout: 10000 });
+            // Stopped from the chat while its row is on the page: the row says so by itself, with no search again.
+            const asked = [];
+            const onRequest = (req) => {
+                const m = /dsh-plugin-recall\/(search|states)/.exec(req.url());
+                if (m) asked.push(m[1]);
+            };
+            page.on('request', onRequest);
+            const stoppedAt = Date.now();
+            await run.bridge('POST', `/sessions/${encodeURIComponent(ids.ocelot)}/cancel`, {});
+            const took = await waitFor(async () => /turn 1 · stopped/.test((await row.innerText()).replace(/\n+/g, ' ')), 'the shown row to read stopped', 30000, 200).then(() => Date.now() - stoppedAt, () => -1);
+            page.off('request', onRequest);
+            timings.followed = took;
+            check('stopped from the chat, the row already shown reads "stopped" by itself: its state asked for, no search again',
+                took >= 0 && asked.includes('states') && !asked.includes('search') && (await searchBox(page).inputValue()) === 'ocelot canary', `${took} ms | asked: ${asked.join(', ')} | ${(await row.innerText()).replace(/\n+/g, ' ')}`);
+            console.log(`# a shown row read "stopped" ${took} ms after the turn was stopped`);
+            // Opened again now that it ended: its mark after the turn, and no line above the composer.
+            await page.locator('[data-recall-open]').first().click();
+            const mark = page.locator('[data-recall-mark]').filter({ visible: true }).first();
+            await mark.waitFor({ state: 'visible', timeout: 20000 });
+            check('opened once it ended: its mark, and no line above the composer', (await page.locator('[data-recall-dock]').filter({ visible: true }).count()) === 0, await mark.innerText());
+            await mark.getByRole('button', { name: 'Done' }).click();
+        }, async () => {
+            if (window?.page) await shot(window.page, shots, 'failed-follow');
         });
 
         await step('the index card: each folder\'s state, one not there, Look for changes now; a narrow window', async () => {
@@ -990,12 +1086,15 @@ try {
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Recall' });
         const { page } = window;
+        const waits = [];
+        page.on('request', (req) => { if (req.url().includes('dsh-plugin-session-watch/')) waits.push(req.url()); });
         await openRecall(page);
         await page.locator('[data-recall-result]').first().waitFor({ state: 'visible', timeout: 15000 });
         ids.late = await run.newSession(sayText('The heron cache is warm now.'), 'Late session');
         await turnsEnded(ids.late, 1);
         const shown = await waitFor(async () => (await page.locator('[data-recall-result]').first().innerText()).startsWith('Late session'), 'the open page to show the new turn', 40000, 500).catch(() => false);
         check('the open page lists the new session\'s turn first, by itself', shown === true, await page.locator('[data-recall-result]').first().innerText().catch(() => ''));
+        check('without Session Watch the window never asks for its endpoint (no 404s): the page reads its own state on a timer', waits.length === 0, waits.slice(0, 3).join(', '));
         check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-watch-off');
@@ -1095,6 +1194,7 @@ try {
     await step('enabled: false: Recall keeps no index, refuses searches, offers no tool, and its page says so and how to change it', async () => {
         const s = await pageState();
         check('with enabled: false Recall is loaded but idle', s.enabled === false && !s.problem, json({ enabled: s.enabled, problem: s.problem, thread: s.thread }));
+        check('What happened says it was switched off in the profile', s.history[0]?.kind === 'switch' && s.history[0].text === 'Switched off in DSH\'s profile', json(s.history[0]));
         const refused = await api('search', { query: { text: 'narwhal' } });
         check('searches say it is switched off', refused.ok === false && refused.error?.message === 'Recall is switched off in DSH\'s profile (enabled: false), so it keeps no index.', json(refused.error));
         ids.disabled = await run.newSession(sayText('A turn with Recall off.'), 'Recall off');
@@ -1112,6 +1212,56 @@ try {
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');
     });
+
+    // ── enabled written while DSH runs ─────────────────────────────────
+    await step('enabled written into the profile while DSH runs: DSH applies the save, the open page follows within seconds, What happened says each switch once, and Recall reads what changed while it was off', async () => {
+        const patchFile = join(run.profile, 'cordis.patch.yml');
+        const off = readFileSync(patchFile, 'utf8');
+        check('Recall\'s row in the profile says enabled: false', /\n- id: recall\n {2}config:\n(?: {4}.*\n)*? {4}enabled: false\n/.test(off), off.slice(off.indexOf('- id: recall')));
+        const switches = (s) => s.history.filter((e) => e.kind === 'switch').map((e) => e.text);
+        const page = pw ? window?.page : undefined;
+        if (page) await page.locator('[data-recall-header="off"]').waitFor({ state: 'visible', timeout: 20000 });
+        // On again: the save alone, no restart.
+        let wrote = Date.now();
+        const recallRow = /(\n- id: recall\n {2}config:\n(?: {4}.*\n)*?) {4}enabled: false\n/;
+        writeFileSync(patchFile, off.replace(recallRow, '$1    enabled: true\n'));
+        const on = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && r.value.enabled === true && r.value.thread?.state === 'running' ? r.value : null;
+        }, 'DSH to apply enabled: true from the saved profile', 30000);
+        const appliedOn = Date.now() - wrote;
+        check('DSH applies enabled: true from the saved profile, with no restart', appliedOn < 30000, `${appliedOn} ms`);
+        check('What happened says it was switched on again, once', on.history[0]?.kind === 'switch'
+            && json(switches(on)) === json(['Switched on again in DSH\'s profile', 'Switched off in DSH\'s profile']), json(on.history.slice(0, 3)));
+        if (page) {
+            await page.locator('[data-recall-header="off"]').waitFor({ state: 'hidden', timeout: 15000 });
+            check('the open page shows Recall on again within 15 s of the save', true, `${Date.now() - wrote} ms`);
+        }
+        const found = await waitFor(async () => {
+            const r = await search({ text: '"turn with Recall off"' });
+            return r.total >= 1 ? r : null;
+        }, 'the turn made while Recall was off to be read', 30000);
+        check('Recall reads what changed while it was off: the turn made then is found', found.results[0]?.sessionId === ids.disabled && found.results[0]?.turn === 1, json(found.results[0]));
+        // Off again, the same way.
+        wrote = Date.now();
+        writeFileSync(patchFile, off);
+        const offAgain = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && r.value.enabled === false ? r.value : null;
+        }, 'DSH to apply enabled: false from the saved profile', 30000);
+        timings.switched = Math.max(appliedOn, Date.now() - wrote);
+        check('What happened says it was switched off again, once', json(switches(offAgain)) === json(['Switched off in DSH\'s profile', 'Switched on again in DSH\'s profile', 'Switched off in DSH\'s profile']), json(offAgain.history.slice(0, 3)));
+        const refused = await api('search', { query: { text: 'narwhal' } });
+        check('searches are refused again', refused.ok === false && /switched off/.test(refused.error?.message ?? ''), json(refused.error));
+        if (page) {
+            await page.locator('[data-recall-header="off"]').waitFor({ state: 'visible', timeout: 15000 });
+            check('the open page says it is off again within 15 s of the save', true, `${Date.now() - wrote} ms`);
+            await shot(page, shots, 'switched-off-live-light');
+            check('no errors from the suite in the window while Recall was switched off and on', ours(window.errors).length === 0, ours(window.errors).join('\n'));
+        }
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-switch-live');
+    });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);
     if (window?.page) await shot(window.page, shots, 'failed').catch(() => {});
@@ -1123,6 +1273,6 @@ try {
     if (warnings.length) console.log(`# DSH said about the suite:\n${warnings.slice(-20).map((l) => `#   ${l}`).join('\n')}`);
     run.cleanup();
 }
-if (timings.newTurn) console.log(`# timings: new turn searchable after ${timings.newTurn} ms; first search after a restart ${timings.afterRestart ?? '?'} ms${timings.shrunk ? `; a large folder taken out and its space given back in ${timings.shrunk} ms` : ''}`);
+if (timings.newTurn) console.log(`# timings: new turn searchable after ${timings.newTurn} ms; first search after a restart ${timings.afterRestart ?? '?'} ms${timings.shrunk ? `; a large folder taken out and its space given back in ${timings.shrunk} ms` : ''}${timings.followed ? `; a shown row followed its turn's end in ${timings.followed} ms` : ''}${timings.switched ? `; enabled saved in the profile applied in ${timings.switched} ms` : ''}`);
 console.log(`\n# DSH ${version}: ${tally.passed} passed, ${tally.failed} failed${pw ? '' : ', window checks skipped (no Playwright)'}`);
 process.exit(tally.failed ? 1 : 0);
