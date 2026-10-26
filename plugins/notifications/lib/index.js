@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
-import { checkSettings } from './config.js';
+import { changedWords, checkSettings, readConfig } from './config.js';
 import { Notifier } from './notifier.js';
 import { NotificationsRemote, SERVICE } from './remote.js';
 import { LogFile, StateFile } from './state.js';
@@ -36,27 +36,33 @@ export const name = 'notifications';
 export const inject = [];
 
 /**
- * Settings: switches, on by default. Each takes any value, so a wrong type
- * in the profile ("yes" for true, say) never stops the plugin: it counts as
- * the default, its log says so at start, and the settings page names it
- * (config.js). A save on the settings page restarts the plugin, which costs
- * nothing: the queue and the recent list are on disk.
+ * A field the plugin's page in Plugins can change while it runs. DSH serves
+ * a plugin's page there only for such fields, and a save changes them in
+ * place (config.js reads them), with no restart.
+ */
+const live = (schema) => (typeof schema?.volatile === 'function' ? schema.volatile() : schema);
+
+/**
+ * Settings: switches, on by default, each one live. Each takes any value,
+ * so a wrong type in the profile ("yes" for true, say) never stops the
+ * plugin: it counts as the default, its log says so, and the settings page
+ * names it (config.js).
  */
 export const Config = z.object({
     /** Master switch: no notification at all when off (callers are told 'off'). */
-    enabled: z.any().default(true),
+    enabled: live(z.any().default(true)),
     /** A thread's handback (the coordinator). */
-    notifyHandback: z.any().default(true),
+    notifyHandback: live(z.any().default(true)),
     /** A thread that ended a turn without a handback (the coordinator). */
-    notifyFinished: z.any().default(true),
+    notifyFinished: live(z.any().default(true)),
     /** A thread waiting on a permission prompt (the coordinator). */
-    notifyApproval: z.any().default(true),
+    notifyApproval: live(z.any().default(true)),
     /** A thread that failed after the coordinator nudged it once. */
-    notifyFailed: z.any().default(true),
+    notifyFailed: live(z.any().default(true)),
     /** A thread that was stopped after the coordinator nudged it once. */
-    notifyStopped: z.any().default(true),
+    notifyStopped: live(z.any().default(true)),
     /** Fleet: a finding on an Ascent that starts, gets worse or clears (running hot, low memory, a GPU error). */
-    notifyFleet: z.any().default(true),
+    notifyFleet: live(z.any().default(true)),
 });
 
 /** A path as the page shows it: the home folder as ~. */
@@ -66,7 +72,8 @@ const shownPath = (path) => {
 };
 
 export function apply(ctx, config) {
-    const { settings, problems } = checkSettings(config);
+    // The settings as they are now; a save on the page changes them in place (see the volatile-update below).
+    let checked = checkSettings(readConfig(config));
     // Its folder in DSH's data folder, as DSH resolves it (DSH_HOME, else ~/.dsh).
     const folder = dshHomePath('notifications');
     // Every line goes to DSH's logger (kept in memory by DSH 0.2) and to the
@@ -84,12 +91,12 @@ export function apply(ctx, config) {
     };
     const logger = { info: (format, text) => line('info', format, text), warn: (format, text) => line('warn', format, text) };
     const log = (level, text) => line(level, '%s', `notifications: ${text}`);
-    for (const problem of problems) log('warn', `a setting is wrong: ${problem.text}`);
+    for (const problem of checked.problems) log('warn', `a setting is wrong: ${problem.text}`);
     const store = new StateFile(join(folder, 'state.json'), {
         onError: (what, error) => log('warn', `${what} (${String(error?.message ?? error).slice(0, 200)})`),
     });
     const notifier = new Notifier({
-        settings: () => settings,
+        settings: () => checked.settings,
         logger,
         logFile: shownPath(logFile.file),
         platform: process.platform,
@@ -100,9 +107,23 @@ export function apply(ctx, config) {
         // today's host process carries (a terminal DSH is plain Node).
         desktopHost: process.versions?.electron !== undefined || process.env.DSH_CLIENT_VERSION !== undefined,
         store,
-        problems,
+        problems: () => checked.problems,
     });
-    log('info', `started (${settings.enabled ? 'on' : 'switched off in its settings'}; ${notifier.desktopHost ? 'the Desktop app' : 'no Desktop app'}; sender now: ${notifier.sender()})`);
+    log('info', `started (${checked.settings.enabled ? 'on' : 'switched off in its settings'}; ${notifier.desktopHost ? 'the Desktop app' : 'no Desktop app'}; sender now: ${notifier.sender()})`);
+
+    // A save on its page in Plugins, or an edit of the profile: the settings changed in place. Check them again;
+    // the log says what changed, and a setting that is still (or now) wrong.
+    ctx.on?.('loader/volatile-update', (paths) => {
+        try {
+            const before = new Set(checked.problems.map((problem) => problem.text));
+            checked = checkSettings(readConfig(config));
+            for (const problem of checked.problems) if (!before.has(problem.text)) log('warn', `a setting is wrong: ${problem.text}`);
+            const words = changedWords(paths);
+            log('info', `settings changed${words ? `: ${words}` : ''} (${checked.settings.enabled ? 'on' : 'switched off in its settings'}; sender now: ${notifier.sender()})`);
+        } catch (error) {
+            log('warn', `could not read its settings after a change (${String(error?.message ?? error).slice(0, 200)})`);
+        }
+    });
 
     // DSH's own sender (Electron main), where DSH provides it. It already
     // skips while the window is focused and shows the window on a click.

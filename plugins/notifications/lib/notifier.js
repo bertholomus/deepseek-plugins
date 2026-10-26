@@ -87,7 +87,8 @@ export class Notifier {
      *   the CLI sender; defaults to cliSend on this machine.
      * @param {() => number} [options.now] - the clock, for tests.
      * @param {{ load(): object, save(state: object): boolean }} [options.store] - where the state is kept (state.js); memory only without.
-     * @param {{ key: string, text: string }[]} [options.problems] - settings that were wrong (config.js), for the page.
+     * @param {{ key: string, text: string }[] | (() => { key: string, text: string }[])} [options.problems] - settings
+     *   that are wrong (config.js), for the page; a function when a save can change them.
      * @param {string} [options.logFile] - where the log lines can be read, as the page names it ('' when nowhere).
      */
     constructor({ settings = () => ({}), logger = { warn() {}, info() {} }, platform = process.platform, desktopHost = false, send, now = Date.now, store, problems = [], logFile = '' } = {}) {
@@ -99,7 +100,8 @@ export class Notifier {
         this.send = send ?? ((notification, onError) => cliSend(platform, notification, { icon: iconFor(platform), onError }));
         this.now = now;
         this.store = store;
-        this.problems = problems;
+        /** The settings that are wrong now. */
+        this.problemsNow = typeof problems === 'function' ? problems : () => problems;
         /** DSH's desktopRuntime, set once its inject lands; absent elsewhere. */
         this.desktop = undefined;
         const saved = store?.load?.() ?? emptyState();
@@ -333,7 +335,7 @@ export class Notifier {
             platform: this.platform,
             windowSeenAt: this.lastBrowserSeen ? new Date(this.lastBrowserSeen).toISOString() : '',
             waiting: this.queue.length,
-            problems: this.problems.map((problem) => ({ key: problem.key, text: problem.text })),
+            problems: (this.problemsNow() ?? []).map((problem) => ({ key: problem.key, text: problem.text })),
             logFile: this.logFile,
             recent: this.recent.slice().reverse(),
         };

@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Notifier, EVENT_FIELDS, BROWSER_TTL_MS, MAX_QUEUED, QUEUE_STALE_MS, RECENT_MAX, TITLE_MAX, WINDOW_OUTCOMES } from '../lib/notifier.js';
 import { oneLine, cliCommand, cliSend, desktopSend, iconFor } from '../lib/backends.js';
-import { checkSettings, DEFAULTS, TITLES } from '../lib/config.js';
+import { changedWords, checkSettings, DEFAULTS, readConfig, TITLES, valueOf } from '../lib/config.js';
 import { LogFile, LOG_MAX_BYTES, StateFile, parseState, emptyState, stamp } from '../lib/state.js';
 
 register('./peers.mjs', import.meta.url);
@@ -517,6 +517,46 @@ test('host: it wires the service, DSH\'s desktop runtime and the endpoints, keep
     });
 });
 
+test('settings: every one is live; a save changes it in place, checked again, logged by title, with no restart', needsPeers, async () => {
+    // Read as DSH hands them: references whose value a save changes in place.
+    assert.deepEqual(readConfig(peers.plugin.Config({ notifyFleet: false })), { ...DEFAULTS, notifyFleet: false });
+    assert.equal(valueOf(7), 7);
+    assert.equal(changedWords([['notifyFleet'], ['enabled'], ['notifyFleet'], ['other']]), '“Fleet findings”, “Send system notifications”, other');
+    assert.equal(changedWords(undefined), '');
+    await withTempHome(async (home) => {
+        const values = { ...DEFAULTS, notifyHandback: 'no' };
+        const ref = (key) => ({ get: () => values[key] });
+        const config = Object.fromEntries(Object.keys(DEFAULTS).map((key) => [key, ref(key)]));
+        const handlers = [];
+        const { out, logger } = lines();
+        const ctx = fakeCtx({ typertGateway: { provide() {} } }, logger);
+        ctx.on = (name, fn) => { if (name === 'loader/volatile-update') handlers.push(fn); };
+        peers.plugin.apply(ctx, config);
+        const notify = ctx.provided.get('notifications').notify;
+        const remote = ctx.provided.get(peers.remote.SERVICE);
+        assert.equal(handlers.length, 1, 'it listens for saves');
+        assert.deepEqual(remote.notifier.status().problems.map((p) => p.key), ['notifyHandback']);
+        // The person switches Fleet findings off and fixes Handbacks on the page, and saves.
+        values.notifyFleet = false;
+        values.notifyHandback = true;
+        handlers[0]([['notifyFleet'], ['notifyHandback']]);
+        assert.equal(notify({ title: 'A3 is hot', kind: 'fleet' }), 'off', 'the switch applies at once');
+        assert.deepEqual(remote.notifier.status().problems, [], 'the fixed setting is no longer named');
+        assert.ok(out.some((line) => /^info notifications: settings changed: “Fleet findings”, “Handbacks” \(on; sender now: (none|command)\)$/.test(line)), out.join('\n'));
+        // A save that makes one wrong: named once, and it counts as its default.
+        values.notifyFailed = 3;
+        handlers[0]([['notifyFailed']]);
+        assert.deepEqual(remote.notifier.status().problems.map((p) => p.key), ['notifyFailed']);
+        assert.equal(out.filter((line) => line.startsWith('warn notifications: a setting is wrong: “Failed after a nudge”')).length, 1, out.join('\n'));
+        assert.match(readFileSync(join(home, 'notifications', 'notifications.log'), 'utf8'), / info settings changed: “Fleet findings”, “Handbacks” \(on; sender now: (none|command)\)\n/);
+        // The master switch off, live: callers hear off.
+        values.enabled = false;
+        handlers[0]([['enabled']]);
+        assert.equal(notify({ title: 'T' }), 'off');
+        assert.equal(remote.notifier.status().enabled, false);
+    });
+});
+
 test('host: switched off it still answers callers, with \'off\'; a wrong setting never stops it', needsPeers, async () => {
     await withTempHome(async (home) => {
         const off = fakeCtx({ typertGateway: { provide() {} } });
@@ -572,7 +612,9 @@ test('window: every news kind is gated by a setting with a switch on the page', 
     const defaults = peers.plugin.Config({});
     const { FIELDS, EVENTS } = clientInternals();
     for (const field of Object.values(EVENT_FIELDS)) {
-        assert.equal(defaults[field], true, field);
+        // Live: DSH serves a plugin's page in Plugins only for live fields, and hands each as a reference.
+        assert.equal(typeof defaults[field]?.get, 'function', `${field} is a live field`);
+        assert.equal(valueOf(defaults[field]), true, field);
         assert.ok(FIELDS.includes(field), field);
         assert.equal(EVENTS.find((event) => event.field === field).title, TITLES[field], 'the page and the log use one title');
     }

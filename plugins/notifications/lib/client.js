@@ -307,6 +307,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const on = (name) => snapshot[name]?.text === 'on';
             const toggle = (name) => (next) => form.actions.edit(name, next ? 'on' : 'off');
             const [bump, setBump] = React.useState(0);
+            // A save applies at once (the settings are live): read where they go and what is wrong again when it lands.
+            const saving = Boolean(snapshot.saving);
+            const wasSaving = React.useRef(saving);
+            React.useEffect(() => {
+                if (wasSaving.current && !saving) setBump((n) => n + 1);
+                wasSaving.current = saving;
+            }, [saving]);
             const { status, failed } = useStatus(linkOf, bump);
             const [testLine, sendTest] = useTestSend(linkOf, () => setBump((n) => n + 1));
             const openSession = openerOf();

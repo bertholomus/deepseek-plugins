@@ -165,14 +165,18 @@ const poke = (page) => page.evaluate(() => window.dispatchEvent(new Event('blur'
 /** Open DSH's Plugins page at the notifications plugin's settings, as a person does: Plugins, then its card. */
 async function openSettings(page) {
     const form = page.locator('[data-notifications-settings]');
-    if (await form.isVisible().catch(() => false)) return form;
-    const entry = page.getByRole('button', { name: 'Plugins', exact: true });
-    if (await entry.count()) await entry.first().click();
-    else await page.getByText('Plugins', { exact: true }).first().click();
+    const seen = (locator) => locator.first().isVisible().catch(() => false);
+    if (await seen(form)) return form;
+    // DSH's sidebar entry (a button named Plugins); its page opens on its last view, the list or a plugin's own page.
+    await page.getByRole('button', { name: 'Plugins', exact: true }).first().click();
     // The card's title is DSH's "View <name>" button.
     const card = page.getByRole('button', { name: 'View Notifications', exact: true });
-    await card.waitFor({ state: 'visible', timeout: 20000 });
-    await card.click();
+    const back = page.getByRole('button', { name: 'Back to plugins', exact: true });
+    await waitFor(async () => (await seen(form)) || (await seen(card)) || (await seen(back)), 'DSH\'s Plugins page', 20000, 200);
+    if (await seen(form)) return form;
+    if (!(await seen(card))) await back.first().click();
+    await card.first().waitFor({ state: 'visible', timeout: 20000 });
+    await card.first().click();
     await form.waitFor({ state: 'visible', timeout: 20000 });
     return form;
 }
@@ -335,7 +339,8 @@ try {
             const entry = await entryOf('A3 is running hot');
             check('the caller is told off, and the list says which switch', sent === 'off' && entry?.state === 'not shown' && entry.detail === '“Fleet findings” is switched off in its settings.', json({ sent, entry }));
             check('other kinds still go', (await notify({ title: 'Still on', kind: 'handback' })) === 'browser');
-            check('the earlier ones are still listed after the save (it restarted with them)', (await status()).recent.some((item) => item.title === 'Burst 1'), '');
+            check('the save applied in place: nothing restarted, the earlier ones are still listed', (await status()).recent.some((item) => item.title === 'Burst 1') && logLines().filter((line) => /^info started /.test(line)).length === 1, logLines().filter((line) => /^info started /.test(line)).join('\n'));
+            check('the log says which setting changed, by its title', logLines().some((line) => /^info settings changed: “Fleet findings” \(on; sender now: window\)$/.test(line)), logLines().slice(-4).join('\n'));
         }, async () => { if (window?.page) await shot(window.page, shots, 'failed-switch'); });
 
         await step('the test button shows one now, says the system showed it, and logs it', async () => {
