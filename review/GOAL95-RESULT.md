@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 1:57 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 2:04 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -21,7 +21,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | dsh-site | 8.0 (round 1) | 56fa8e9 | goal95/dsh-site (dsh-plugin-dsh-site) | NOT YET | findings in the local scorecard; round 2 building |
 | Fleet | not judged yet (card flip 4e24735 ready in DSH Test) | 70be782 | goal95/fleet (redesign repo) | NOT YET | builder working |
 | Focus | not judged yet | 202018c | goal95/focus | NOT YET | builder working |
-| Hermes Bridge | not judged yet | 41a29f4 | goal95/hermes-bridge (dsh-plugin-hermes-bridge) | NOT YET | builder working |
+| Hermes Bridge | being judged (round 1) | 717b595 | goal95/hermes-bridge (dsh-plugin-hermes-bridge) | NOT YET | judge working |
 | Notifications | 8.0 (round 1) | b7836d2 | goal95/notifications | NOT YET | news is dropped while DSH's window is in front with nobody at it; a window that cannot show notifications drops the queue; round 2 building |
 | Proof | not judged yet (earlier best 7.5) | 4a9e6fc | goal95/proof | NOT YET | builder working |
 | Reasoning Pill | 7.5 (round 1) | c868e41 | goal95/reasoning-pill (redesign repo) | NOT YET | in an open chat a second click on the control picks a level unasked, and a click in the message box takes focus back and drops typing; round 2 building |
