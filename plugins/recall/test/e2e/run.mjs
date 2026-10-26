@@ -715,6 +715,12 @@ try {
             check('Back to the chat from the mark goes to the chat the card is in', back, (await page.locator('[data-chat-flow]').first().innerText().catch(() => '')).slice(0, 300));
             const done = page.getByRole('button', { name: 'Done: take the mark off this turn' }).filter({ visible: true });
             if (await done.count()) await done.first().click().catch(() => {});
+            // The page kept the card's search with its kind (Sessions): Clear the filters puts every kind back.
+            await openRecall(page);
+            await page.locator('[data-recall-clear]').first().click();
+            const cleared = await waitFor(async () => (await page.locator('[id="dshrc-kind-any"][aria-selected="true"], [id="dshrc-kind-all"][aria-selected="true"]').count()) === 1
+                && (await page.locator('[data-recall-clear]').count()) === 0, 'every kind again', 10000, 200).then(() => true, () => false);
+            check('the card\'s filter stays on the page until Clear the filters, which puts every kind back', cleared, await page.locator('[data-recall-search]').innerText().catch(() => ''));
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-tool-card');
         });
