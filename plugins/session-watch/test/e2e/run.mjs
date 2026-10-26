@@ -479,6 +479,8 @@ try {
             const runningList = watching.locator('[data-session-watch-chosen="running"]');
             await runningList.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
             const listedRunning = (await runningList.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+            // DSH says "running" before its request reaches the model: release the reply only once it is held.
+            await waitFor(() => model.held.size >= 1, 'the slow turn\'s reply to be held open', 20000, 100).catch(() => {});
             model.release();
             const left = await waitFor(async () => ((await runningList.innerText()).includes('No session reads running now.') ? true : null), 'the running session to leave the list', 20000, 300).catch(() => false);
             const focused = () => page.evaluate(() => {
