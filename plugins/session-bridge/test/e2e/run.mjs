@@ -463,7 +463,7 @@ try {
             const still = await call('GET', '/health', undefined, { sock: otherSock });
             check('the bridge refused it, in its log, and the other program still answers there', still.body?.other === true, still.text);
             const failed = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null), 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
-            check('DSH shows the plugin as failed (its Plugins page tags it Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json({ ...failed, meta: undefined }));
+            check('DSH shows the plugin as failed (its page in Plugins reads Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json({ ...failed, meta: undefined }));
             // The row fixed and saved: DSH leaves a plugin that failed to start as it is (it does not run it again).
             const logged = read(newLog).length;
             writeRow({ logFile: newLog });

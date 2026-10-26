@@ -137,7 +137,7 @@ From another machine, run the same `curl` over SSH on the DSH machine. The socke
 
 ## When the bridge does not listen
 
-DSH shows the plugin as failed: its Plugins page tags it "Problem", not "Running" (the plugin's start fails with `Session Bridge is not listening on <socket>: <why>`). The bridge's log has `not listening on <socket>: <why>`. Fix the cause, then switch Session Bridge off and on in Plugins, or restart DSH: DSH does not start a plugin that failed to start again when only its row is saved.
+DSH shows the plugin as failed on its page in Plugins: its part reads "Problem", not "Running", and the count says "1 failed" (the list of plugins itself shows no mark; the plugin's start fails with `Session Bridge is not listening on <socket>: <why>`). The bridge's log has `not listening on <socket>: <why>`. Fix the cause, then switch Session Bridge off and on in Plugins, or restart DSH: DSH does not start a plugin that failed to start again when only its row is saved.
 
 - `another program answers on <socket>`: another DSH, or a second row of this plugin, has it. Give each DSH its own `socketPath`.
 - `<socket> is a file that is not a socket`: the bridge never deletes it. Move it, or choose another `socketPath`.
@@ -163,7 +163,7 @@ node scripts/e2e.mjs session-bridge    # the real-DSH test, on every DSH under .
 - The bridge keeps its own deadlines (DSH checks a call's deadline only as it starts): a prompt DSH holds gets a 504 at 60 s, with its `requestId`.
 - A read that fails for another reason than "not found" is a 500 (`session/read-failed`), no longer a 404.
 - `reasoningEffort` without a model, or not a string, is refused in words (0.2.0 dropped it silently).
-- A bridge that cannot listen shows as failed on the Plugins page (0.2.0 read "Running"), with the reason in the bridge's log; the plugin has its title, sentence and icon there.
+- A bridge that cannot listen shows as failed on its page in Plugins (0.2.0 read "Running"), with the reason in the bridge's log; the plugin has its title, sentence and icon there.
 - Waits: an event that lands just before a wait starts wakes it; a wait the bridge's stop ends says `stopped: true`.
 - The home folder is recognised by device and inode, however its path is spelt; the log counts bytes and never follows a symlink.
 
