@@ -36,7 +36,7 @@ Install the plugin as in the [root README](../../README.md#install-a-plugin). It
 | `logFile` | a full path, or `""` | `<DSH data folder>/session-bridge/bridge.log` | The action log, mode 600; `""` for none. Past 5 MB it starts again and keeps the last part as `<logFile>.1`. |
 | `maxBodyBytes` | a whole number, 1024 to 67108864 | `1048576` | The largest request body taken; a larger one gets a 413. |
 
-A wrong value never stops the bridge. That setting keeps its default, and the problem is said in words in `GET /health` (`problems`) and in the bridge's log (`setting: …`); the bridge also hands it to DSH's logger. A key the bridge does not have (a typo such as `socketpath`) is named the same way.
+A wrong value never stops the bridge. That setting keeps its default, and the problem is said in words in `GET /health` (`problems`) and in the bridge's log (`setting: …`). The bridge also hands it to DSH's logger, which may keep it in memory only, so read the bridge's log. A key the bridge does not have (a typo such as `socketpath`) is named the same way.
 
 DSH applies a saved change to the row at once: the bridge stops, and starts again with the new settings.
 
@@ -102,7 +102,7 @@ A retry with your own `requestId` is safe. If DSH already has that message (`que
 | Status | When |
 | --- | --- |
 | 400 | Bad input (`bad-request`, `bad-json`), refused before DSH is asked. |
-| 404 | An unknown session, workspace, request id or path: DSH said it has no such session. |
+| 404 | An unknown path (`not-found`), workspace (`workspace/not-found`) or request id (`request/not-found`), or a session DSH says it does not have (`session/not-found`). |
 | 405 | A wrong method; the `Allow` header names the right ones. |
 | 409 | DSH refused, in its own words (for example `session/model-unavailable`); `session/not-running`; or a create's request id used for another folder (`request/conflict`) or whose session is gone (`request/session-gone`). |
 | 413 | A body over `maxBodyBytes`. |
@@ -137,7 +137,7 @@ From another machine, run the same `curl` over SSH on the DSH machine. The socke
 
 ## When the bridge does not listen
 
-DSH shows the plugin as failed (its Plugins page reads "Problem", not "Running"; the plugin's start fails with `Session Bridge is not listening on <socket>: <why>`, which DSH hands to its logger), and the bridge's log has `not listening on <socket>: <why>`. Fix the cause, then save its row again or switch it off and on in Plugins: it tries again.
+DSH shows the plugin as failed: its Plugins page reads "Problem", not "Running" (the plugin's start fails with `Session Bridge is not listening on <socket>: <why>`). The bridge's log has `not listening on <socket>: <why>`. Fix the cause, then save its row again or switch it off and on in Plugins: it tries again.
 
 - `another program answers on <socket>`: another DSH, or a second row of this plugin, has it. Give each DSH its own `socketPath`.
 - `<socket> is a file that is not a socket`: the bridge never deletes it. Move it, or choose another `socketPath`.
