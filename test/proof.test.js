@@ -905,6 +905,15 @@ test('judge: counts borrowed from another clause, a past run of a named command,
     assert.equal(rest.verdict, 'unbacked');
     assert.match(rest.why, /whole suite/);
     assert.equal(judge(both[1], [edit('src/dates.py'), limited, bash('python -m pytest tests -q', '121 passed in 3.02s')]).verdict, 'backed');
+    // "All packages pass" speaks of every package: a run of one test in one package does not show it; a run of them all does.
+    const packages = claimsIn('- `go test ./...` — all packages pass ✅').find((c) => c.kind === 'passed');
+    const one = bash('cd /home/dev/authsvc && go test ./internal/auth/ -run TestTokenValid -v 2>&1', '--- PASS: TestTokenValid (0.00s)\nPASS\nok  \tgithub.com/devco/authsvc/internal/auth\t0.003s');
+    const every = judge(packages, [edit('internal/auth/token.go'), one]);
+    assert.equal(every.verdict, 'unbacked');
+    assert.match(every.why, /whole suite/);
+    const all = bash('cd /home/dev/authsvc && go test ./... 2>&1', 'ok  \tgithub.com/devco/authsvc/internal/auth\t0.003s\nok  \tgithub.com/devco/authsvc/internal/api\t0.011s');
+    assert.equal(judge(packages, [edit('internal/auth/token.go'), one, all]).verdict, 'backed');
+    assert.equal(judge(only('Tests pass across every crate.'), [edit('src/lib.rs'), bash('cargo test --workspace', 'test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s')]).verdict, 'backed');
 });
 
 test('judge: a factor far from the turn\'s own runs, a bar given as a bare figure, an escaped search, and a PR read without its checks', () => {

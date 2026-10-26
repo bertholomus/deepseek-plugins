@@ -732,8 +732,8 @@ function claimOf(clause) {
     return undefined;
 }
 
-/** "The rest of the suite is still green", "the whole suite passes": all the tests, not the ones just added. */
-export const WHOLE_SUITE = /\b(?:rest\s+of\s+the\s+(?:test\s+)?(?:suite|tests)|(?:whole|full|entire|complete)\s+(?:test\s+)?suite|(?:all\s+(?:the\s+)?)?(?:other|remaining|existing)\s+tests|everything\s+else|every\s+other\s+test)\b/i;
+/** "The rest of the suite is still green", "the whole suite passes", "all packages pass": all the tests, not the ones just added. */
+export const WHOLE_SUITE = /\b(?:rest\s+of\s+the\s+(?:test\s+)?(?:suite|tests)|(?:whole|full|entire|complete)\s+(?:test\s+)?suite|(?:all\s+(?:the\s+)?)?(?:other|remaining|existing)\s+tests|everything\s+else|every\s+other\s+test|(?:all|every|each)\s+(?:the\s+)?(?:other\s+)?(?:packages?|crates?|workspaces?))\b/i;
 
 /** A sentence led by a label that says what follows is not done: "Proposed fix (not started): …", "Next steps: …". */
 const PLAN_LEAD = /^(?:(?:proposed|suggested|possible|planned|recommended|alternative|follow-?up)\s+(?:fix(?:es)?|changes?|plan|approach|steps?|solution|options?|work|actions?)|next\s+steps?|plan|proposal|suggestion|recommendation|idea|todo|to-?do|follow-?ups?|left to do|remaining work|open questions?)\b[^:]{0,40}:\s|^[^:]{0,60}\((?:not\s+(?:yet\s+)?(?:started|done|applied|run|tested|implemented)|proposed|planned|todo|to do|untested)\)\s*:\s/i;
