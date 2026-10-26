@@ -33,6 +33,7 @@ Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19
 ## Gotchas (GOAL95)
 - Never capture the owner's screen (RULES.md): Notifications' judge took one full-screen shot at 10:49 AM, which showed private windows (deleted) and left a macOS screen-recording prompt for the owner.
 - dsh-site scorecards and their pictures stay local in `review/` (not committed); its SCOREBOARD rows give the scores only.
+- Shared kit: goal95/agent-terminals also carries Session Watch's db946fd (as 505cb86) and Decisions' ecd6ac5 (as 3005c14, plus one settings-row look); merge Session Watch, then Decisions, then Agent Terminals, running `node scripts/sync-shared.mjs --check` after each.
 - Shared kit: goal95/decisions changes `shared/client-kit.js` (synced into all 7 kit blocks) and carries goal95/session-watch's db946fd as 18a58ee. Merge goal95/session-watch to main first, then goal95/decisions, then run `node scripts/sync-shared.mjs --check`; any other branch that synced `shared/` needs the same check after its merge.
 - Commit 09a18d1 (suite/v1) carries a tool-attribution trailer by mistake; it is not rewritten (no force-push). Commit messages here carry no attribution lines.
 - Live dsh-site: its builder's audit found security problems in the live version (details only in the local `~/Projects/goal95/status/dsh-site.md`); the fix is `goal95/dsh-site` 56fa8e9 (judge round 1 running) and needs a new `allowHosts` value in the live row in the same change. Raised in the thread at 10:03 AM; deploying or switching it off is MiniMe's and Albert's call.
