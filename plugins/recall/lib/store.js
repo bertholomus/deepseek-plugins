@@ -80,6 +80,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, prompt, reply, tools, t
 `;
 
 /** Escape a folder for LIKE (its subfolders: folder || '/%'). */
+/**
+ * A file read in part: a note searched up to its size cap ("Only its first 4 MB are searched."), or a log read on past
+ * a torn write ("Part of it could not be read …"). It is searched, so it is not one of the files Recall could not read.
+ */
+const PART = "(error LIKE 'Only its first%' OR error LIKE 'Part of it%')";
 const likePrefix = (folder) => `${folder.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`;
 
 export class Store {
@@ -385,11 +390,11 @@ export class Store {
      * The best-matching rows for an FTS5 query (or the newest rows with no
      * query), at most `cap`, with their file's facts. Each row has `own`,
      * its score on its own text (below 0 when its request, reply or tools
-     * say the words; 0 when only its file's title does), and `score`, on
-     * its title too (below `own` when the title says some of them). Best
-     * first: the rows whose own text matches come first, by `own`, then the
-     * rows that match by their title alone. Newest first: by time (the
-     * engine puts the rows that say the words first).
+     * say any of the words; 0 when only its file's title does), and
+     * `score`, on its title too (below `own` when the title says some of
+     * them). Best first: by `own`. Newest first: by time. The engine asks
+     * for the rows whose own text says every word (query.js's `own`), then
+     * for those that match only with their title (`titled`).
      * @param {{ match?: string, sort?: 'best'|'newest', cap?: number, filters?: object }} q
      */
     candidates({ match = '', sort = 'best', cap = 400, filters = {} }) {
@@ -408,9 +413,16 @@ export class Store {
             FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} ORDER BY ${order} LIMIT ?`).all(match, ...w.args, cap);
     }
 
+    /** The ids of the rows that match an FTS5 query with the filters, at most `cap` (no scoring: the index alone answers). */
+    ids({ match, filters = {}, cap = 20000 }) {
+        if (!match) return new Set();
+        const w = Store.where(filters);
+        return new Set(this.db.prepare(`SELECT d.id AS id FROM fts CROSS JOIN docs d ON d.id = fts.rowid WHERE fts MATCH ?${w.sql} LIMIT ?`).all(match, ...w.args, cap).map((r) => r.id));
+    }
+
     /**
      * How many rows match an FTS5 query (the engine gives query.js's `own`,
-     * so a row that matches only by its file's title is not counted), or
+     * so a row that matches only with its file's title is not counted), or
      * how many rows there are with no query, counting up to `cap` (more is
      * said as "cap+").
      */
@@ -490,6 +502,11 @@ export class Store {
         return out;
     }
 
+    /** One row's facts for its state (no text): kind, how it ended, its file. */
+    rowState(fileId, turn) {
+        return this.sql('SELECT id, file, turn, kind, done, ended, why FROM docs WHERE file = ? AND turn = ?').get(fileId, turn);
+    }
+
     /** One row in full: its text and facts. */
     doc(fileId, turn) {
         const d = this.sql('SELECT * FROM docs WHERE file = ? AND turn = ?').get(fileId, turn);
@@ -511,20 +528,24 @@ export class Store {
         return { folders, models, kinds };
     }
 
-    /** Counts for the page. */
+    /**
+     * Counts for the page: `turns` counts every row, `sections` the note sections among them; `problems` the files
+     * it could not read, `partial` those read in part (searched up to a cap, or past a torn write).
+     */
     totals() {
         const docs = this.sql('SELECT count(*) AS n, max(time) AS last FROM docs').get();
-        const files = this.sql("SELECT count(*) AS n, sum(CASE WHEN error != '' THEN 1 ELSE 0 END) AS problems, sum(CASE WHEN skip != '' THEN 1 ELSE 0 END) AS skipped FROM files").get();
-        return { turns: docs.n, last: docs.last ?? 0, files: files.n, problems: files.problems ?? 0, skipped: files.skipped ?? 0 };
+        const sections = this.sql("SELECT count(*) AS n FROM docs WHERE kind = 'handoff'").get();
+        const files = this.sql(`SELECT count(*) AS n, sum(CASE WHEN error != '' AND NOT ${PART} THEN 1 ELSE 0 END) AS problems, sum(CASE WHEN ${PART} THEN 1 ELSE 0 END) AS partial, sum(CASE WHEN skip != '' THEN 1 ELSE 0 END) AS skipped FROM files`).get();
+        return { turns: docs.n, sections: sections.n, last: docs.last ?? 0, files: files.n, problems: files.problems ?? 0, partial: files.partial ?? 0, skipped: files.skipped ?? 0 };
     }
 
-    /** Files that could not be read, with why: the newest first. */
+    /** Files that could not be read, or were read in part (`part`: 1), with why: the newest first. */
     problems(limit = 20) {
-        return this.sql("SELECT id, path, kind, root, error, updated FROM files WHERE error != '' ORDER BY id DESC LIMIT ?").all(limit);
+        return this.sql(`SELECT id, path, kind, root, error, updated, ${PART} AS part FROM files WHERE error != '' ORDER BY id DESC LIMIT ?`).all(limit);
     }
 
-    /** Per folder searched: files, turns, problems. */
+    /** Per folder searched: files, turns, files it could not read, files read in part. */
     rootTotals() {
-        return this.sql("SELECT root, kind, count(*) AS files, sum(turns) AS turns, sum(CASE WHEN error != '' THEN 1 ELSE 0 END) AS problems, max(updated) AS last FROM files WHERE skip = '' GROUP BY root, kind").all();
+        return this.sql(`SELECT root, kind, count(*) AS files, sum(turns) AS turns, sum(CASE WHEN error != '' AND NOT ${PART} THEN 1 ELSE 0 END) AS problems, sum(CASE WHEN ${PART} THEN 1 ELSE 0 END) AS partial, max(updated) AS last FROM files WHERE skip = '' GROUP BY root, kind`).all();
     }
 }

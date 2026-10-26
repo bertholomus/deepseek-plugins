@@ -29,7 +29,7 @@ function configOf(patch = {}) {
  * Enough of DSH for `apply`: events, effects, the tools and the gateway (Session Watch is not running: Recall needs
  * nothing else). `agents`: DSH's agents service (which sessions run), when the test gives one.
  */
-function standInDsh({ agents } = {}) {
+function standInDsh({ agents, sessionWatch } = {}) {
     const handlers = new Map();
     const disposers = [];
     const provided = new Map();
@@ -45,6 +45,7 @@ function standInDsh({ agents } = {}) {
         },
         provide: (name, value) => provided.set(name, value),
         agents,
+        sessionWatch,
     };
     const ctx = {
         logger: { warn: (line) => warnings.push(line), info: () => {} },
@@ -58,7 +59,7 @@ function standInDsh({ agents } = {}) {
             if (typeof off === 'function') disposers.push(off);
         },
         inject(names, fn) {
-            if (names.includes('sessionWatch') || (names.includes('agents') && !agents)) return;
+            if ((names.includes('sessionWatch') && !sessionWatch) || (names.includes('agents') && !agents)) return;
             const off = fn(scope);
             if (typeof off === 'function') disposers.push(off);
         },
@@ -187,6 +188,34 @@ test('plugin: every setting wrong at once still starts; enabled written as text 
     config.sessions.value = true;
     await dsh.emit('loader/volatile-update', [['sessions']]);
     assert.equal((await remote.state()).problem.key, 'enabled');
+});
+
+test('plugin: switched off in the profile, then on again, is said once each in What happened; the page knows whether Session Watch is there, and hears when DSH starts Recall again', async (t) => {
+    const home = tempDir('recall-plugin-switch');
+    process.env.RECALL_TEST_DSH_HOME = home;
+    let dsh = standInDsh();
+    recall.apply(dsh.ctx, configOf({ enabled: false }));
+    let state = await dsh.remote().state();
+    assert.equal(state.enabled, false);
+    assert.equal(state.watch, false, 'no Session Watch: the page reads again on its own timer');
+    assert.deepEqual([state.history[0].text, state.history[0].state], ['Switched off in DSH\'s profile', 'off']);
+    assert.match(state.history[0].why, /^enabled is false in Recall's entry in cordis\.patch\.yml: Recall keeps no index, refuses searches and offers agents no tool\. Set it to true there to switch it on again\.$/);
+    dsh.stop();
+    // Started again, still off: nothing new is said.
+    dsh = standInDsh();
+    recall.apply(dsh.ctx, configOf({ enabled: false }));
+    assert.equal((await dsh.remote().state()).history.filter((e) => e.kind === 'switch').length, 1);
+    dsh.stop();
+    // On again, with Session Watch: said once, and the page hears at once that Recall started again.
+    const bumps = [];
+    dsh = standInDsh({ sessionWatch: { hub: { bump: (channel) => bumps.push(channel) } } });
+    t.after(() => dsh.stop());
+    recall.apply(dsh.ctx, configOf());
+    state = await dsh.remote().state();
+    assert.equal(state.watch, true);
+    assert.ok(bumps.includes('recall'));
+    assert.deepEqual(state.history.filter((e) => e.kind === 'switch').map((e) => e.text), ['Switched on again in DSH\'s profile', 'Switched off in DSH\'s profile']);
+    assert.equal(state.history.find((e) => e.kind === 'switch').why, 'enabled is true again: Recall reads what changed while it was off.');
 });
 
 test('plugin: a turn runs only while DSH says its session runs; a session DSH stopped under (a crash it never reopened) is cut off', async (t) => {

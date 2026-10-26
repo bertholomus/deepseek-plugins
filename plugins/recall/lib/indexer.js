@@ -76,11 +76,15 @@ class Walk {
         this.count = 0;
         this.capped = false;
         this.missing = false;
+        this.notFolder = false;
         this.error = '';
         const top = walkRoot(source);
         try {
             const st = statSync(top);
-            if (!st.isDirectory()) this.error = 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.';
+            if (!st.isDirectory()) {
+                this.notFolder = true;
+                this.error = 'This is a file, not a folder. Name the folder that holds it in Recall\'s settings.';
+            }
             else this.stack.push({ dir: top, depth: 0 });
         } catch (error) {
             if (error?.code === 'ENOENT') this.missing = true;
@@ -295,7 +299,7 @@ export class Indexer {
         st.capped = walk.capped;
         st.error = walk.error;
         // This DSH's own sessions folder is made with its first session: not there yet is not a folder gone.
-        st.state = walk.missing ? (walk.source.own ? 'ok' : 'missing') : walk.error ? 'unreadable' : 'ok';
+        st.state = walk.missing ? (walk.source.own ? 'ok' : 'missing') : walk.notFolder ? 'file' : walk.error ? 'unreadable' : 'ok';
         this.rootState.set(key, st);
         if (walk.missing || walk.error) return;
         // Files gone from a folder that is still there: their rows go too.
