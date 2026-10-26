@@ -346,6 +346,29 @@ const ERROR_WORDS = /\b(?:error|fatal|panic|traceback|exception|segfault)\s*:|\b
 const CODE_WORD = /`[^`\n]+`|\b[a-z]{2,}[A-Z][A-Za-z0-9]*\b|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[a-z]\w*\.(?:[A-Z]\w*|\w+\()/;
 
 /** Names people write in camelCase that are not code. */
+/** A line of pasted code or output: code's braces, a call, a statement's end, a shell's prompt, an indented line, a log's "systemd[1]:". */
+const CODE_LINE = /[{}]|\w\([^)]*\)|;\s*$|^\s*(?:\$|>|#!)\s|^\s{4,}\S|\w\[\d+\]:/;
+
+/**
+ * The lines of a prompt the person wrote, without pasted code or output
+ * (a fenced block, or a line CODE_LINE marks): what they say in their own
+ * words ("convert to slog pls", not the pasted `Warn("rate limited")`).
+ * @param {string} prompt
+ */
+export function proseOf(prompt) {
+    let fenced = false;
+    const kept = [];
+    for (const line of String(prompt ?? '').split('\n')) {
+        if (/^\s*```/.test(line)) fenced = !fenced;
+        else if (!fenced && !CODE_LINE.test(line)) kept.push(line);
+    }
+    return kept.join('\n');
+}
+
+/** A language and its version ("go 1.23", "python 3.12"). */
+const VERSIONED = /\b(?:go|node|python|ruby|java|rust|php|deno|bun|swift|kotlin)\s?v?\d+\.\d+\b/i;
+/** A custom header's name ("X-Request-ID"). */
+const HEADER = /\bX-[A-Z][A-Za-z]*(?:-[A-Za-z]+)*\b/;
 const NOT_CODE = /\b(?:macos|iphone|ipad|ipados|ios|tvos|watchos)\b/gi;
 
 /**
@@ -358,7 +381,7 @@ const NOT_CODE = /\b(?:macos|iphone|ipad|ipados|ios|tvos|watchos)\b/gi;
  */
 export function codeShaped(text) {
     const plain = String(text ?? '').replace(NOT_CODE, ' ');
-    if (FILE_NAME.test(plain) || FLAG.test(plain) || ERROR_NAME.test(plain) || ERROR_WORDS.test(plain) || CODE_WORD.test(plain)) return true;
+    if (FILE_NAME.test(plain) || FLAG.test(plain) || VERSIONED.test(plain) || HEADER.test(plain) || ERROR_NAME.test(plain) || ERROR_WORDS.test(plain) || CODE_WORD.test(plain)) return true;
     for (const raw of plain.toLowerCase().split(/[\s,;:!?()[\]{}"'`<>|=]+/)) {
         const word = raw.replace(/^[./]+|[./]+$/g, '');
         if (CODE_NAMES.has(word) || CODE_NAMES.has(word.replace(/\d+$/, ''))) return true;
@@ -380,7 +403,30 @@ export function codeShaped(text) {
  * @param {string} prompt
  */
 export function isCodingRequest(prompt) {
-    return asksForWork(prompt) || codeShaped(prompt);
+    return asksForWork(prompt) || (codeShaped(prompt) && !asksTheTeam(prompt) && !asksAFact(prompt));
+}
+
+/** A question for a fact ("When is the `newCheckout` flag taken out?", "Which port does redis use here?"), not for help with code. */
+const FACT = /^(?:when|which|where|who|whose|how (?:many|much|long|often|old)|what (?:is|are|was|were|does|do)\s+(?:the|our|its|this|that)\b(?![^?]*\b(?:my|wrong|mean|means)\b))\b[^?]*\?\s*$/i;
+
+/** Whether a sentence of the prompt asks for a fact (FACT). */
+export function asksAFact(prompt) {
+    return String(prompt ?? '').split(/(?<=[.!?])\s+|\n+/).some((sentence) => FACT.test(sentence.trim().replace(LEAD_IN, '')));
+}
+
+/**
+ * A question about how the team or its systems work, which a tool's name
+ * does not make a coding request: what was decided and why ("Why did we
+ * move the job queue off Redis?"), what we do ("Do we lose keys if an AWS
+ * zone goes down?"), who to ask ("My laptop has no Docker. Who do I ask?"),
+ * whether it is allowed ("Is it OK to deploy on Friday?"), or a guess to
+ * confirm ("background jobs still go through redis right").
+ */
+const TEAM = /\b(?:why (?:did|do|does|is|are|was|were) (?:we|our|the team|they|jobs?|it)\b|(?:do|did|are|were|should|can|could|will|would|have|has) (?:we|our|the team)\b|who (?:do|should|can|would) (?:i|we)\b|who(?:'s| is| are)? (?:on call|on-call|owns?|approves?|signs?)\b|who owns\b|what if\b|explain why\b|can i (?:get|have)\b|is it (?:ok|okay|safe|fine|allowed|alright)\b|am i allowed\b|are we allowed\b|still\b[^.?!]*\bright\s*\??\s*$)/i;
+
+/** Whether a prompt asks how the team or its systems work (TEAM), not for work on code. */
+export function asksTheTeam(prompt) {
+    return TEAM.test(String(prompt ?? ''));
 }
 
 /**
@@ -396,7 +442,9 @@ export function asksForWork(prompt) {
     for (const sentence of text.split(/(?<=[.!?;:])\s+|\n+/)) {
         const head = sentence.trim().replace(LEAD_IN, '').match(HEAD);
         const first = head?.[1]?.toLowerCase();
-        const told = head !== null && /\s(?:me|us)\b/i.test(head[0]) && (head[2] !== undefined || first === 'read');
+        // "Check how long keys last", "check whether the backup ran": asked to find out and tell, not to work on code.
+        const finds = /^(?:check|test|find)\s+(?:how|what|when|where|which|who|whether)\b/i.test(sentence.trim().replace(LEAD_IN, ''));
+        const told = finds || (head !== null && /\s(?:me|us)\b/i.test(head[0]) && (head[2] !== undefined || first === 'read'));
         if (first && WORK.has(first) && !told) return true;
     }
     return false;
@@ -411,19 +459,30 @@ export function asksForWork(prompt) {
 const DECIDED = /\b(?:we|i|team|they)(?:\s+(?:have|just|finally|all|now))?(?:'ve)?\s+(?:decided|agreed|chose|settled|picked|went with|landed on|switched)\b|^\s*(?:decision|lesson(?:s)? learned|lesson)\s*:|\blessons? learned\b|\b(?:we|i)(?:'ve| have)? learned\b/i;
 
 /**
- * Whether a prompt states a decision or a lesson ("we decided …", "we
- * agreed …", "decision: …", "lesson learned: …"), not asking about one.
+ * A request to keep what the prompt says ("save that", "record it", "note
+ * it down", "write that down", "put it in the notes", "update the notes",
+ * "add that to the runbook", "fyi …", "for the record"), or a lesson told
+ * ("lesson from tonight: …").
+ */
+const RECORD_ASK = /\b(?:save|record|note|jot|log|write|put|add|get|keep)\s+(?:that|this|it)\b(?:\s+(?:down|in|into|to|somewhere))?|\b(?:update|add\s+(?:it|that|this)\s+to)\s+the\s+(?:notes|vault|canon|runbooks?|docs)\b|\b(?:in|into)\s+the\s+(?:notes|vault|canon)\b\s*[.!]?\s*$|^\s*fyi\b|\bfor the record\b|^\s*lessons?\s+(?:from|of)\b/i;
+
+/**
+ * Whether a prompt states a decision or a lesson to keep ("we decided …",
+ * "we agreed …", "decision: …", "lesson learned: …", "fyi …, save that"),
+ * not asking about one.
  * @param {string} prompt
  */
 export function isDecision(prompt) {
     const text = String(prompt ?? '').trim();
-    return DECIDED.test(text) && !text.endsWith('?');
+    if (text.endsWith('?') || !(DECIDED.test(text) || RECORD_ASK.test(text))) return false;
+    // "Save this: we use pnpm now" keeps; "Write a helper and add it to the docs" asks for work.
+    return !asksForWork(text.replace(new RegExp(RECORD_ASK.source, 'gi'), ' '));
 }
 
 /** The words of a decision statement that say it was decided and should be recorded, as terms. */
 export const RECORDING = new Set(`
 decide decided decision decisions agree agreed choose chose chosen settle settled pick picked lesson lessons learn
-learned record recorded remember going forward write down put save add document jot log
+learned record recorded remember going forward write down put save add document jot log update fyi somewhere
 `.split(/\s+/).filter(Boolean).flatMap((word) => terms(word)));
 
 /**
@@ -431,7 +490,7 @@ learned record recorded remember going forward write down put save add document 
  * bash loop that…", "i need a regex for…", "looking for a script to…",
  * "one-liner to find…", "example of a…".
  */
-const ASKS_FOR_CODE = /^\s*(?:(?:i\s+)?(?:need|want)|(?:i'm\s+|im\s+)?looking\s+for|gimme|give\s+me)\s+(?:a|an|some)\b|^\s*(?:(?:a\s+)?one-liner|(?:an?\s+)?example\s+of)\b/i;
+const ASKS_FOR_CODE = /^\s*(?:(?:i\s+)?(?:need|want)|(?:i'm\s+|im\s+)?looking\s+for|gimme|give\s+me)\s+(?:a|an|some)\b|^\s*(?:(?:a\s+)?one-liner|(?:an?\s+)?example\s+of)\b|^\s*(?:an?\s+)?(?:[\w./+#-]+\s+){0,2}(?:script|function|query|regex|middleware|handler|hook|component|helper|class|method|endpoint|loop|snippet|alias|wrapper|decorator|parser|validator|reducer|cron\s?job)s?\s+(?:that|which|to|for)\s+\w[^?]*$/i;
 
 /** Words that end what a work verb acts on ("a migration | that adds…", "a route | to tide-ledger"). */
 const OBJECT_ENDS = new Set(`

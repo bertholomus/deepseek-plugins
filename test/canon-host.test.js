@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, alsoWrong, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
-import { ABOUT_THE_VAULT, EVERYDAY, distinctTerms, isCodingRequest, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
+import { ABOUT_THE_VAULT, EVERYDAY, asksForWork, codeShaped, distinctTerms, isCodingRequest, isDecision, promptTerms, proseOf, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
 import { Index, MANY_DISTINCT, MIN_SCORE, SHARE_BODY, SHARE_TITLED, asksOf, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, addressedLines, addressedToAgents, bestPassage, closedEntry, closedText, closedWhat, cut, folderProblem, paragraphs, plainText, unaddressed } from '../plugins/canon/lib/vault.js';
@@ -232,6 +232,41 @@ test('text: the words a prompt shares with a note, and chat filler that shares n
         'Who owns this repo?', 'How do I run this app locally?', 'The gateway answers on gateway.internal:8443; who owns it?']) {
         assert.equal(isCodingRequest(prompt), false, prompt);
     }
+});
+
+test('text: decisions and requests to record, questions about the team or for a fact, things to make told without a verb', () => {
+    // A decision or a lesson to keep, or a request to record what the prompt says, is neither a question nor work.
+    for (const prompt of ['We decided to keep v1 alive for a year.', 'decision: quartz keys now expire after 10 minutes',
+        'fyi we moved the health check to 8081 last night, update the notes', 'Save this: we use pnpm now.',
+        'For the record, the ledger stays on Postgres 16.', 'lesson from tonight: never restart two quartz nodes at once']) {
+        assert.equal(isDecision(prompt), true, prompt);
+    }
+    for (const prompt of ['We decided to keep v1, right?', 'Write a helper and add it to the docs.', 'What did we decide about v1?']) {
+        assert.equal(isDecision(prompt), false, prompt);
+    }
+    // A question about how the team or its systems work, or for a fact, is not a coding request for a tool's name
+    // or a code word in it ...
+    for (const prompt of ['Why did we move the job queue off Redis?', 'Is it ok to run a postgres migration during the close?',
+        'background jobs still go through redis right', 'Who do I ask for a Docker licence?',
+        'When is the `newCheckout` flag supposed to be taken out?', 'Which port does redis listen on in staging?']) {
+        assert.equal(isCodingRequest(prompt), false, prompt);
+    }
+    // ... unless it asks what a thing means.
+    assert.equal(isCodingRequest('What does `fatal: refusing to merge unrelated histories` mean?'), true);
+    // Asked to find out and tell is not work on code.
+    assert.equal(asksForWork('Check how long API keys last before they expire.'), false);
+    assert.equal(asksForWork('Check the retry loop for an off-by-one.'), true);
+    // A thing to make told without a verb ("query for…", "middleware that…"), a language's version, a header's name.
+    for (const prompt of ['query for the biggest tables incl index size', 'chi middleware that sets X-Request-ID when the client didnt send one',
+        'script that restarts quartz on every node after the config push', 'iterate a map in sorted key order go 1.23']) {
+        assert.equal(isCodingRequest(prompt), true, prompt);
+    }
+    assert.equal(isCodingRequest('Is there a script that restarts quartz?'), false, 'a question about a script is not one');
+    assert.equal(codeShaped('the X-Request-ID header'), true);
+    assert.equal(codeShaped('python 3.12 or newer'), true);
+    assert.equal(codeShaped('go to the 3.12 meeting'), false);
+    // The person's own words, without pasted code or output.
+    assert.equal(proseOf('convert to slog pls\nlog.WithFields(log.Fields{"key_id": id}).Warn("rate limited")\n```\nrate limited\n```\nthanks'), 'convert to slog pls\nthanks');
 });
 
 test('frontmatter: the YAML notes use, read without throwing; titles, tags, aliases, projects, the terms a list defines and status', () => {
@@ -723,10 +758,15 @@ test('search: a project\'s name is one word and a note needs another; words abou
     // Words about the vault say where to look, not what about.
     assert.deepEqual(ask('Answer from the team\'s shared notes, and cite the note you used.', lantern), { terms: [], results: [], others: [], coding: false, folder: { repo: 'lantern-api', parent: '' } });
     assert.deepEqual(paths('What ports does quartz use? Answer from the team\'s shared notes and cite the note you used.', '/Users/someone/work/quartz-cache'), ['Projects/quartz-cache/Quartz ports.md']);
-    // In a project's folder, another project's notes stay out unless the prompt names that project.
+    // In a project's folder, another project's notes stay out unless the prompt names that project: by words
+    // every project uses ("ports", "health check") ...
     const here = ask('Which ports does this service listen on, and where is its health check?', lantern);
     assert.deepEqual(here.results.map((r) => r.path), ['Projects/lantern-api/Lantern ports.md']);
-    assert.equal(here.others.find((o) => o.path === 'Projects/harbor-gateway/Gateway ports.md')?.why, 'other');
+    assert.equal(here.others.find((o) => o.path === 'Projects/harbor-gateway/Gateway ports.md')?.why, 'few');
+    // ... and by its own ("HTTPS traffic"), as another project's note.
+    const https = ask('What port does the health check use, and which one serves HTTPS traffic?', lantern);
+    assert.deepEqual(https.results.map((r) => r.path), ['Projects/lantern-api/Lantern ports.md']);
+    assert.equal(https.others.find((o) => o.path === 'Projects/harbor-gateway/Gateway ports.md')?.why, 'other');
     assert.deepEqual(paths('What timeout and retry settings should our quartz client use?', lantern), ['Projects/quartz-cache/Client settings.md'], 'named, so it comes');
     // "The lantern API" names lantern-api, not lantern-web; a superseded decision never comes.
     assert.deepEqual(paths('Why did we move the lantern job queue off Redis?', '/Users/someone/src/tide-ledger'), ['Decisions/2026-03 Lantern job queue on NATS JetStream.md']);
@@ -768,24 +808,59 @@ test('search: a folder inside a project\'s folder is that project\'s, and "this 
     assert.deepEqual(leave.results, []);
     assert.equal(leave.others.find((o) => o.path === 'Decisions/2026-06 Quartz eviction policy.md')?.why, 'few');
     // "Running" is in the title of lantern-web's note for running it locally, and the session names lantern-web;
-    // an everyday request word is not enough in a prompt that asks more ("useEffect", "twice") ...
-    const twice = ask('Why is this useEffect running twice?', '/Users/someone/Projects/lantern-web/src');
+    // an everyday request word is not enough in a prompt that asks more ("dashboard", "twice") ...
+    const twice = ask('Why is the dashboard running twice?', '/Users/someone/Projects/lantern-web/src');
     assert.deepEqual(twice.results, []);
     assert.equal(twice.others.find((o) => o.path === 'Projects/lantern-web/Running lantern-web locally.md')?.why, 'few');
+    // (a coding request's everyday words are not searched at all: "useEffect" makes one)
+    assert.deepEqual(ask('Why is this useEffect running twice?', '/Users/someone/Projects/lantern-web/src').results, []);
     // ... and enough when it is all the prompt asks, beside the project's name or in its folder.
     assert.equal(paths('How do I run lantern-web?')[0], 'Projects/lantern-web/Running lantern-web locally.md');
     assert.deepEqual(paths('how do i run it', '/Users/someone/Projects/lantern-web'), ['Projects/lantern-web/Running lantern-web locally.md']);
     // So is one word beyond everyday words when few notes have it or a note's body has it twice.
     assert.deepEqual(paths('What runs on 6412?'), ['Projects/quartz-cache/Quartz ports.md']);
     assert.deepEqual(paths('What\'s a standby?'), ['People/Glossary.md', 'Projects/tide-ledger/Ledger backups.md']);
-    // A question that names a thing no note has fits only a note of a project it names, or one sharing three words.
+    // A question that names a thing no note has fits only a note of a project it names, or one sharing three words,
+    // and the page names the thing.
+    const mailpit = ask('How do I run Mailpit locally?');
+    assert.deepEqual(mailpit.results, []);
+    assert.deepEqual(mailpit.others.find((o) => o.path === 'Projects/lantern-web/Running lantern-web locally.md')?.unknown, ['mailpit']);
+    // A tool's name no note has makes a coding request, which no note fits by "locally" alone.
     const kafka = ask('How do I run Kafka locally?');
+    assert.equal(kafka.coding, true);
     assert.deepEqual(kafka.results, []);
-    assert.deepEqual(kafka.others.find((o) => o.path === 'Projects/lantern-web/Running lantern-web locally.md')?.unknown, ['kafka']);
     assert.deepEqual(namesOf('Can I run a migration on Saturday? I\'ve never done it. Why does CORS fail for Kafka?'), ['cor', 'kafka']);
     // A coding request that works on what a note of the project it names is titled for fits it, from any folder.
     assert.deepEqual(paths('Write a migration for the ledger that drops the old entries index.'), ['Projects/tide-ledger/Schema migrations.md']);
 });
+test('search: a coding request says what a note is about or finds most of what it asks in it; a decision brings the note in force; one project\'s tag says whose a note is', async () => {
+    const vault = await readVault(vaultCopy());
+    const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });
+    const paths = (prompt, folder) => ask(prompt, folder).results.map((r) => r.path);
+    const quartz = '/Users/someone/Projects/quartz-cache';
+    // All of a note's title in the person's own words ("restarts every node") fits whatever else the request says.
+    assert.deepEqual(paths('Write a script that restarts every node after a config push.', quartz), ['Runbooks/Restarting a quartz-cache node.md']);
+    assert.deepEqual(paths('script that restarts quartz on every node after the config push', quartz), ['Runbooks/Restarting a quartz-cache node.md']);
+    // Words every project uses ("header", "response", "handler") and none of a note's title: no note.
+    assert.deepEqual(paths('Add a header to every response in the handler.', '/Users/someone/Projects/lantern-api'), []);
+    // Each word of a title counts once ("JetStream" is one word): "a background job … the job queue" says half of
+    // Lantern job queue on NATS JetStream.
+    assert.deepEqual(paths('add a background job that sends the weekly usage digest email. enqueue it from the sunday cron the same way we queue the invoice jobs', '/Users/someone/code/lantern-api'),
+        ['Decisions/2026-03 Lantern job queue on NATS JetStream.md']);
+    // A decision statement brings the note in force on its subject, whose title it need not say.
+    assert.deepEqual(paths('decision: quartz keys now expire after 10 minutes instead of 15. save it to the vault', '/Users/someone/work/quartz-cache'), ['Decisions/2026-06 Quartz eviction policy.md']);
+    // A runbook with no project field and one project's tag ("tags: [runbook, quartz-cache]") is that project's:
+    // in lantern-web's folder it stays out as another project's note; in quartz-cache's it comes.
+    const node = 'How do I restart a node after changing its config?';
+    assert.deepEqual(paths(node, '/Users/someone/Projects/lantern-web'), []);
+    assert.equal(ask(node, '/Users/someone/Projects/lantern-web').others.find((o) => o.path === 'Runbooks/Restarting a quartz-cache node.md')?.why, 'other');
+    assert.deepEqual(paths(node, quartz), ['Runbooks/Restarting a quartz-cache node.md']);
+    // A note tagged with several projects is about them all: On-call comes for any of them.
+    assert.equal(paths('Who is on call for lantern-api this week?')[0], 'People/On-call.md');
+    // A year says nothing on its own: a dated decision's file name is not what a request is about.
+    assert.deepEqual(paths('Write a script that prints the 2026 public holidays.'), []);
+});
+
 
 test('search: a session in a project\'s folder names that project; a prompt that asks two things gets the best note for each', async () => {
     const vault = await readVault(vaultCopy());

@@ -26,7 +26,7 @@
  *
  * @module dsh-plugin-canon/search
  */
-import { CODE_TERMS, COMMON, EVERYDAY, RECORDING, asksForWork, counts, isCodingRequest, isDecision, nameKey, promptTerms, terms, wordsOf, workObject } from './text.js';
+import { CODE_TERMS, COMMON, EVERYDAY, RECORDING, asksForWork, counts, isCodingRequest, isDecision, nameKey, promptTerms, proseOf, terms, wordsOf, workObject } from './text.js';
 
 /** BM25's saturation and length weight. */
 const K1 = 1.2;
@@ -35,7 +35,7 @@ const B = 0.6;
 const WEIGHTS = Object.freeze({ title: 4, aliases: 3, tags: 3, defined: 3, path: 2, headings: 1.5 });
 /** A note scores at least this, and at least this share of the best note, to be added. */
 export const MIN_SCORE = 3;
-export const NEAR_BEST = 0.5;
+export const NEAR_BEST = 0.6;
 /** A word is rare when at most this share of the vault's notes has it (one note, in a small vault). */
 export const RARE = 0.06;
 /**
@@ -52,6 +52,15 @@ export const SHARE_BODY = 0.45;
  * space left on device") thins the share, not the words in common.
  */
 export const MANY_DISTINCT = 4;
+/**
+ * A coding request says at least this share of a note's title's words (or
+ * an alias's) for the note to fit, unless it shares a value of the note's
+ * (a port, a tool's command), many distinctive words, or at least
+ * COVER_SHARE of its weight with it (most of what it asks is in the note).
+ * A decision statement is held to neither.
+ */
+export const COVER = 0.5;
+export const COVER_SHARE = 0.4;
 /** The lift for a note of the session's repo, and of the folder it sits in. */
 export const REPO_BOOST = 1.6;
 export const PARENT_BOOST = 1.2;
@@ -61,6 +70,8 @@ export const PARENT_BOOST = 1.2;
  * could ever reach the floor.
  */
 export const SMALL_VAULT = 10;
+/** A year ("2026"): a pasted timestamp's, a dated note's file name. */
+const YEAR = /^(?:19|20)\d\d$/;
 /** Prompt terms used, at most (the rest of a long prompt adds little). */
 const MAX_QUERY_TERMS = 48;
 /** The questions of a prompt that are each asked alone, at most. */
@@ -257,6 +268,9 @@ export class Index {
             slot,
             path: note.path,
             title: note.title,
+            // What the note says it is about: its title's terms and each alias's (coverage, in rank()).
+            // What the note says it is about, word by word (each word's terms: "JetStream" is one word), from its title and aliases.
+            subjects: [note.title, ...(note.aliases ?? [])].map((text) => String(text ?? '').split(/[\s/]+/).map((word) => [...new Set(terms(word).filter((t) => !/^\d+$/.test(t)))]).filter((list) => list.length > 0)).filter((words) => words.length > 0),
             tags: note.tags ?? [],
             keys,
             projects,
@@ -490,6 +504,50 @@ export class Index {
         return { terms: query, results, others, coding };
     }
 
+    /**
+     * The projects a note belongs to: its own (projectsOf), or else the one
+     * known project its tags name.
+     * @param {{ projects: string[], tags: string[] }} doc
+     */
+    ownersOf(doc) {
+        if (doc.projects.length) return doc.projects;
+        // One project's tag says whose note it is; a note tagged with several projects is about them all (On-call).
+        const tagged = [...new Set((doc.tags ?? []).map(nameKey).filter((tag) => this.projects.has(tag)))];
+        return tagged.length === 1 ? tagged : doc.projects;
+    }
+
+    /**
+     * Whether a prompt says all of what a note is about: every word, two or
+     * more, of its title or of one of its aliases, a project's name aside.
+     * @param {{ subjects?: string[][][] }} doc
+     * @param {Set<string> | Map<string, number>} asked - the prompt's terms.
+     * @param {Set<string>} names - the words of projects' names.
+     */
+    saysAll(doc, asked, names) {
+        return (doc.subjects ?? []).some((subject) => {
+            const words = subject.filter((word) => !word.every((t) => names.has(t)));
+            return words.length >= 2 && words.every((word) => word.some((t) => asked.has(t)));
+        });
+    }
+
+    /**
+     * The share of a note's title's words, or of one of its aliases', that
+     * a prompt has, a project's name aside (0 to 1; the best of them).
+     * @param {{ subjects?: string[][][] }} doc
+     * @param {Set<string> | Map<string, number>} asked - the prompt's terms.
+     * @param {Set<string>} names - the words of projects' names.
+     */
+    coverOf(doc, asked, names) {
+        let best = 0;
+        for (const subject of doc.subjects ?? []) {
+            const words = subject.filter((word) => !word.every((t) => names.has(t)));
+            if (words.length === 0) continue;
+            const said = words.filter((word) => word.some((t) => asked.has(t))).length / words.length;
+            if (said > best) best = said;
+        }
+        return best;
+    }
+
     /** How many live notes have a term. */
     notesWith(term) {
         const p = this.postings.get(term);
@@ -585,7 +643,7 @@ export class Index {
                 const score = idf * ((tf * (K1 + 1)) / (tf + K1));
                 let hit = found.get(doc.slot);
                 if (!hit) {
-                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, plain: 0, special: 0, lone: '', strong: 0, marked: 0, distinct: 0, covered: 0 };
+                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, plain: 0, special: 0, values: 0, lone: '', strong: 0, marked: 0, distinct: 0, covered: 0 };
                     found.set(doc.slot, hit);
                 }
                 hit.matched.push(t);
@@ -599,19 +657,26 @@ export class Index {
                 hit.topics += 1;
                 hit.lone = t;
                 if (!EVERYDAY.has(t)) hit.plain += 1;
-                if (!EVERYDAY.has(t) && !COMMON.has(t) && !CODE_TERMS.has(t) && !/^\d{1,2}$/.test(t)) hit.special += 1;
+                // Small numbers and years (a pasted log's timestamp, a decision's file name) say nothing on their own.
+                const vague = /^\d{1,2}$/.test(t) || YEAR.test(t);
+                if (!EVERYDAY.has(t) && !COMMON.has(t) && !CODE_TERMS.has(t) && !vague) hit.special += 1;
+                // A value the note holds: a number of two digits or more, a word with digits in it, a tool's command ("deployctl").
+                if (!vague && df <= rare && (/\d{2,}/.test(t) || /ctl$/.test(t))) hit.values += 1;
                 hit.covered += weight.get(t);
                 if (p.strong[i] > 0) hit.strong += 1;
                 if (p.marked[i] > 0) hit.marked += 1;
-                if (p.marked[i] > 0 || df <= rare || p.body[i] >= 2) hit.distinct += 1;
+                if (!vague && (p.marked[i] > 0 || df <= rare || p.body[i] >= 2)) hit.distinct += 1;
             }
         }
         const words = wordsOf(prompt);
+        // What a coding request says in the person's own words, without pasted code or output.
+        const prose = coding ? new Set(promptTerms(proseOf(prompt), { max: 400, everyday: true })) : new Set();
         const scored = [];
         for (const hit of found.values()) {
             const place = folder.repo && hit.doc.keys.has(folder.repo) ? 'repo' : folder.parent && hit.doc.keys.has(folder.parent) ? 'parent' : '';
             const boost = place === 'repo' ? REPO_BOOST : place === 'parent' ? PARENT_BOOST : 1;
-            const own = hit.doc.projects;
+            // A note belongs to its projects (projectsOf) and to a known project its tags name ("tags: [runbook, quartz-cache]").
+            const own = this.ownersOf(hit.doc);
             // The session's own project counts as named for its notes, as if the prompt said its name.
             const named = hit.name > 0 || (here !== '' && own.includes(here));
             const said = hit.name > 0 ? nameWeight : named ? hereWeight : 0;
@@ -620,6 +685,8 @@ export class Index {
             const titled = hit.marked > 0;
             let why = '';
             let strange = null;
+            // How much of what the note says it is about (its title, or an alias) the prompt says, a project's name aside.
+            const cover = this.coverOf(hit.doc, weight, names);
             if (hit.topics === 0) why = 'name';
             else if (coding) {
                 if ((titled ? hit.distinct : hit.topics) + (named ? 1 : 0) < need || (!titled && hit.topics === 1)) why = 'few';
@@ -628,10 +695,22 @@ export class Index {
                 if (why === 'part' && object.length && own.some((name) => context.has(name)) && terms(hit.doc.title).some((t) => object.includes(t))) why = '';
                 // A pasted log thins the share, not the words in common: many distinctive ones fit whatever their share.
                 if (why === 'part' && hit.distinct >= MANY_DISTINCT + (named ? 0 : 1)) why = '';
+                // A request that says in its own words all of what a note is about, two words or more of its title or an
+                // alias, fits it whatever else it says ("a script that restarts quartz on every node" is Restarting a
+                // quartz-cache node; a pasted `Warn("rate limited")` is not Rate limits).
+                if (why === 'part' && named && this.saysAll(hit.doc, prose, names)) why = '';
                 // A request that asks no work, only code-shaped, about what two words of a note's say: it fits by those.
                 if ((why === 'part' || why === 'few') && shaped && hit.special >= 2) why = '';
                 // Words every project uses ("port", "deploy", "build", "request") never carry a fit on their own.
                 if (why === '' && hit.special === 0 && !(named && titled)) why = 'few';
+                // A coding request fits a note only when it says at least half of what the note is about, its title's
+                // or an alias's words ("restarts every node" is Restarting a quartz-cache node; "the account cache"
+                // is not On-call's), shares a value or many distinctive words with it (a pasted log), or finds most of
+                // what it asks in it. A decision statement need not say the note's title: the note in force comes.
+                if (why === '' && recording.size === 0 && cover < COVER && share < COVER_SHARE && hit.values === 0 && hit.distinct < MANY_DISTINCT + (named ? 0 : 1)) why = 'part';
+                // Beside a project the request or the session names, a note of no project fits only by what it is
+                // about: a word in its title, aliases, tags or headings ("…release on thursdays" is not Office's lunch).
+                if (why === '' && context.size > 0 && own.length === 0 && !titled) why = 'few';
             } else {
                 const lone = hit.topics === 1;
                 const df = lone ? this.notesWith(hit.lone) : 0;
