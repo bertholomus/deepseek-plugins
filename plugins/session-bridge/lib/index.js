@@ -84,17 +84,21 @@ export async function apply(ctx, config) {
             ctx.logger.warn('session-bridge: session event %s', errorText(error));
         }
     });
+    let failure;
+    let disposed = false;
     const started = bridge.start().catch((error) => {
-        bridge.log(`not listening: ${errorText(error)}`);
-        ctx.logger.error('session-bridge: not listening: %s', errorText(error));
+        failure = errorText(error);
+        bridge.log(`not listening: ${failure}`);
         return false;
     });
     ctx.effect(() => async () => {
+        disposed = true;
         await started;
         await bridge.stop();
     });
     const listening = await started;
-    if (!listening && bridge.refused) {
-        throw new Error(`Session Bridge is not listening on ${bridge.socketPath}: ${bridge.refused}. Fix socketPath in its row (or free the socket), then save the row again or switch the plugin off and on.`);
+    const why = bridge.refused ?? failure;
+    if (!listening && !disposed && why) {
+        throw new Error(`Session Bridge is not listening on ${bridge.socketPath}: ${why}. Fix socketPath in its row (or free the socket), then save the row again or switch the plugin off and on.`);
     }
 }
