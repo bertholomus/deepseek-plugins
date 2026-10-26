@@ -52,9 +52,9 @@ const APPLY_CMD = /\b(terraform|tofu)\s+(\S+\s+)*apply\b|\bpulumi\s+up\b|\bkubec
 const BACKGROUND_CMD = /(?:^|[;&|(]\s*)(?:nohup|setsid)\s|(?<![&>|])&(?![&>])\s*(?:$|;|\)|echo\b|disown\b)|\bscreen\s+-\w*d\w*m|\btmux\s+new(?:-session)?\b[^;&|]*\s-d\b/;
 const JOB_CMD = /\bargo\s+submit\b|\bgh\s+workflow\s+run\b|\bgh\s+run\s+rerun\b|\bkubectl\s+create\s+job\b|\bsbatch\b|\bqsub\b|\bbsub\b|\bairflow\s+dags\s+trigger\b|\baws\s+batch\s+submit-job\b|\baws\s+glue\s+start-job-run\b|\baws\s+stepfunctions\s+start-execution\b|\bdatabricks\s+(jobs\s+run-now|runs\s+submit)\b|\bgcloud\s+(dataflow\s+jobs\s+run|dataproc\s+jobs\s+submit|batch\s+jobs\s+submit|run\s+jobs\s+execute)\b|\bprefect\s+deployment\s+run\b|\bdagster\s+job\s+launch\b|\bnomad\s+job\s+run\b/i;
 const HASH_CMD = /\b(sha\d+sum|shasum|md5sum|b2sum|cksum|gpg\s+--verify|cosign\s+verify|minisign\s+-V)\b/i;
-const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|stash\s+pop|add|tag)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
+const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|revert|stash\s+pop|add|tag)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
 /** A change to code that tests must run after (as against a commit, a branch, docs or notes). */
-const CODE_CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|patch|git\s+(apply|restore|cherry-pick|stash\s+pop|checkout\s+(\S+\s+)?--\s)|apply_patch)(\s|$)/i;
+const CODE_CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|patch|git\s+(apply|restore|cherry-pick|revert|stash\s+pop|checkout\s+(\S+\s+)?--\s)|apply_patch)(\s|$)/i;
 /** Files and code that hold a route or a handler: `routes/`, `api/`, `*_controller.rb`, `@router.get(`, `app.post(`, `path('…'`. */
 const ROUTE_FILE = /(^|[\/\s_.-])(routes?|routers?|controllers?|handlers?|endpoints?|apis?|views?|urls|server|app|main|index|resources?)(\/|\.\w+\b|[_-])/i;
 const ROUTE_CODE = /\.(get|post|put|patch|delete|route|all|add_url_rule|add_api_route|api_route|handle|handlefunc|handler|register|mount)\s*\(|@(get|post|put|patch|delete|route|api_route)\b|@\w+\.(get|post|put|patch|delete|route|api_route)\s*\(|@(Get|Post|Put|Patch|Delete|Request)Mapping\b|\b(path|re_path|url)\s*\(\s*r?['"]|\bRoute::\w+\s*\(|^\s*(get|post|put|patch|delete|resources?)\s+['":\/]|\(\s*req\s*,\s*res\b|\breq\s*:\s*Request\b|\bNext(Request|Response)\b|\bhttp\.ResponseWriter\b|\b(Http|Json)Response\b|\bjsonify\s*\(|\bres\.(json|send|status)\s*\(|\bc\.JSON\s*\(|\bResponseEntity\b|@(Rest)?Controller\b|\bAPIRouter\s*\(|\bBlueprint\s*\(|\bexpress\s*\(\s*\)|\bexport\s+(async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\b|\bhandler\s*[:=(]/im;
@@ -182,11 +182,14 @@ export function testCountsIn(text) {
     // A workspace run prints one summary per package (`@acme/schemas: Tests 58 passed`, `@acme/api: Tests: 141 passed`):
     // the last is the run's, and each one's count was printed too.
     const last = found.at(-1);
+    // `for i in 1 2 3 4 5; do npx jest cart; done`: a run of the loop that failed, though the last one passed.
+    const worst = found.reduce((n, f) => Math.max(n, f.failed), 0);
+    const once = last && found.length > 1 && last.failed === 0 && worst > 0 ? { failedOnce: worst } : {};
     if (last && !last.parts && found.length > 1) {
         const parts = [...new Set(found.map((f) => f.passed))];
-        if (parts.length > 1) return { ...last, parts, clean: [...new Set(found.filter((f) => f.failed === 0).map((f) => f.passed))] };
+        if (parts.length > 1) return { ...last, parts, clean: [...new Set(found.filter((f) => f.failed === 0).map((f) => f.passed))], ...once };
     }
-    return last;
+    return last && { ...last, ...once };
 }
 
 /** The first file hash or commit in the output: sha256, a full commit id, or a short one in a push or commit line. */
@@ -723,7 +726,7 @@ export function looksOnly(item) {
 }
 
 const SEARCH_TOOL = /^(grep|search|rg|ripgrep|search_files|find_in_files|code_search)$/i;
-const SEARCH_CMD = /(?:^|[;&|(]\s*|\s)(?:git\s+grep|grep|egrep|fgrep|rg|ag|ack)\s+((?:-{1,2}[\w-]+(?:=\S+)?\s+)*)(?:-e\s+)?(["']?)([^"'\s|;&]+)\2/;
+const SEARCH_CMD = /(?:^|[;&|(]\s*|\s)(?:git\s+grep|grep|egrep|fgrep|rg|ag|ack)\s+((?:-{1,2}[\w-]+(?:=\S+)?\s+)*)(?:-e\s+)?(?:"([^"\n]+)"|'([^'\n]+)'|(?!-)([^"'\s|;&]+))/;
 
 /** What a search looked for and how many lines it found: the grep tool, or grep, rg, ag or ack in a shell. */
 function searchOf(tool, args, out, command) {
@@ -735,7 +738,10 @@ function searchOf(tool, args, out, command) {
         }
         term = typeof a?.pattern === 'string' ? a.pattern : typeof a?.query === 'string' ? a.query : undefined;
     }
-    else if (command) term = SEARCH_CMD.exec(command)?.[3];
+    else if (command) {
+        const m = SEARCH_CMD.exec(command);
+        term = m?.[2] ?? m?.[3] ?? m?.[4];
+    }
     if (!term) return undefined;
     // `grep -rl X | xargs sed -i …`: the matches went to another command, so the output is not what the search found.
     if (command && /\b(?:grep|egrep|fgrep|rg|ag|ack)\b[^|;&]*\|\s*(?:xargs|while\b|parallel|sed\b|awk\b|perl\b|tee\b|cut\b|sort\s+-u\s*\|\s*xargs)/.test(command)) return undefined;
@@ -770,6 +776,8 @@ function innerRuns(out) {
 }
 
 /** A command with git's own options before its subcommand dropped: `git -C app push` reads as `git push`. */
+/** Git commands that print a commit record ("[main 1a2b3c4] msg") when they make a commit. */
+const GIT_RECORD_CMD = /\bgit\s+(?:commit|revert|cherry-pick)\b/;
 const GIT_OPTS = /\bgit((?:\s+(?:-C|-c)\s+(?:"[^"]*"|'[^']*'|\S+)|\s+--(?:git-dir|work-tree|namespace|exec-path)(?:=|\s+)\S+|\s+--no-pager|\s+--no-replace-objects|\s+--paginate|\s+-P)+)(?=\s)/g;
 export const plainGit = (command) => String(command ?? '').replace(GIT_OPTS, 'git');
 
@@ -812,7 +820,7 @@ export function itemOf({ name, args, text, isError = false }) {
     }
     if (hash) facts.hash = hash;
     // "[main 8c41d2e] install.sh: quote PREFIX paths": git made the commit, whatever a later step of the command did.
-    const record = shell && /\bgit\s+commit\b/.test(command) ? /^\[[\w./-]+(?: \(root-commit\))? ([0-9a-f]{7,12})\]/m.exec(out) : null;
+    const record = shell && GIT_RECORD_CMD.test(command) ? /^\[[\w./-]+(?: \(root-commit\))? ([0-9a-f]{7,12})\]/m.exec(out) : null;
     if (record) facts.committed = record[1];
     if (metric) facts.metric = metric;
     if (series.length) facts.series = series;
@@ -891,6 +899,8 @@ export function itemOf({ name, args, text, isError = false }) {
             tool, kind, ok, exit,
             cmd: clip(oneLine(command), 240),
             ...(changes ? { change: true } : {}),
+            // Read on the whole command: the kept `cmd` is cut short, and a long commit message hides how it ends.
+            ...(changes && GIT_RECORD.test(command) ? { record: true } : {}),
             ...(CODE_CHANGE_CMD.test(command) ? { code: true } : {}),
             ...((APPLY_CMD.test(command) || MIGRATE_CMD.test(command)) && !DRY_RUN.test(command) ? { apply: true } : {}),
             ...(mixed ? { mixed: true } : {}),
@@ -1281,7 +1291,7 @@ function listedCheck(list, wanted) {
 const VIA_COMMAND = /\b(?:re-?built|built|compiled|re-?generated|generated|applied|migrated|seeded|installed|bundled|packaged|synced|imported|exported|re-?indexed|backfilled|provisioned)\b[^.;]{0,40}?\b(?:with|using|via|through|by running)\s/i;
 
 /** What a named command, a quoted figure or a turn's own benchmark says, before the kind's own rule: a result, or undefined. */
-function namedChecks(claim, list) {
+function namedChecks(claim, list, prompt = '') {
     if (claim.kind === 'passed' || claim.kind === 'deployed') {
         for (const wanted of claim.commands ?? []) {
             if (claim.kind === 'deployed' && INSTALL_CMD.test(wanted)) continue;
@@ -1323,7 +1333,9 @@ function namedChecks(claim, list) {
     // Every figure must have printed, but an amount or a factor ("40% less", "3x faster") may follow from one metric's
     // before and after. A reading ("p95 is 120 ms") and both sides of "from X to Y" must print as they are.
     const required = claim.metrics ?? [];
-    const missing = required.filter((m) => !printed(list, m) && !(!m.arrow && (m.amount || m.unit === 'x' || m.unit === '×') && derivable(list, m, claim)));
+    // "Last run the median was 240 ms": a figure the person's message gave needs no output of this turn.
+    const given = typeof prompt === 'string' && prompt ? numsIn(prompt) : [];
+    const missing = required.filter((m) => !printed(list, m) && !given.some((n) => near(n, m.value, slack(m))) && !(!m.arrow && (m.amount || m.unit === 'x' || m.unit === '×') && derivable(list, m, claim)));
     if (missing.length) {
         return { verdict: 'unbacked', evidence: [], why: `It quotes ${listed(missing.slice(0, 3).map((m) => m.text))}, which no output in this turn shows.` };
     }
@@ -1386,6 +1398,11 @@ function namedCounts(text) {
     return [...String(text).matchAll(/\b(\d+)\s+(?:unit\s+|integration\s+|e2e\s+|end-to-end\s+|doc\s+|ui\s+|api\s+)?(?:tests?|specs?|examples?)\b(?![\s-]+(?:files?|suites?|modules?|targets?|packages?|projects?|binar(?:y|ies)|executables?|classes|folders?|directories)\b)/gi)].map((m) => Number(m[1]));
 }
 
+/** The tests other than the failing ones: "the other tests", "the remaining 2", "the others", "the rest". */
+const OTHERS_PASS = /\b(?:the\s+)?(?:other|remaining)\s+(?:\d+\s+|two\s+|three\s+|four\s+|five\s+)?(?:tests?|specs?|cases?|ones?|checks?)\b|\bthe\s+(?:other|remaining)\s+\d+\b|\bthe\s+others\b|\bthe\s+rest\b/i;
+/** A pass said to hold on every round: "reliably", "every time", "five times in a row", "no longer flaky". */
+const REPEAT_PASS = /\b(?:reliabl[ey]|consistently|every\s+(?:single\s+)?(?:time|run|round)|each\s+(?:time|run|round)|(?:\w+|\d+)\s+times\s+in\s+a\s+row|(?:all|each)\s+(?:\w+|\d+)\s+(?:runs|rounds|times)|\d+\s*\/\s*\d+\s+(?:runs|rounds|times)|no\s+longer\s+flak\w*|not\s+flaky(?:\s+any\s*more)?|stable\s+now|deterministic(?:ally)?)\b/i;
+
 /** Whether a failed run that passed other parts failed on parts other than the code a claim names ("`fct_orders` built"). */
 function otherPartFailed(i, words) {
     const names = [...String(words).matchAll(CODE_NAME)].map((m) => m[1] ?? m[2]).filter((n) => n.length > 2);
@@ -1441,7 +1458,7 @@ function passedFor(subject, claim, list) {
     const what = LAST_FAILED[subject] ?? 'run';
     // CI read before the last push is about the commit before it.
     if (subject === 'ci') {
-        const push = lastIndex(list, (i) => /\bgit\s+push\b/i.test(i.cmd ?? '') && i.shipped !== false);
+        const push = lastIndex(list, (i) => /\bgit\s+push\b/i.test(plainGit(i.cmd)) && i.shipped !== false);
         if (push > list.lastIndexOf(last)) return { verdict: 'unbacked', evidence: [said(last), said(list[push])], why: `The last CI read in this turn came before the last push (${list[push].text}), so it does not show the pushed code.` };
     }
     // "1 test passed" after a run where 1 passed and 2 failed: the run's own count, which reports the failures.
@@ -1466,8 +1483,24 @@ function passedFor(subject, claim, list) {
     // "`fct_orders` built cleanly" after `dbt run` passed 12 models and failed on `fct_revenue_daily`: a failure in a run
     // that passed other parts is about the parts it names, not about this one.
     if (last.ok === false && otherPartFailed(last, claim.part ?? words)) return { verdict: 'none', evidence: [], why: '' };
+    // "That's also why the other tests pass", "the rest are green" about a run that failed some and passed others: the
+    // part it names is the part that passed, so the failure does not speak against it.
+    if (last.ok === false && (last.tests?.passed ?? 0) > 0 && (last.tests?.failed ?? 0) > 0 && OTHERS_PASS.test(words)) {
+        const quoted = Number(/\b(\d+)\b/.exec(words)?.[1]);
+        return Number.isFinite(quoted) && quoted !== last.tests.passed ? { verdict: 'none', evidence: [], why: '' } : { verdict: 'backed', evidence: [said(last)], why: '' };
+    }
+    // "38 unit tests and the 6 integration tests pass" when only a doc example failed: the parts it names passed,
+    // each count it quotes a clean part of the run.
+    if (last.ok === false && docExampleOnly(last) && /\b(?:unit|integration|lib|library)\b/i.test(words) && !/\b(?:doc(?:umentation)?[-\s]?tests?|doctests?|doc\s+examples?|everything|whole|full|entire|overall|all\s+(?:the\s+)?tests|(?:the\s+)?suite)\b/i.test(words)) {
+        const counts = [...words.matchAll(/\b(\d+)\b/g)].map((m) => Number(m[1]));
+        if (counts.every((n) => (last.tests?.clean ?? []).includes(n))) return { verdict: 'backed', evidence: [said(last)], why: '' };
+    }
     if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${what} in this turn did not pass: ${last.text}.` };
     if (last.ok === null) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear how the last ${what} ended: ${last.text}.` };
+    // "Passes reliably now", "green every time" after a loop of runs in which one round failed.
+    if (REPEAT_PASS.test(claim.part ?? words) && last.tests?.failedOnce > 0) {
+        return { verdict: 'contradicted', evidence: [said(last)], why: `It says it passes every time, and one round of the last ${what} failed ${last.tests.failedOnce === 1 ? 'a test' : `${last.tests.failedOnce} tests`}: ${last.text}.` };
+    }
     if (NO_WARNINGS.test(claim.text ?? words) && (last.warnings ?? 0) > 0) {
         return { verdict: 'contradicted', evidence: [said(last)], why: `It says there are no warnings, and the last ${what} in this turn printed ${last.warnings === 1 ? 'one' : last.warnings}: ${last.text}.` };
     }
@@ -1596,7 +1629,7 @@ function judgeDeployed(claim, list) {
         // The sentence names what the check is: "the api is healthy — GET /health returns 200".
         const sentence = claim.text ?? words;
         const checks = list.filter((i) => (i.kind === 'probe' && !i.registry) || i.health !== undefined || i.fetched);
-        const code = /\b(?:returns?|returned|answers?|answered|responds?(?:\s+with)?|responded(?:\s+with)?|status(?:\s+code)?|http|code|gives|got|->|→)\s*:?\s*(?:an?\s+)?(?:http\s+)?([1-5]\d\d)\b|\b([1-5]\d\d)\s+(?:ok|created|accepted|no content)\b/i.exec(sentence);
+        const code = /\b(?:returns?|returned|returning|answers?|answered|answering|responds?(?:\s+with)?|responded(?:\s+with)?|responding(?:\s+with)?|status(?:\s+code)?|http|code|gives|got|->|→)\s*:?\s*(?:an?\s+)?(?:http\s+)?([1-5]\d\d)s?\b|\b([1-5]\d\d)\s+(?:ok|created|accepted|no content)\b/i.exec(sentence);
         const status = code ? Number(code[1] ?? code[2]) : undefined;
         // A run in this turn saw the status it names ("Expected status 503, got 200"): what it answers is shown, though not where it runs.
         const seen = status !== undefined && !REMOTE_PLACE.test(sentence) ? list.filter((i) => (i.codes ?? []).includes(status)) : [];
@@ -1706,7 +1739,7 @@ function judgeDeployed(claim, list) {
     if (went === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last ${tw.last} in this turn did not go through: ${last.text}.` };
     // "Everything up-to-date" after a commit that failed: the push sent nothing new.
     if (last.upToDate) {
-        const commit = list.slice(0, list.indexOf(last)).filter((i) => /\bgit\s+commit\b/i.test(i.cmd ?? '')).at(-1);
+        const commit = list.slice(0, list.indexOf(last)).filter((i) => /\bgit\s+commit\b/i.test(plainGit(i.cmd))).at(-1);
         if (commit && commit.ok === false) return { verdict: 'contradicted', evidence: [said(commit), said(last)], why: `The commit in this turn did not go through (${commit.text}), so the push sent nothing new.` };
     }
     if (target === 'env' || target === 'any') {
@@ -1760,6 +1793,8 @@ function bareBar(text, context) {
 }
 
 /** Rule for `fixed`: a change, then a run of the right kind that passed. */
+/** A fix of a doc's words: a typo, the spelling, the wording, a broken link. */
+const DOC_TEXT_FIX = /\b(?:typos?|spelling|misspell(?:ed|ing|ings)?|wording|grammar|punctuation|capitali[sz]ation|broken\s+links?|dead\s+links?|links?|anchors?)\b/i;
 function judgeFixed(claim, list, prompt = '') {
     // "It beats the current model's 0.88": the best reading this turn printed for that measure, against the bar.
     if (claim.beats) {
@@ -1786,7 +1821,18 @@ function judgeFixed(claim, list, prompt = '') {
     // A fix needs a change to the code that went through: a failed edit, an edit of docs alone or a commit is none,
     // and a passing run with nothing changed shows the code works, not that anything was fixed.
     // "Fixed the broken `figure` shortcode in `content/posts/kiln-notes.md`": a fix in the page it names is an edit of that page.
-    const page = (i) => (i.change || i.kind === 'change') && i.ok !== false && typeof i.file === 'string' && DOC_FILE.test(i.file) && String(claim.part ?? claim.text ?? '').includes(i.file.split('/').at(-1));
+    const said_ = String(claim.part ?? claim.text ?? '');
+    const docEdit = (i) => (i.change || i.kind === 'change') && i.ok !== false && typeof i.file === 'string' && DOC_FILE.test(i.file);
+    // The page by its name, with or without its extension: "in `kiln-notes.md`", "in the README".
+    const namesPage = (file) => {
+        const base = file.split('/').at(-1);
+        const stem = base.replace(/\.[\w-]+$/, '');
+        return said_.includes(base) || (stem.length >= 4 && new RegExp(`(?:^|[^\\w./-])${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-])`, 'i').test(said_));
+    };
+    // "Fixed the typo in the README", "fixed the README": with no code changed, a fix of a doc is its edit, which needs
+    // nothing run after it; a run after it that failed still speaks.
+    const docFix = !list.some(codeChange) && list.some(docEdit) && (DOC_TEXT_FIX.test(said_) || list.some((i) => docEdit(i) && namesPage(i.file)));
+    const page = (i) => docEdit(i) && (docFix || namesPage(i.file));
     const lastChange = lastIndex(list, (i) => codeChange(i) || page(i));
     if (lastChange < 0) {
         const kinds = FIX_CHECKS[claim.subject ?? 'any'] ?? FIX_CHECKS.any;
@@ -1801,8 +1847,11 @@ function judgeFixed(claim, list, prompt = '') {
     const same = lastChange >= 0 && RUNS.has(list[lastChange].kind) ? [list[lastChange]] : [];
     const checks = [...same, ...after];
     if (checks.length === 0) {
+        if (docFix) return { verdict: 'backed', evidence: list.filter(docEdit).slice(-2).map(said), why: '' };
         const other = list.filter((i) => i.kind === 'other' && i.ok === true);
         if (other.length) return { verdict: 'backed', evidence: other.slice(-2).map(said), why: '' };
+        // "Fixed it. Tests were not run, per your instruction": the reply itself says the fix is unchecked.
+        if (lastChange >= 0 && claim.untested) return { verdict: 'none', evidence: [], why: '' };
         return lastChange >= 0
             ? { verdict: 'unbacked', evidence: [said(list[lastChange])], why: 'Files changed in this turn, and nothing ran after the last change to show it works.' }
             : { verdict: 'unbacked', evidence: [], why: 'Nothing in this turn ran the code or a check.' };
@@ -1814,8 +1863,8 @@ function judgeFixed(claim, list, prompt = '') {
     const fitAll = checks.filter((i) => kinds.includes(i.kind));
     const fitting = fitAll.some((i) => i.kind !== 'ci' && i.kind !== 'deploy') ? fitAll.filter((i) => i.kind !== 'ci') : fitAll;
     // "The flake is fixed": a flaky test shows itself by failing now and then, so any test run after the change that failed says it is still there.
-    const flaked = /\bflak(?:e|es|y|iness)\b/i.test(claim.part ?? claim.text ?? '') ? checks.filter((i) => i.ok === false && (i.kind === 'test' || i.tests)).at(-1) : undefined;
-    if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: `A test run after the change still failed: ${flaked.text}.` };
+    const flaked = /\bflak(?:e|es|y|iness)\b/i.test(claim.part ?? claim.text ?? '') ? checks.filter((i) => (i.ok === false && (i.kind === 'test' || i.tests)) || i.tests?.failedOnce > 0).at(-1) : undefined;
+    if (flaked) return { verdict: 'contradicted', evidence: [said(flaked)], why: flaked.ok === false ? `A test run after the change still failed: ${flaked.text}.` : `A test run after the change still failed ${flaked.tests.failedOnce === 1 ? 'a test' : `${flaked.tests.failedOnce} tests`} in one of its rounds: ${flaked.text}.` };
     // "Fixed the NullReferenceException in `OrderService.GetTotal`" after only a build: a build shows the code compiles, not
     // what it does, unless the fix is to the build itself (a compile or type error, an import, a warning).
     const run = fitting.length ? fitting : checks;
@@ -1844,7 +1893,7 @@ function judgeFixed(claim, list, prompt = '') {
             const lines = (i) => (Array.isArray(i.failLines) ? i.failLines : i.lines ?? []).filter((l) => typeof l === 'string');
             if (later.length && !later.some((i) => lines(i).some((l) => name.test(l)))) return { verdict: 'backed', evidence: [said(filtered)], why: '' };
         }
-        if (errorGone(claim, list, lastChange, last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+        if (errorGone(claim, list, lastChange, last) || fewerFailures(claim, list, lastChange, last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
@@ -1865,6 +1914,31 @@ function errorGone(claim, list, lastChange, last) {
     return list.slice(0, lastChange).some((i) => i.ok === false && i.kind === last.kind && names(i));
 }
 
+/** A fix of one part of what failed: "fixed only the first reported problem", "one of the two errors". */
+const PART_FIX = /\b(?:only|just)\s+(?:the\s+)?(?:first|second|third|last|top|one)\b|\bthe\s+first\s+(?:reported\s+|listed\s+)?(?:problem|error|issue|failure|warning|finding)\b|\bone\s+of\s+(?:the\s+)?(?:\w+\s+)?(?:problems|errors|issues|failures|warnings|findings|failing\s+tests)\b/i;
+/** How many things a failed run reports failing: failed tests, or a linter's or compiler's count of problems. */
+function failCount(i) {
+    if (i.tests?.failed > 0) return i.tests.failed;
+    const text = [...(Array.isArray(i.failLines) ? i.failLines : []), ...(i.lines ?? [])].filter((l) => typeof l === 'string').join('\n');
+    // A summary line, in this order: eslint's "✖ 2 problems", tsc's "Found 2 errors", clang's "2 errors generated", rustc's
+    // "due to 2 previous errors", "(2 errors, 0 warnings)"; never an error line's own number ("src/a.js:4  error").
+    for (const re of [/(?:✖|\u2716)\s*(\d+)\s+problems?\b/i, /\bFound\s+(\d+)\s+errors?\b/i, /\b(\d+)\s+errors?\s+generated\b/i, /\bdue\s+to\s+(\d+)\s+previous\s+errors?\b/i, /\((\d+)\s+errors?,\s*\d+\s+warnings?\)/i]) {
+        const n = Number(re.exec(text)?.[1]);
+        if (Number.isFinite(n) && n > 0) return n;
+    }
+    return undefined;
+}
+/**
+ * Whether a fix of one part ("fixed only the first reported problem") shows: the same kind of run failed on more before
+ * the change than it does after it.
+ */
+function fewerFailures(claim, list, lastChange, last) {
+    if (!PART_FIX.test(String(claim.part ?? claim.text ?? ''))) return false;
+    const after = failCount(last);
+    if (after === undefined) return false;
+    return list.slice(0, lastChange).some((i) => i.ok === false && i.kind === last.kind && (failCount(i) ?? 0) > after);
+}
+
 /** A fix that a build shows: of the build, a compile or type error, an import, a warning, a dependency. */
 const BUILD_FIX = /\b(?:build|builds|compil\w*|types?|typing|type-?check\w*|tsc|imports?|warnings?|lint\w*|syntax|link(?:er|ing)?|dependenc\w*|declarations?|signatures?|(?:CS|TS|C)\d{4}|E\d{4})\b/i;
 /** A fix of lint: "Lint is fixed", "fixed the eslint warnings". */
@@ -1879,8 +1953,8 @@ function docExampleOnly(i) {
 
 /** The code a claim names, by its last part: `loadNextPageIfNeeded` in `FeedViewModel.loadNextPageIfNeeded(at:)`, or `SettingsFragment`. */
 const CODE_NAME = /\b(?:[A-Za-z_$][\w$]*(?:\.|::|#))+([A-Za-z_$][\w$]*)|\b([a-z_$][\w$]*[A-Z_][\w$]*|[A-Z][a-z0-9]+[A-Z][\w$]*)\b/g;
-/** Git commands that only record or send work (a commit, a tag, a push): they change no code. */
-const GIT_RECORD = /^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:add|commit|tag|push|branch|switch\s+-c|checkout\s+-b|stash(?!\s+pop)|fetch|pull)\b[^;&|]*(?:\s*(?:&&|;)\s*|$))+$/i;
+/** Git commands that only record or send work (a commit, a tag, a push), with looks at it (`git log`, `git status`): they change no code. */
+const GIT_RECORD = /^\s*(?:cd\s+\S+\s*&&\s*)?(?:git\s+(?:add|commit|tag|push|branch|switch\s+-c|checkout\s+-b|stash(?!\s+pop)|fetch|pull|log|status|show|diff|rev-parse|describe|remote|shortlog)\b[^;&|]*(?:\s*(?:&&|;|\|\|)\s*|$))+$/i;
 /** Paths a command names: `README.md`, `src/app.ts`. */
 const CMD_PATHS = /(?:^|[\s'"=>])((?:[\w.@-]+\/)*[\w@-][\w.@-]*\.[a-z][a-z0-9]{0,7})(?=$|[\s'";|&)])/gi;
 /** Whether an item changed code that went through: an edit of a file that is not docs, or a command that changed files. */
@@ -1888,7 +1962,7 @@ function codeChange(i) {
     if (!(i.change || i.kind === 'change') || i.ok === false) return false;
     if (i.kind === 'change' && !i.cmd) return i.code === true || !i.file;
     const cmd = i.cmd ?? '';
-    if (GIT_RECORD.test(cmd)) return false;
+    if (i.record || GIT_RECORD.test(cmd)) return false;
     const paths = [...cmd.matchAll(CMD_PATHS)].map((m) => m[1]);
     return !(paths.length > 0 && paths.every((f) => DOC_FILE.test(f)));
 }
@@ -1932,6 +2006,36 @@ function countsIn(text) {
 }
 
 /** Rule for `done`: a change for a claim that says it changed something (or a bare "Done" after a request for one); else any tool that worked. */
+/** Places an apply can run on, as a claim names them and as a command or its output shows them ("$DEV_DB", "shop_dev"). */
+const PLACES = [
+    { name: 'production', said: /\b(?:production|prod)\b/i, sign: /(?:^|[^a-z])(?:prod|production|live)(?![a-z])/i },
+    { name: 'staging', said: /\bstag(?:e|ing)\b/i, sign: /(?:^|[^a-z])(?:stag(?:e|ing)?|stg)(?![a-z])/i },
+];
+const OTHER_PLACE = /(?:^|[^a-z])(dev|devel|development|local|localhost|staging|stage|stg|qa|uat|sandbox|preview|prod|production)(?![a-z])/i;
+/** The lines of an apply that say where it ran: the command, and output lines about the database, host or context. */
+const WHERE_LINE = /\b(?:database|datasource|db|host|server|cluster|context|namespace|env(?:ironment)?|target|workspace|project|url)\b/i;
+
+/**
+ * "Applied the refunds migration to the production database" when every
+ * apply in this turn showed another place (`DATABASE_URL=$DEV_DB`, database
+ * "shop_dev") and none showed that one: unbacked, or undefined.
+ */
+function appliedElsewhere(words, applies) {
+    const place = PLACES.find((p) => p.said.test(words));
+    if (!place) return undefined;
+    const where = (i) => [i.cmd ?? '', ...(i.lines ?? []).filter((l) => WHERE_LINE.test(l))];
+    if (applies.some((i) => where(i).some((l) => place.sign.test(l)))) return undefined;
+    for (const i of applies) {
+        for (const l of where(i)) {
+            const other = OTHER_PLACE.exec(l);
+            if (other && !place.sign.test(other[0])) {
+                return { verdict: 'unbacked', evidence: [said(i)], why: `It names ${place.name}, and the apply in this turn ran on ${other[1].toLowerCase()}: ${i.text}.` };
+            }
+        }
+    }
+    return undefined;
+}
+
 function judgeDone(claim, list, prompt) {
     const words = (claim.part ?? claim.text).trim();
     const bare = /^(all\s+)?(done|complete|completed|finished|sorted|all set|all wrapped up|wrapped up)\W*$/i.test(words);
@@ -1958,6 +2062,8 @@ function judgeDone(claim, list, prompt) {
         const last = applies.at(-1);
         if (last.ok === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The last apply in this turn did not go through: ${last.text}.` };
         if (last.ok !== true) return { verdict: 'unbacked', evidence: [said(last)], why: `It is not clear the last apply went through: ${last.text}.` };
+        const away = appliedElsewhere(words, applies);
+        if (away) return away;
         return { verdict: 'backed', evidence: applies.slice(-2).map(said), why: '' };
     }
     // "Retrained on v7", "fine-tuned the model": a training run in this turn, which must have ended well.
@@ -2000,13 +2106,15 @@ function judgeDone(claim, list, prompt) {
         if (runs.length) return { verdict: 'backed', evidence: runs.slice(-2).map(said), why: '' };
     }
     // "Committed the fix" after a `git commit` that failed.
-    const commit = /\bcommitted\b/i.test(words) ? list.filter((i) => /\bgit\s+commit\b/i.test(i.cmd ?? '')).at(-1) : undefined;
+    const commit = /\bcommitted\b/i.test(words) ? list.filter((i) => /\bgit\s+commit\b/i.test(plainGit(i.cmd))).at(-1) : undefined;
     if (commit && commit.ok === false && !commit.committed) return { verdict: 'contradicted', evidence: [said(commit)], why: `The commit in this turn did not go through: ${commit.text}.` };
     if (changeClaim) {
         // An apply or a deploy to an environment changes things too ("created the bucket" with `terraform apply`).
         const acts = (i) => i.change || i.kind === 'change' || i.apply || (i.kind === 'deploy' && (i.targets ?? []).includes('env'));
         const builds = (i) => BUILT.test(words) && (i.kind === 'build' || i.kind === 'run');
-        const made = (i) => (acts(i) || i.kind === 'other' || builds(i)) && i.ok !== false;
+        // "[main 1a2b3c4] Guard against empty cart" before a rejected push: the commit went through, whatever came after.
+        const went = (i) => i.ok !== false || (i.committed !== undefined && GIT_RECORD_CMD.test(plainGit(i.cmd)));
+        const made = (i) => (acts(i) || i.kind === 'other' || builds(i)) && went(i);
         const changes = list.filter(made);
         // "Added `GET /api/reports/summary`": an endpoint needs a change to a route or a handler, not only to its types.
         const route = asked || ACTIVE.test(words) ? ROUTE_NAMED.exec(`${claim.text ?? words} ${claim.next ?? ''}`) : null;
@@ -2074,9 +2182,10 @@ export function quotedBy(claim, items) {
 export function judge(claim, items, { prompt = '' } = {}) {
     const list = Array.isArray(items) ? items.filter(Boolean) : [];
     if (list.length === 0) return { verdict: 'unbacked', evidence: [], why: 'No tool ran in this turn.' };
-    const result = namedChecks(claim, list)
+    const result = namedChecks(claim, list, prompt)
         ?? failedEdit(claim, list)
         ?? filesCount(claim, list)
+        ?? stillFound(claim, list)
         ?? (claim.kind === 'passed' ? judgePassed(claim, list)
             : claim.kind === 'deployed' ? judgeDeployed(claim, list)
                 : claim.kind === 'fixed' ? judgeFixed(claim, list, typeof prompt === 'string' ? prompt : '')
@@ -2117,8 +2226,43 @@ function failedEdit(claim, list) {
         return { verdict: 'contradicted', evidence: tried.slice(-2).map(said), why: `It names ${named}, and every edit of it in this turn failed: ${tried.at(-1).text}.` };
     }
     // "Updated the handler to retry" when no edit in the turn went through and no command changed anything.
-    if (!claim.improved && !claim.beats && edits.every((i) => i.ok === false) && !list.some((i) => i.cmd && i.change && i.ok !== false) && CHANGE_CLAIM.test(claim.part ?? sentence)) {
+    // "Fixed the hang" claims a change as much as "updated the handler" does.
+    const changed = list.some((i) => (i.cmd && i.change && i.ok !== false) || ((i.apply || i.kind === 'deploy') && i.ok !== false));
+    if (!claim.improved && !claim.beats && edits.every((i) => i.ok === false) && !changed && (claim.kind === 'fixed' || CHANGE_CLAIM.test(claim.part ?? sentence))) {
         return { verdict: 'contradicted', evidence: edits.slice(-2).map(said), why: `Every edit in this turn failed, and no command changed a file: ${edits.at(-1).text}.` };
+    }
+    return undefined;
+}
+
+/**
+ * "Removed every use of `moment`", "got rid of all `console.log` calls": the removal of each use of one name, which
+ * the name after "use of" or a name that reads as code ("console.log", "getUser") gives.
+ */
+const REMOVED_ALL = /\b(?:removed|deleted|dropped|stripped|eliminated|purged|replaced|got\s+rid\s+of|ripped\s+out|cleaned\s+out)\s+(?:every|all|each|any)\s+(?:(?:the\s+)?(?:remaining\s+|last\s+|other\s+|old\s+)?(?:uses?|usages?|references?|imports?|calls?|occurrences?|instances?|mentions?|traces?)\s+(?:of|to)\s+(?:the\s+)?([A-Za-z_@$][\w.@\/$-]*)|(?:the\s+)?([A-Za-z_@$][\w@\/$-]*(?:\.[\w$]+)+|[a-z][a-z0-9]*[A-Z][\w$]*|[A-Za-z$]+_[\w$]+))/;
+/** Files whose lines a search may still find after a removal of code: docs, notes and lock files. */
+const NOT_CODE = /(?:^|\/)(?:[^\/]*\.(?:md|mdx|markdown|txt|rst|adoc|lock)|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|CHANGELOG[^\/]*|README[^\/]*)$/i;
+
+/**
+ * "Removed every use of `moment`" when a search for `moment` after the last
+ * change still found it in code: contradicted, or undefined.
+ */
+function stillFound(claim, list) {
+    if (claim.kind !== 'done') return undefined;
+    // The pattern keeps case to tell code names ("getUser") from words, so the sentence's first word is lowered.
+    const m = REMOVED_ALL.exec(String(claim.part ?? claim.text ?? '').replace(/^\s*[A-Z](?=[a-z])/, (c) => c.toLowerCase()));
+    const name = (m?.[1] ?? m?.[2])?.replace(/[.,;:]+$/, '');
+    if (!name || name.length < 3) return undefined;
+    const lastChange = lastIndex(list, (i) => (i.change || i.kind === 'change') && i.ok !== false);
+    if (lastChange < 0) return undefined;
+    const own = new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`, 'i');
+    for (const i of list.slice(lastChange + 1).reverse()) {
+        if (!i.search || i.search.counted || i.search.hits === 0 || i.ok === false) continue;
+        if (!own.test(i.search.term.replace(/\\[bBwWsS]|[\\^$]/g, ' '))) continue;
+        // The lines it found, by the file each names; lines in docs or lock files are not uses in code.
+        const files = (i.lines ?? []).map((l) => /^([^\s:]+):(?:\d+:)?/.exec(String(l))?.[1]).filter(Boolean);
+        const inCode = files.filter((f) => !NOT_CODE.test(f));
+        if (files.length && inCode.length === 0) continue;
+        return { verdict: 'contradicted', evidence: [said(i)], why: `A search after the last change still finds ${name}${inCode.length ? ` in ${[...new Set(inCode)].slice(0, 2).join(' and ')}` : ''}: ${i.text}.` };
     }
     return undefined;
 }
