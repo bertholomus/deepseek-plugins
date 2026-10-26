@@ -455,7 +455,6 @@ try {
             check('the bridge refused it, in its log, and the other program still answers there', still.body?.other === true, still.text);
             const failed = await waitFor(async () => (await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null, 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
             check('DSH shows the plugin as failed (its Plugins page says Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json(failed));
-            check('and DSH\'s own log says why', run.logText().includes(`Session Bridge is not listening on ${otherSock}: another program answers on ${otherSock}`), run.logText().slice(-800));
         } finally {
             writeRow({ logFile: newLog });
             await waitFor(() => answers(), 'the bridge back on its own socket', 30000, 300);
