@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-session-bridge",
   "version": "0.3.0",
-  "description": "Lets scripts and scheduled jobs on this Mac start, prompt, steer and read DSH sessions, safely retried and never sent twice.",
+  "description": "Lets scripts and scheduled jobs on this Mac start, prompt, steer and read DSH sessions, and retry them safely.",
   "icon": "./icon.svg",
   "license": "MIT",
   "type": "module",

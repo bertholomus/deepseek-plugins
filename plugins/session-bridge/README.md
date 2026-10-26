@@ -108,7 +108,7 @@ A retry with your own `requestId` is safe. If DSH already has that message (`que
 | 413 | A body over `maxBodyBytes`. |
 | 500 | Anything else, such as `session/read-failed`: DSH could not read the session for another reason than "not found", so it may still be there; try again before you make a new one. |
 | 503 | The bridge is stopping. |
-| 504 | DSH did not answer in time, by the bridge's own clock: 20 s to read a session or the list, 60 s to take a prompt. A prompt's 504 carries its `requestId`: DSH may still take it, so ask `GET …/requests/<requestId>` before you send it again (a retry with that id is never sent twice). |
+| 504 | DSH did not answer in time, by the bridge's own clock: 20 s to read a session or the list, 60 s to take a prompt. A prompt's 504 carries its `requestId`: DSH may still take it, so ask `GET …/requests/<requestId>` before you send it again (a retry with that id is not sent again while DSH has it). |
 
 ## Examples
 
