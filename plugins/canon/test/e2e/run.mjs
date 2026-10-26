@@ -67,7 +67,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
-import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, waitFor } from '../../../../test/e2e/harness.mjs';
+import { DshRun, checks, dshBin, dismissNotices, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, waitFor } from '../../../../test/e2e/harness.mjs';
 import { CANON_HEAD, startCanonModel } from './fake-model.mjs';
 
 const bin = dshBin();
@@ -343,7 +343,17 @@ try {
     pw = await findPlaywright();
     if (!pw) check('Playwright is here for the window checks (NO_WINDOW=1 runs without them)', process.env.NO_WINDOW === '1', 'install it: npm i --prefix .e2e/tools playwright-core (or set PLAYWRIGHT_MODULE)');
     const openCanon = async (page) => {
-        await page.getByRole('button', { name: 'Canon', exact: true }).first().click();
+        // DSH's first-run notice can come late on a busy machine and cover the window: put it away and try again.
+        const entry = page.getByRole('button', { name: 'Canon', exact: true }).first();
+        for (let tries = 1; ; tries += 1) {
+            await dismissNotices(page);
+            try {
+                await entry.click({ timeout: 5000 });
+                break;
+            } catch (error) {
+                if (tries >= 4) throw error;
+            }
+        }
         await page.locator('[data-canon-page]').waitFor({ state: 'visible', timeout: 20000 });
     };
     /** A session's chat, opened from its row on Canon's page. */
