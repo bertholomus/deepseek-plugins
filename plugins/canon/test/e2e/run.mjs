@@ -40,13 +40,17 @@
  * - After a restart: a session switched off stays off. Without Session
  *   Watch, the page follows a new recall by itself. A session on Read Only
  *   gets notes but saves no draft.
- * - A wrong setting (a number in quotes in the profile): Canon starts, adds
- *   and writes nothing, its page says which setting and that the value is
- *   text; fixed through the form.
+ * - Two wrong settings (numbers in quotes in the profile): Canon starts,
+ *   adds and writes nothing, its page names both and says the values are
+ *   text. "Save it as 3" saves the first and the focus goes to the line that
+ *   says so; the form marks the other in Canon's words with Save on, and
+ *   after its Save the focus goes to the line that says it was saved.
  * - A vault folder DSH may not read (a copy made unreadable with chmod 000 in
  *   the run's own folder): the page says so and what to do, What happened
  *   notes it, a turn gets nothing; readable again, Read again reads it and
  *   keeps the focus. Its permissions are put back before the folder goes.
+ * - A folder inside the vault DSH may not read: the page names it, What
+ *   happened says it once, and not again after a restart.
  * - Its folder is 700 and its files 600. `enabled: false`: idle, and its
  *   page says so.
  *
@@ -227,6 +231,7 @@ let window;
 let pw;
 /** A copy of the vault made unreadable for one step: its permissions go back before the run's folder is removed. */
 let lockedVault = '';
+let closedFolder = '';
 let draftPath = '';
 let promotedPath = '';
 const canonNow = {};
@@ -690,11 +695,13 @@ try {
     });
 
     // ── A wrong setting, fixed in Plugins ──────────────────────────────
-    await restartWith(rowsWith({ canon: { ...canonNow, maxChars: '900' } }), 'a wrong setting: a number in quotes');
-    await step('a wrong setting (a number in quotes): Canon starts, adds and writes nothing, and says which setting and that the value is text', async () => {
+    await restartWith(rowsWith({ canon: { ...canonNow, maxNotes: '3', maxChars: '900' } }), 'two wrong settings: numbers in quotes');
+    await step('two wrong settings (numbers in quotes): Canon starts, adds and writes nothing, names both and says the values are text; each fix puts the focus on the line that says what was saved', async () => {
         const s = await pageState();
-        check('a value of the wrong type does not stop Canon from starting: its state names the setting, the range, and that the value is text',
-            s.problem?.text === 'Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)' && s.problem?.live === true && s.sessions.length === 0 && s.drafts.length === 0, json(s.problem));
+        const notesText = 'Notes a turn, at most (maxNotes) must be a whole number from 1 to 10, written without quotes (it is “3”, which is text)';
+        const charsText = 'Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)';
+        check('a value of the wrong type does not stop Canon from starting: its state names both settings, their ranges, and that the values are text',
+            s.problem?.text === notesText && s.problem?.live === true && json(s.problem?.also) === json([{ key: 'maxChars', text: charsText }]) && s.sessions.length === 0 && s.drafts.length === 0, json(s.problem));
         await ask('gateway', P.wrong);
         const asked = requestsOf(P.wrong);
         check('while a setting is wrong, a turn gets no block and no capture tool', asked.length >= 1 && freshOf(P.wrong).length === 0 && !asked[0].tools.includes('canon_capture'), json(asked.map((r) => [r.fresh.length, r.tools.includes('canon_capture')])));
@@ -708,18 +715,43 @@ try {
         await problem.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await problem.innerText()).replace(/\n+/g, ' ');
         check('the page says which setting is wrong, what it must be, and where to change it',
-            /Canon is waiting for a setting to be fixed\. Characters a turn, at most \(maxChars\) must be a whole number of characters from 400 to 8000, written without quotes \(it is “900”, which is text\)\. Change it in Canon's settings in Plugins\. Canon starts working again as soon as you save\./.test(words), words);
+            words.includes(`Canon is waiting for a setting to be fixed. ${notesText}. Change it in Canon's settings in Plugins. Canon starts working again as soon as you save.`), words);
+        const also = (await page.locator('[data-canon-also]').innerText()).replace(/\n+/g, ' ');
+        check('and names the other wrong one after it', also === `Also wrong: ${charsText}.`, also);
         const named = (await page.locator('[data-canon-history]').innerText()).replace(/\n+/g, ' ');
         check('What happened still names each session as DSH does', named.includes('Read Only work · Draft not saved') && named.includes('Gateway work · Draft saved: “Gateway keepalive”'), named.slice(0, 500));
         await shot(page, shots, 'setting-light');
         await setDark(page, true);
         await shot(page, shots, 'setting-dark');
         await setDark(page, false);
+        // The first, saved from the page as a number: the line that says so takes the focus.
+        await page.getByRole('button', { name: 'Save it as 3', exact: true }).click();
+        const fixedLine = page.locator('[data-canon-fixed]');
+        await fixedLine.waitFor({ state: 'visible', timeout: 20000 });
+        const fixedWords = await fixedLine.innerText();
+        check('after Save it as 3 the focus goes to the line that says what was saved, and that one more is wrong',
+            fixedWords === 'Saved “Notes a turn, at most” as 3, without quotes. One more setting is still wrong.' && await fixedLine.evaluate((el) => document.activeElement === el), fixedWords);
+        const left = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && r.value.problem?.key === 'maxChars' ? r.value : null;
+        }, 'the first setting to be saved', 20000);
+        check('saved: Canon now waits only on the other', !left.problem.also, json(left.problem));
+        // The other, in the form: marked wrong in Canon's words, with Save on; after Save the focus goes to the line that says so.
         await problem.getByRole('button', { name: 'Open Canon\'s settings' }).click();
         const form = page.locator('[data-suite-settings="dsh-plugin-canon"]');
         await form.waitFor({ state: 'visible', timeout: 20000 });
-        await page.getByLabel('Characters a turn, at most').fill('2000');
+        const chars = page.getByLabel('Characters a turn, at most');
+        const formWords = (await form.innerText()).replace(/\n+/g, ' ');
+        check('the form shows the value Canon would take, marked wrong in Canon\'s words, and Save is on',
+            (await chars.inputValue()) === '900' && (await chars.getAttribute('aria-invalid')) === 'true'
+            && formWords.includes('“900” is text: it is written in quotes in the profile, so Canon waits. Save writes it as the number 900.')
+            && await form.getByRole('button', { name: 'Save' }).isEnabled(), formWords.slice(0, 800));
+        await chars.fill('2000');
         await form.getByRole('button', { name: 'Save' }).click();
+        const savedLine = page.locator('[data-canon-saved]');
+        await savedLine.waitFor({ state: 'visible', timeout: 20000 });
+        check('after the form\'s Save the focus goes to the line that says it was saved',
+            (await savedLine.innerText()) === 'Saved.' && await savedLine.evaluate((el) => document.activeElement === el), await savedLine.innerText());
         const fixed = await waitFor(async () => {
             const r = await api('state');
             return r.ok && !r.value.problem ? r.value : null;
@@ -789,6 +821,27 @@ try {
     await window?.browser?.close().catch(() => {});
     window = undefined;
 
+    // ── A folder inside the vault DSH may not read ─────────────────────
+    closedFolder = join(lockedVault, 'Projects', 'osprey-mobile');
+    mkdirSync(closedFolder, { recursive: true });
+    writeFileSync(join(closedFolder, 'Releases.md'), '# Osprey releases\n\nThe app ships to the app stores on Thursdays.\n');
+    chmodSync(closedFolder, 0o000);
+    await step('a folder inside the vault DSH may not read: the page names it, What happened says it once, and not again after a restart', async () => {
+        const closedWords = '1 folder Canon may not read: Projects/osprey-mobile';
+        const said = (s) => s.history.filter((e) => e.kind === 'vault' && e.state === 'failed' && e.text === closedWords).length;
+        await value('refresh');
+        const s = await pageState();
+        check('the page names it, and What happened says it once', s.vault.state === 'ok' && s.vault.counts?.closed === 1 && json(s.vault.closed) === json(['Projects/osprey-mobile']) && said(s) === 1,
+            json({ vault: s.vault.closed, history: s.history.slice(0, 3) }));
+        await restartWith(rowsWith({ canon: { ...canonNow, vault: lockedVault } }), 'the same vault, a folder in it still closed');
+        const again = await waitFor(async () => {
+            const now = await pageState();
+            return now.vault.state === 'ok' ? now : null;
+        }, 'Canon to read the vault after the restart', 20000, 200);
+        check('after a restart the page still names it, and What happened does not say it again', again.vault.counts?.closed === 1 && said(again) === 1, json(again.history.slice(0, 4)));
+    });
+    try { chmodSync(closedFolder, 0o755); } catch { /* put back in the end too */ }
+
     // ── Files ──────────────────────────────────────────────────────────
     await step('a private folder and files', async () => {
         const dir = join(run.home, 'canon');
@@ -835,6 +888,9 @@ try {
 } finally {
     if (lockedVault) {
         try { chmodSync(lockedVault, 0o755); } catch { /* it may be gone already */ }
+    }
+    if (closedFolder) {
+        try { chmodSync(closedFolder, 0o755); } catch { /* it may be gone already */ }
     }
     await window?.browser?.close().catch(() => {});
     await run.stop();

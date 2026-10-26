@@ -501,6 +501,24 @@ test('the page: a number or true/false in quotes is saved without them through D
     button(switchPage.tree, 'Save it as false').props.onClick();
     await settle(10);
     assert.deepEqual(saved, [['recall', false]]);
+    // Two in quotes: the first saved, the page still waits on the other, says what was saved and puts the focus there.
+    const { react: r3, mount: m3 } = statefulReact();
+    const third = loadClient(CLIENT, { react: r3 }).client.internals;
+    const other = { key: 'maxChars', text: 'Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000, written without quotes (it is “900”, which is text)', live: true, unquoted: 900 };
+    let two = { ...PAGE_STATE, problem: { ...problem, also: [{ key: 'maxChars', text: other.text }] } };
+    connect(third.kit, { state: () => two });
+    third.views.settings = { set: async () => { two = { ...PAGE_STATE, problem: other }; return true; } };
+    const twoPage = m3(third.CanonPage, {});
+    t.after(() => { twoPage.unmount(); third.kit.setConnection(undefined); third.views.settings = undefined; });
+    await settle(5);
+    assert.match(textIn(twoPage.tree), /Also wrong:Characters a turn, at most \(maxChars\)/);
+    button(twoPage.tree, 'Save it as 3').props.onClick();
+    await settle(20);
+    const kept = withAttr(twoPage.tree, 'data-canon-fixed')[0];
+    assert.equal(textIn(kept), 'Saved “Notes a turn, at most” as 3, without quotes. One more setting is still wrong.');
+    assert.equal(kept.props.tabIndex, -1);
+    assert.equal(kept.props.role, 'status');
+    assert.ok(button(twoPage.tree, 'Save it as 900'), 'the next one is offered');
     // Not offered: a value wrong without quotes too, a setting of the profile only, or a DSH without the call.
     const { QuotedFix } = client.internals;
     views.settings = { set: async () => true };

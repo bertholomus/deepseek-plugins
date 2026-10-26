@@ -1466,7 +1466,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 let ok = false;
                 try { ok = (await form.set(problem.key, problem.unquoted)) === true; } catch { ok = false; }
                 setBusy(false);
-                if (ok) onSaved(`Saved “${title}” as ${value}, without quotes. Canon works again.`);
+                const left = problem.also?.length ?? 0;
+                if (ok) onSaved(`Saved “${title}” as ${value}, without quotes. ${left === 0 ? 'Canon works again.' : `${left === 1 ? 'One more setting is' : `${left} more settings are`} still wrong.`}`);
                 else setFailed(true);
             };
             return h('div', { className: `${P}-fix`, 'data-canon-fix': problem.key },
@@ -1474,6 +1475,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-actions` },
                     h(ui.Button, { variant: 'primary', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void save(), 'data-canon-fix-save': '' }, busy ? 'Saving…' : `Save it as ${value}`)),
                 failed ? h('p', { className: `${P}-said ${P}-error`, role: 'alert' }, 'DSH did not save it. Change it in Canon\'s settings in Plugins instead.') : null);
+        }
+
+        /** What a fix saved, while another setting is still wrong: a status line that takes the focus. */
+        function SaidLine({ text }) {
+            const line = React.useRef(null);
+            React.useEffect(() => {
+                line.current?.focus?.();
+            }, [text]);
+            return h('p', { ref: line, tabIndex: -1, className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, text);
         }
 
         /** The other wrong settings, each in Canon's words, after the first (which the problem above names). */
@@ -1717,13 +1727,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const live = kit.useLive(() => api.read('state'), CHANNELS, { delayMs: 300 });
             const [reading, setReading] = React.useState(false);
             const [readProblem, setReadProblem] = React.useState('');
-            // What the waiting state's fix saved, said on the page it comes back to.
-            const [fixed, setFixed] = React.useState('');
+            // What the waiting state's fix saved, said on the page it comes back to: working again, or waiting on
+            // another wrong setting.
+            const [fixed, setFixed] = React.useState({ text: '', shown: false });
             const data = live.data;
             const problemText = data?.problem?.text;
-            // A new setting problem: what an earlier fix saved is old news.
+            // The first change of the problem after a fix is the fix itself; any later one makes what it saved old news.
             React.useEffect(() => {
-                if (problemText) setFixed('');
+                setFixed((f) => (!f.text ? f : f.shown ? { text: '', shown: false } : { ...f, shown: true }));
             }, [problemText]);
             const down = live.code === 'not-running' || (data === undefined && live.error);
             const onRead = async () => {
@@ -1746,13 +1757,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : data.problem
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined, 'data-canon-header': 'problem' } },
+                                    fixed.text ? h(SaidLine, { key: 'said', text: fixed.text }) : null,
                                     h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem }),
                                     data.problem.also?.length ? h(AlsoWrong, { key: 'also', also: data.problem.also }) : null,
-                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed(text); void live.refresh(); } })),
+                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed({ text, shown: false }); void live.refresh(); } })),
                                 h(HistoryCard, { key: 'history', data, titles }),
                             ]
                             : [
-                                h(HeaderCard, { key: 'head', data, onRead: () => void onRead(), reading, said: fixed }),
+                                h(HeaderCard, { key: 'head', data, onRead: () => void onRead(), reading, said: fixed.text }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
                                 readProblem ? h(kit.ErrorLine, { key: 'read', lead: 'Couldn\'t read the vault again', text: readProblem, onRetry: () => void onRead() }) : null,
                                 ok ? h(TryCard, { key: 'try' }) : null,
