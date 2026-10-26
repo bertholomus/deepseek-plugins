@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 2:59 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 3:06 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -13,7 +13,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Autopilot | being judged (round 5; earlier best 8.5, round 3, ea10517) | f9f84e7 | goal95/autopilot | NOT YET | judge working |
 | Calendar | 8.0 (round 1) | 8b7983c | goal95/calendar | NOT YET | DSH's approval for a chat's change does not say what changes; reminders are stored but never fire |
 | Canon | being judged (round 4; earlier best 8.0) | b98506f | goal95/canon | NOT YET | judge working |
-| Categories | being judged (round 1) | 70977a1 | goal95/categories | NOT YET | judge working |
+| Categories | 8.8 (round 1) | 70977a1 | goal95/categories | NOT YET | UX 8: "Add a workspace" shows two blank menu items; a failed save is announced as done and lost at the next restart |
 | Coordinator | being judged (round 1) | bf391bf | goal95/coordinator | NOT YET | judge working |
 | Decisions | 9.0 (GOAL95 round 1 = round 5) | ad79740 | goal95/decisions | NOT YET | a question with a dot before its "?" shows only the words after the last dot (`askIn` in `shared/host/words.js`) |
 | Discord | 8.0 (round 1) | f2b4d73 | goal95/discord (dsh-plugin-discord) | NOT YET | two safety findings (which sessions get the bot's tools, and its channel limit) in the local scorecard (not committed); after a restart, catch-up can miss a person's message without a word |
