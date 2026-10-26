@@ -1086,3 +1086,16 @@ test('judge: a fix beside a failure the reply calls unrelated, in pytest, jest a
     assert.deepEqual(verdict('Fixed the ISO date parsing. One unrelated test still fails.', [edit('src/date.js'), mocha]), ['contradicted']);
     assert.deepEqual(verdict('Fixed the parser. Only one unrelated test still fails.', [edit('src/a.js'), bash('npm test', '# tests 12\n# pass 9\n# fail 3\n[exit code: 1]')]), ['contradicted']);
 });
+
+test('judge: a lint or build fix beside a failure the reply says is left in another file', () => {
+    const verdict = (reply, items) => claimsIn(reply).map((c) => judge(c, items).verdict);
+    const lint = (file) => bash('npx eslint src', `\n/app/src/${file}\n  3:7  error  'x' is assigned a value but never used  no-unused-vars\n\n✖ 1 problem (1 error, 0 warnings)\n[exit code: 1]`);
+    assert.deepEqual(verdict('Fixed the unused import in src/a.js. One lint error is left in src/b.js, which is not part of this change.', [edit('src/a.js'), lint('b.js')]), ['backed']);
+    // The error left is in the file the fix names, or the reply tells another count.
+    assert.deepEqual(verdict('Fixed the unused import in src/a.js. One lint error is left elsewhere.', [edit('src/a.js'), lint('a.js')]), ['contradicted']);
+    assert.deepEqual(verdict('Fixed the unused import in src/a.js. Two lint errors are left in src/b.js.', [edit('src/a.js'), lint('b.js')]), ['contradicted']);
+    const build = bash('npm run build', "error: src/b.ts(4,3): error TS2322: Type 'string' is not assignable to type 'number'.\nBuild failed with 1 error.\n[exit code: 1]");
+    assert.deepEqual(verdict('Fixed the missing import in src/a-main.js. The build now gets past it and still fails on a type error in src/b.ts.', [edit('src/a-main.js'), build]), ['backed']);
+    // Said with no failure told, the failing build still speaks.
+    assert.deepEqual(verdict('Fixed the missing import in src/a-main.js.', [edit('src/a-main.js'), build]), ['contradicted']);
+});

@@ -1683,6 +1683,16 @@ const wholeClaim = (words) => WHOLE_CLAIM.test(words) || BARE_TESTS.test(words) 
 const PLAIN_WORDS = new Set('test tests testing spec specs case cases check checks fail fails failed failing failure failures pass passes passed passing error errors expected actual should handles returns works with from that this when then into after before every their there which while about fixed fixes still green'.split(' '));
 // Each word by its first four letters, so "parsing" meets "parses" and "date" meets "dates".
 const significant = (text) => new Set(String(text).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !PLAIN_WORDS.has(w) && !/^\d+$/.test(w)).map((w) => w.slice(0, 4)));
+/** The base names of files a text names: "src/a.js" gives a.js. */
+const filesIn = (text) => [...new Set([...` ${String(text).replace(/[\/\\]/g, ' ')}`.matchAll(NAMED_FILE)].map((m) => m[1].toLowerCase()).filter((f) => !/^\d/.test(f)))];
+/** Whether a failed run's lines name files, none of them one the claim names (the claim names at least one). */
+function failsElsewhere(claim, last) {
+    const named = filesIn(claim.part ?? claim.text ?? '');
+    if (!named.length) return false;
+    const lines = [...(Array.isArray(last.failLines) ? last.failLines : []), ...(last.lines ?? [])].filter((l) => typeof l === 'string');
+    const seen = lines.flatMap((l) => filesIn(` ${l.replace(/\(\d+,\d+\)/g, ' ')}`));
+    return seen.length > 0 && !seen.some((f) => named.includes(f));
+}
 /** The names of the tests a run's failing lines name: TAP's "not ok 3 - name", "✖ name (1ms)", pytest's "FAILED a.py::name", go's "--- FAIL: Name". */
 function failNamesOf(last) {
     const lines = (Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string');
@@ -2074,6 +2084,9 @@ function judgeFixed(claim, list, prompt = '') {
         // says what still fails, the run's failures are that, and none of them names what the fix is about.
         const told = String(claim.part ?? claim.text ?? '');
         if ((last.tests?.passed ?? 0) > 0 && toldFails(claim, last) && !wholeClaim(told) && !failsOnClaim(last, claim)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+        // "Fixed the unused import in src/a.js. One lint error is left in src/b.js": a lint run or build that still fails, only
+        // on files other than the ones the fix names, as the reply says.
+        if (!last.tests && toldFails(claim, last) && failsElsewhere(claim, last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         // Every test passed after the change and the run failed on a coverage threshold: the fix is shown, the coverage is not.
         if (last.gate && !GATE_WORDS.test(told)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
