@@ -29,7 +29,6 @@ independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs
 | Session Watch | 8.5 (round 1) | 2741f21 | goal95/session-watch | NOT YET | deliveries live only in memory, so a note queued before a quit is taken back as not delivered after the restart; *waiting for your answer* reaches listeners late |
 | Wallpaper | 8.4 (round 1) | 29329f7 | goal95/wallpaper (redesign repo) | NOT YET | at the default tint DSH's own text is unreadable over a picture of the other tone, and an opaque band shows behind the glass composer in every open chat |
 
-
 ## Waiting on Albert (MiniMe deploys after his OK; nothing here touched the live DSH)
 
 - **Reasoning Pill** (PASS, d24800a, `goal95/reasoning-pill` in the redesign repo): not merged to that repo's main, which is 101 commits behind `claude/split-plugins`, the branch the live DSH runs.
