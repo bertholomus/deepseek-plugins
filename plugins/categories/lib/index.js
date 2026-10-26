@@ -15,7 +15,7 @@
  */
 import z from '@deepseek-ai/schemastery';
 import { CategoryManager } from './categories.js';
-import { checkConfig, DEFAULTS } from './config.js';
+import { checkConfig } from './config.js';
 import { CategoriesRemote, SERVICE } from './remote.js';
 
 export const name = 'categories';
@@ -30,21 +30,24 @@ export const inject = ['workspaceRegistry'];
  */
 export const Config = z.object({
     /** Master switch. Off: no headers, no chip; the page says so; the store is kept as it is. */
-    enabled: z.any().default(DEFAULTS.enabled),
-    /** The categories and which workspaces each holds. */
-    storeFile: z.any().default(DEFAULTS.storeFile),
+    enabled: z.any().default(true),
+    /** The categories and which workspaces each holds (a path under ~/.dsh is one under DSH_HOME). */
+    storeFile: z.any().default('~/.dsh/categories/categories.json'),
     /** Action log, mode 600: ids and counts only. Empty turns it off. */
-    logFile: z.any().default(DEFAULTS.logFile),
+    logFile: z.any().default('~/.dsh/categories/categories.log'),
     /**
      * The projects plugin's store, read once at this plugin's first start to
      * bring over the categories it kept before this plugin. Never written.
      * Empty skips that move.
      */
-    projectsStoreFile: z.any().default(DEFAULTS.projectsStoreFile),
+    projectsStoreFile: z.any().default('~/.dsh/projects/projects.json'),
 });
 
+/** Each setting's default, as the schema gives it: what a wrong value counts as (config.js). */
+export const DEFAULTS = Object.freeze(Config({}));
+
 export function apply(ctx, raw) {
-    const { config, problems } = checkConfig(raw);
+    const { config, problems } = checkConfig(raw, DEFAULTS);
     const warn = (text) => {
         try { ctx.logger?.warn?.('%s', text); } catch { /* the log never fails the plugin */ }
     };

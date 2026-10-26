@@ -539,7 +539,10 @@ try {
         });
 
         await section('the chip at the top of a chat', async () => {
-            await page.locator('[data-slot="sidebar.workspaces"]').getByText('Chip check', { exact: true }).first().click();
+            // The chat by its title in DSH's list (DSH may have titled it from its reply instead).
+            const list = page.locator('[data-slot="sidebar.workspaces"]');
+            const row = (await list.getByText('Chip check', { exact: true }).count()) ? list.getByText('Chip check', { exact: true }) : list.getByText(/Filed under General/);
+            await row.first().click();
             const chip = page.locator('[data-categories-chip]');
             await chip.first().waitFor({ state: 'visible', timeout: 20000 });
             const words = await chip.first().innerText();

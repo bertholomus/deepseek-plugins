@@ -26,8 +26,8 @@ export function expand(p) {
 
 /** DSH's own data folder: `$DSH_HOME`, else ~/.dsh, as DSH resolves it. */
 export function dshHome() {
-    const env = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
-    return env === '' ? join(homedir(), '.dsh') : resolve(expand(env));
+    const DSH_HOME = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
+    return DSH_HOME === '' ? join(homedir(), '.dsh') : resolve(expand(DSH_HOME));
 }
 
 /**
@@ -36,7 +36,7 @@ export function dshHome() {
  * own categories instead of sharing the main one's.
  */
 export function dataPath(p) {
-    if (p === '~/.dsh' || p.startsWith('~/.dsh/')) return `${dshHome()}${p.slice('~/.dsh'.length)}`;
+    if (p === '~/.dsh' || p.startsWith('~/.dsh/')) return `${dshHome()}${p.slice('~/.dsh'.length)}`; // ~/.dsh is DSH_HOME's default
     return expand(p);
 }
 

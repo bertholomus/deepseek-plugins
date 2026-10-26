@@ -7,13 +7,6 @@
  * @module dsh-plugin-categories/config
  */
 
-export const DEFAULTS = Object.freeze({
-    enabled: true,
-    storeFile: '~/.dsh/categories/categories.json',
-    logFile: '~/.dsh/categories/categories.log',
-    projectsStoreFile: '~/.dsh/projects/projects.json',
-});
-
 /** What each key must be, said in a problem's words. */
 const MUST = Object.freeze({
     enabled: 'true or false',
@@ -35,9 +28,11 @@ const shown = (value) => {
 /**
  * The settings to run with, and what was wrong with the ones given.
  * @param raw - the row's config as DSH hands it (defaults already filled in for missing keys).
- * @returns {{ config: typeof DEFAULTS, problems: Array<{ key: string, text: string }> }}
+ * @param defaults - each key's default, as the plugin's schema gives it (index.js DEFAULTS).
+ * @returns {{ config: object, problems: Array<{ key: string, text: string }> }}
  */
-export function checkConfig(raw) {
+export function checkConfig(raw, defaults) {
+    const DEFAULTS = defaults;
     const given = raw !== null && typeof raw === 'object' ? raw : {};
     const config = { ...DEFAULTS };
     const problems = [];

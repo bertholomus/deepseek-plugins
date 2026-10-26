@@ -153,16 +153,18 @@ test('categories: the window\'s endpoints, as DSH\'s gateway finds them', async 
 });
 
 test('settings: a wrong type never stops the plugin; it counts as its default, the log warns, and the list names it', async () => {
-    const { checkConfig, DEFAULTS } = await import('../lib/config.js');
+    const { checkConfig } = await import('../lib/config.js');
+    const { DEFAULTS } = plugin;
+    assert.deepEqual({ ...DEFAULTS }, { enabled: true, storeFile: '~/.dsh/categories/categories.json', logFile: '~/.dsh/categories/categories.log', projectsStoreFile: '~/.dsh/projects/projects.json' });
     // Each wrong value in words: the key, what it must be, what it was, and what it counts as meanwhile.
-    const { config, problems } = checkConfig({ enabled: 'no', storeFile: 12, logFile: '', projectsStoreFile: ['x'] });
+    const { config, problems } = checkConfig({ enabled: 'no', storeFile: 12, logFile: '', projectsStoreFile: ['x'] }, DEFAULTS);
     assert.deepEqual(config, { ...DEFAULTS, logFile: '' });
     assert.deepEqual(problems.map((p) => p.key), ['enabled', 'storeFile', 'projectsStoreFile']);
     assert.equal(problems[0].text, 'enabled must be true or false, but it is "no"; it counts as true until you change it');
     assert.equal(problems[1].text, 'storeFile must be a file path, but it is 12; ~/.dsh/categories/categories.json is used until you change it');
     assert.equal(problems[2].text, 'projectsStoreFile must be a file path, or empty to skip the move from the projects plugin, but it is ["x"]; ~/.dsh/projects/projects.json is used until you change it');
-    assert.equal(checkConfig({ storeFile: '  ' }).problems[0]?.text, 'storeFile must be a file path, but it is "  "; ~/.dsh/categories/categories.json is used until you change it');
-    assert.deepEqual(checkConfig(undefined), { config: { ...DEFAULTS }, problems: [] });
+    assert.equal(checkConfig({ storeFile: '  ' }, DEFAULTS).problems[0]?.text, 'storeFile must be a file path, but it is "  "; ~/.dsh/categories/categories.json is used until you change it');
+    assert.deepEqual(checkConfig(undefined, DEFAULTS), { config: { ...DEFAULTS }, problems: [] });
     // In a running plugin: it starts and works, DSH's log warns once per setting, and the window's list names them.
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
     const warnings = [];
