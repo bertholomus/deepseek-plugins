@@ -4,14 +4,14 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
-Updated: 2026-10-26 1:52 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 2:23 PM PDT by A (gmail), thread "Goal 9.5 builder"
 Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
 Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
 
 ## Doing now (GOAL95)
 - **1:36 PM PDT: resumed after the usage limit.** The account's limit stopped every builder and judge at about 11:00 AM (resets 1:30 PM). Each is resumed from where it stopped, with new times: judges in progress finish by 3:00 PM, builders hand over by 3:15 PM, fresh judges after that; `review/GOAL95-RESULT.md` holds the interim result and is rewritten as scorecards arrive. Stale slots were reaped; running DSH Test instances: the four judges' and g95-fleet-flip.
 - **Fleet card flip (Albert's priority, FLIP-1026): READY in DSH Test at 9:52 AM** — `goal95/fleet-card-flip` at 4e24735 (on MiniMe's b399db0 and b44d7f8; pushed to tank). DSH Test `g95-fleet-flip` (port 19533) stays running with Fleet and Wallpaper from `~/Projects/goal95/wt/fleet-card-flip` for Albert to look at (Models in the sidebar). Pictures, recordings, frame timing (p99 17.7 ms) and checks: `~/Projects/goal95/status/fleet-work/flip/`. Not deployed: MiniMe deploys after Albert's OK; never switch the live checkout. The branch merges into goal95/fleet and Fleet's GOAL95 work continues (hand-over by 12:45 PM).
-- 16 builder subagents (started 8:47-8:49 AM) audit and fix all 20 plugins, one worktree and DSH Test instance each (`g95-<plugin>-b`); each keeps `~/Projects/goal95/status/<plugin>.md`. Hand-overs due 11:00 AM (Session Bridge, Reasoning Pill) to 12:15 PM (Categories, Hermes Bridge, Wallpaper). A fresh judge (`g95-<plugin>-j<N>`) starts on each hand-over. Handed over so far: Session Bridge b5768b6, Reasoning Pill c868e41, dsh-site 56fa8e9, DNA Studio cdac02e (local repo, no remote), Decisions ad79740, Calendar 8b7983c, Notifications b7836d2; their judges run (round 1, Decisions round 5). Round 1 NOT YET: dsh-site 8.0, Reasoning Pill 7.5, Session Bridge 8.0; a fresh round-2 builder took each over (hand-overs by 12:30 PM), their first builders stay on Hermes Bridge, Wallpaper and Focus (agents in `~/Projects/goal95/agents.txt`).
+- **2:23 PM PDT, where the rounds are** (agents and their ids in `~/Projects/goal95/agents.txt`): judges running: Hermes Bridge r1 717b595, Focus r1 3859b8d, Agent Terminals r4 44ce483, Wallpaper r1 29329f7, dsh-site r2 af7f673 (its last), Discord r1 f2b4d73 (finish 3:30-4:00 PM). Builders still to hand over: Autopilot, Session Watch, Recall, Proof, Canon, Coordinator, Categories, Fleet (Fleet with the flip and MiniMe's b399db0/b44d7f8), and the round-2 builders of Reasoning Pill and Session Bridge; each hand-over gets its judge. Scored, and staying there unless Albert allows a fix round: Calendar 8.0, Decisions 9.0, DNA Studio 8.0, Notifications 8.0 (its round-2 builder was stopped at 1:52 PM before it changed anything); dsh-site, Reasoning Pill, Session Bridge are on their round 2.
 
 ## Done (GOAL95, newest first)
 - 8:49 AM PDT: builders started (briefs `~/Projects/goal95/briefs/{RULES,BUILDER,JUDGE-GOAL95}.md`; agents listed in `~/Projects/goal95/agents.txt`).
@@ -28,7 +28,7 @@ Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19
 
 ## Where things live (GOAL95)
 - Worktrees `~/Projects/goal95/wt/<plugin>`; status `~/Projects/goal95/status/<plugin>.md`; judge folders `~/Projects/goal95/judge/<plugin>-r<N>`; scorecards `review/<plugin>-round-<N>.md` here.
-- Instance names with distinct ports: `~/Projects/goal95/instances.txt`. Memory guard: `~/Projects/goal95/bin/slot take|give|list` (`slots.max` 8 for anyone, plus `slots.judges` 6 judge-only slots 9-14 for owners named `-j<N>`; a slot is taken only while memory is at least 20% free).
+- Instance names with distinct ports: `~/Projects/goal95/instances.txt`. Memory guard: `~/Projects/goal95/bin/slot take|give|list` (`slots.max` 11 for anyone, plus `slots.judges` 6 judge-only slots 12-17 for owners named `-j<N>`; a slot is taken only while memory is at least 20% free; slots older than 150 min are reaped).
 
 ## Gotchas (GOAL95)
 - Never capture the owner's screen (RULES.md): Notifications' judge took one full-screen shot at 10:49 AM, which showed private windows (deleted) and left a macOS screen-recording prompt for the owner.

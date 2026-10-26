@@ -122,3 +122,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 2:10 PM PDT: Agent Terminals handed over at 44ce483 (gh; npm test 853 from a clean copy, 849 pass, 0 fail; real-DSH 148/148 on each of three builds); its round-4 judge started (g95-agent-terminals-j1, stand-in agent programs only). Live pid 43210 unchanged.
 - 2026-10-26 2:12 PM PDT: Wallpaper handed over at 29329f7 (tank; npm test host 15/15, client 21/21; real-DSH 66/66 on each of three builds); its round-1 judge started (g95-wallpaper-j1b). Live pid 43210 unchanged.
 - 2026-10-26 2:16 PM PDT: dsh-site round 2 handed over at af7f673 (gh; unit 71/71, real-DSH 89/89 on each of three builds from a clean copy of 5a3edbb, the same code); its round-2 judge (the last) started. Live pid 43210 unchanged.
+- 2026-10-26 2:23 PM PDT: Discord builder handed over f2b4d73 (goal95/discord, pushed); its round-1 judge started (finish by 4:00 PM). Judge slots 5 -> 6 (memory 43% free).
