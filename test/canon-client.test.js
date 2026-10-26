@@ -508,6 +508,171 @@ test('the page: a number or true/false in quotes is saved without them through D
     assert.equal(QuotedFix({ problem, onSaved: () => {} }), null);
 });
 
+test('the page: a note with a line addressed to agents is named; the try-out says the line was left out; a fix saved takes the focus; the header is one region "Canon"', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { kit, HeaderCard, TryResult } = client.internals;
+    kit.setNavigation({ openBundle: () => {} });
+    t.after(() => kit.setNavigation(undefined));
+    const vault = { ...VAULT, counts: { ...VAULT.counts, closed: 1, addressed: 1 }, closed: ['Projects/osprey-mobile'], addressed: ['Misc/Lantern mascot.md'] };
+    const head = mount(HeaderCard, { data: { ...PAGE_STATE, vault }, onRead: () => {}, reading: false, said: 'Saved “Notes a turn, at most” as 3, without quotes. Canon works again.' });
+    t.after(() => head.unmount());
+    assert.equal(textIn(withAttr(head.tree, 'data-canon-addressed')[0]), '1 note has a line addressed to agents, left out of turns: Misc/Lantern mascot.md.');
+    // A folder it may not read: a warning, first.
+    const closed = withAttr(head.tree, 'data-canon-closed')[0];
+    assert.match(closed.props.className, /\bdshcn-warn\b/);
+    assert.match(textIn(closed), /^1 folder Canon may not read: Projects\/osprey-mobile\./);
+    assert.ok(client.internals.CSS.includes('.dshcn-warn{color:var(--dshcn-warn)}'));
+    // The page is the region "Canon"; its first card is not a second one.
+    const card = elementsOf(head.tree).find((e) => e.type === 'section');
+    assert.equal(card.props['aria-label'], undefined);
+    // What a fix saved: a status line that takes the focus each time it says something new.
+    const said = withAttr(head.tree, 'data-canon-fixed')[0];
+    assert.equal(said.props.role, 'status');
+    assert.equal(said.props.tabIndex, -1);
+    const focused = [];
+    said.props.ref.current = { focus: () => focused.push('said') };
+    head.update({ said: 'Saved “Add notes to turns” as false, without quotes. Canon works again.' });
+    assert.deepEqual(focused, ['said']);
+    // An empty folder: says so, and asks whether it is the vault.
+    const empty = mount(HeaderCard, { data: { ...PAGE_STATE, vault: { ...VAULT, counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 } } }, onRead: () => {}, reading: false });
+    t.after(() => empty.unmount());
+    const none = withAttr(empty.tree, 'data-canon-empty')[0];
+    assert.match(textIn(none), /^This folder has no notes: no Markdown \(\.md\) file in it or the folders inside it\. Is it your vault\? If not, change “Vault folder” in Canon's settings\.Open Canon's settings$/);
+    assert.equal(withAttr(head.tree, 'data-canon-empty').length, 0, 'a vault with notes says nothing of the kind');
+    // A vault it cannot read: Read again and Open Canon's settings are buttons, not ghosts.
+    const error = mount(HeaderCard, { data: { ...PAGE_STATE, vault: { ...VAULT, state: 'error', error: { text: 'Canon may not read ~/Canon.' } } }, onRead: () => {}, reading: false });
+    t.after(() => error.unmount());
+    assert.deepEqual(buttons(withAttr(error.tree, 'data-canon-vault')[0]).map((b) => [textIn(b), b.props.variant]), [['Read again', 'outline'], ['Open Canon\'s settings', 'outline']]);
+    assert.equal(button(head.tree, 'Read again').props.variant, 'ghost', 'beside a vault that reads, it stays quiet');
+    // The try-out: under the note, that a line addressed to agents was left out of its quote.
+    const tried = TryResult({ result: { ...TRY, results: [...TRY.results, { path: 'Misc/Lantern mascot.md', title: 'Lantern mascot', score: 9, matched: ['mascot'], words: ['mascot'], folder: '', passage: 'Lantern mascot: The lantern team\'s mascot is Wick.', leftOut: 1 }] } });
+    const rows = withAttr(tried, 'data-canon-result');
+    assert.equal(withAttr(rows[0], 'data-canon-left-out').length, 0);
+    assert.equal(textIn(withAttr(rows[1], 'data-canon-left-out')[0]), 'A line of this note is addressed to agents, so it is left out: Canon never quotes it into a turn.');
+});
+
+/**
+ * DSH's settings form model as DSH has it (dsh-web-frontend's SettingsFormModel): edits are staged as
+ * typed, Save writes what differs from the value shown, Save is on only for a change that parses.
+ */
+class FormModel {
+    constructor(scope, specs) { this.scope = scope; this.specs = new Map(specs.map((s) => [s.field, s])); this.staged = new Map(); this.listeners = new Set(); this.saving = false; this.failed = false; scope.subscribe(() => this.publish()); }
+    bind(project) { let value = project(); const subs = new Set(); this.listeners.add(() => { value = project(); for (const fn of subs) fn(); }); return { subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); }, getSnapshot: () => value }; }
+    shell() { const plan = this.plan(); const snap = this.scope.getSnapshot(); return { available: snap.status === 'ready', writable: snap.writable, dirty: plan.length > 0, invalid: plan.some((p) => p.op === undefined), saving: this.saving, failed: this.failed }; }
+    field(name) {
+        const spec = this.specs.get(name);
+        const staged = this.staged.get(name);
+        if (staged === undefined) return { text: spec.format(this.scope.getSnapshot().value?.[name]), overridden: Object.hasOwn(this.scope.getSnapshot().user ?? {}, name), invalid: false };
+        const parsed = staged.clear ? { kind: 'clear' } : spec.parse(staged.text);
+        return { text: staged.text, overridden: parsed?.kind === 'set', invalid: parsed === undefined };
+    }
+    actions() { return { edit: (name, text) => { this.staged.set(name, { text, clear: false }); this.publish(); }, resetField: (name) => { this.staged.set(name, { text: this.specs.get(name).format(this.scope.getSnapshot().base?.[name]), clear: true }); this.publish(); }, save: () => this.save(), discard: () => { this.staged.clear(); this.publish(); } }; }
+    plan() {
+        const out = [];
+        for (const [name, staged] of this.staged) {
+            const spec = this.specs.get(name);
+            if (staged.clear) { out.push({ op: { op: 'unset', path: [name] } }); continue; }
+            if (staged.text === spec.format(this.scope.getSnapshot().value?.[name])) continue;
+            const parsed = spec.parse(staged.text);
+            out.push(parsed === undefined ? {} : { op: parsed.kind === 'clear' ? { op: 'unset', path: [name] } : { op: 'set', path: [name], value: parsed.value } });
+        }
+        return out;
+    }
+    async save() {
+        const plan = this.plan();
+        if (!plan.length || this.saving || plan.some((p) => p.op === undefined)) return;
+        this.saving = true; this.publish();
+        const ok = await this.scope.mutate(plan.map((p) => p.op));
+        if (ok) this.staged.clear();
+        this.failed = !ok; this.saving = false; this.publish();
+    }
+    dispose() {}
+    publish() { for (const fn of this.listeners) fn(); }
+}
+
+test('settings in Plugins: a number or true/false in quotes is marked wrong in Canon\'s words, Save writes it as a number or a switch, and the focus goes to a line that says it was saved', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react, ui: { SettingsFormModel: FormModel, SettingsForm: (props) => ({ type: 'SettingsForm', props, children: props.children }) } });
+    const { quotedSetting, SETTINGS: FIELDS } = client.internals;
+    const field = (name) => FIELDS.find((f) => f.name === name);
+    assert.deepEqual(plain(quotedSetting(field('maxNotes'), '3')), { raw: '3', text: '3', words: '“3” is text: it is written in quotes in the profile, so Canon waits. Save writes it as the number 3.' });
+    assert.equal(quotedSetting(field('recall'), 'False').words, '“False” is text: it is written in quotes in the profile, so Canon waits. Save writes it as off, a switch.');
+    for (const [name, value] of [['maxNotes', '30'], ['maxNotes', 3], ['maxNotes', 'three'], ['recall', 'yes'], ['recall', true], ['vault', '3']]) assert.equal(quotedSetting(field(name), value), undefined, `${name} ${value}`);
+    // The profile as DSH serves it: maxNotes and recall in quotes, maxChars written as its default.
+    const writes = [];
+    let accept = false;
+    const listeners = new Set();
+    let snap = { status: 'ready', writable: true, value: { ...DEFAULTS, maxNotes: '3', recall: 'false', maxChars: 2000 }, base: { ...DEFAULTS }, user: { maxNotes: '3', recall: 'false', maxChars: 2000 } };
+    const configScope = {
+        getSnapshot: () => snap,
+        subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
+        mutate: async (ops) => {
+            writes.push(plain(ops));
+            if (!accept) return false;
+            const value = { ...snap.value };
+            for (const op of ops) value[op.path[0]] = op.value;
+            snap = { ...snap, value, user: { ...snap.user, ...Object.fromEntries(ops.map((op) => [op.path[0], op.value])) } };
+            for (const fn of listeners) fn();
+            return true;
+        },
+    };
+    const registered = [];
+    const effects = [];
+    const scope = {
+        configForms: { get: () => configScope, whileServed: (_entries, fn) => fn() },
+        slots: { inject: (_name, fn) => fn(), register: (spec, component) => { registered.push({ spec, component }); return () => {}; } },
+        effect: (fn) => { effects.push(fn); },
+        inject: (names, fn) => { if (names[0] === 'configForms') fn(scope); },
+    };
+    client.apply(scope);
+    for (const fn of effects) fn();
+    const View = registered.find((item) => item.spec.name === 'plugins.bundle.config').component;
+    const form = mount(View, {});
+    t.after(() => form.unmount());
+    form.update({});
+    const row = (name) => withAttr(form.tree, 'data-suite-setting').find((e) => e.props['data-suite-setting'] === name);
+    const notes = elementsOf(row('maxNotes')).find((e) => e.type === 'SettingsValueField');
+    assert.equal(notes.props.text, '3', 'the value Canon would take');
+    assert.equal(notes.props.invalid, true);
+    assert.equal(notes.props.invalidLabel, '“3” is text: it is written in quotes in the profile, so Canon waits. Save writes it as the number 3.');
+    assert.equal(elementsOf(row('recall')).find((e) => e.type === 'Switch').props.checked, false);
+    assert.match(textIn(row('recall')), /“false” is text: it is written in quotes in the profile, so Canon waits\. Save writes it as off, a switch\./);
+    // Written as its default: neither "Changed" nor Use the default.
+    const chars = elementsOf(row('maxChars')).find((e) => e.type === 'SettingsValueField');
+    assert.equal(chars.props.overridden, false);
+    // Save is on, and writes numbers and switches.
+    const footer = elementsOf(form.tree).find((e) => e.type === 'SettingsForm');
+    assert.equal(footer.props.state.dirty, true);
+    assert.equal(footer.props.state.invalid, false);
+    footer.props.onSave();
+    await settle(5);
+    form.update({});
+    assert.deepEqual(writes[0].map((op) => [op.path[0], op.value]).sort(), [['maxNotes', 3], ['recall', false]]);
+    assert.equal(withAttr(form.tree, 'data-canon-saved').length, 0, 'DSH did not take it: DSH\'s form says so beside Save, which keeps the focus');
+    // DSH takes it: the line says so and takes the focus.
+    accept = true;
+    const line = elementsOf(form.tree).find((e) => e.type === 'p' && e.props.role === 'status' && e.props.tabIndex === -1);
+    const focused = [];
+    line.props.ref.current = { focus: () => focused.push('saved') };
+    elementsOf(form.tree).find((e) => e.type === 'SettingsForm').props.onSave();
+    await settle(5);
+    form.update({});
+    assert.equal(textIn(withAttr(form.tree, 'data-canon-saved')[0]), 'Saved.');
+    assert.deepEqual(focused, ['saved']);
+    assert.equal(snap.value.maxNotes, 3);
+    assert.equal(snap.value.recall, false);
+    // Saved: nothing in quotes is left, so nothing is marked.
+    assert.equal(withAttr(form.tree, 'data-suite-invalid').length, 0);
+    assert.equal(elementsOf(row('maxNotes')).find((e) => e.type === 'SettingsValueField').props.text, '3');
+    // A new change: the old line goes.
+    elementsOf(row('maxNotes')).find((e) => e.type === 'SettingsValueField').props.onEdit('4');
+    form.update({});
+    assert.equal(withAttr(form.tree, 'data-canon-saved').length, 0);
+    // Use the default on a switch is drawn as DSH draws it on a typed field.
+    assert.ok(client.internals.CSS.some((rule) => rule.startsWith('.dshcn-settings .dshcn-set-reset{') && rule.includes('color:var(--dsw-alias-label-secondary)') && rule.includes('text-decoration:none')));
+});
+
 test('a draft from a session DSH no longer has names it in words, with no link to open', (t) => {
     const { react, mount } = statefulReact();
     const { client } = loadClient(CLIENT, { react });

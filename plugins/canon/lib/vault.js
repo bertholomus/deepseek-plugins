@@ -195,18 +195,24 @@ export class Vault {
     status() {
         const where = this.where();
         const own = this.state.state === 'unset' ? !where.vault : this.state.vault === where.vault;
-        const counts = { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 };
+        const counts = { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0, addressed: 0 };
+        const addressed = [];
         if (own) {
             Object.assign(counts, { notes: this.files.size, active: this.index.size, drafts: this.draftsByPath.size, closed: this.state.closedCount ?? 0 });
-            for (const f of this.files.values()) {
+            for (const [rel, f] of this.files) {
                 if (f.kind === 'other') counts.other += 1;
                 else if (f.kind === 'unreadable') counts.unreadable += 1;
+                else if (f.addressed) addressed.push(rel);
             }
+            counts.addressed = addressed.length;
+            addressed.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
         }
         return {
             ...(own ? this.state : { state: 'reading' }),
             // The folders inside the vault it may not list, by their vault paths (the first few).
             closed: own ? this.state.closed ?? [] : [],
+            // The active notes with a line addressed to agents, which turns leave out (the first few).
+            addressed: addressed.slice(0, MAX_CLOSED_NAMED),
             path: where.vault,
             display: displayPath(where.vault, this.home),
             draftsFolder: where.draftsFolder,
@@ -342,7 +348,8 @@ export class Vault {
             const note = noteOf(file.rel, text);
             if (note.active) {
                 this.index.add(note, file);
-                this.files.set(file.rel, { mtimeMs: file.mtimeMs, size: file.size, kind: 'note' });
+                const addressed = addressedLines(note.body);
+                this.files.set(file.rel, { mtimeMs: file.mtimeMs, size: file.size, kind: 'note', ...(addressed ? { addressed } : {}) });
             } else {
                 this.index.remove(file.rel);
                 this.files.set(file.rel, { mtimeMs: file.mtimeMs, size: file.size, kind: 'other' });
@@ -414,12 +421,19 @@ export class Vault {
         return { ...this.index.search(prompt, { folder: keys, limit }), folder: keys };
     }
 
+    /** How many lines of an active note are addressed to agents (0 when none, or not an active note). */
+    addressedIn(rel) {
+        const f = this.files.get(rel);
+        return f?.kind === 'note' ? f.addressed ?? 0 : 0;
+    }
+
     /**
      * The passage of a note that best fits the prompt's terms, read fresh
-     * from the file: its best paragraph (and the next, when there is room),
-     * under the heading it sits in; the note's start when no paragraph has
-     * a prompt word. At most `budget` characters; undefined when the note
-     * cannot be read or is no longer active.
+     * from the file: its best paragraph (and the next, when it holds the
+     * prompt's words too and there is room), under the heading it sits in;
+     * the note's start when no paragraph has a prompt word. Lines addressed
+     * to agents are never in it. At most `budget` characters; undefined
+     * when the note cannot be read or is no longer active.
      * @param {string} rel - the note's vault path.
      * @param {string[]} queryTerms
      * @param {number} budget
@@ -492,23 +506,58 @@ export function cut(text, max) {
 export function bestPassage(body, queryTerms, budget) {
     const about = queryTerms.filter((t) => !EVERYDAY.has(t));
     const wanted = new Set(about.length ? about : queryTerms);
-    const parts = paragraphs(body);
+    // A paragraph keeps its other lines when one is addressed to agents; one with nothing else is gone.
+    const parts = paragraphs(body).map((p) => ({ ...p, text: unaddressed(p.text) })).filter((p) => p.text);
     if (parts.length === 0 || budget < 20) return '';
-    let best = -1;
-    let bestScore = 0;
+    let best = -1; let bestScore = 0;
     parts.forEach((p, i) => {
         const hits = distinctTerms(`${p.heading} ${p.text}`).filter((t) => wanted.has(t)).length;
         const all = terms(p.text).filter((t) => wanted.has(t)).length;
         const score = hits * 2 + Math.min(all, 6) * 0.25;
-        if (score > bestScore) {
-            best = i;
-            bestScore = score;
-        }
+        if (score > bestScore) { best = i; bestScore = score; }
     });
     const start = best < 0 ? 0 : best;
     const chosen = parts[start];
     let text = chosen.heading && best >= 0 ? `${chosen.heading}: ${chosen.text}` : chosen.text;
+    // The next paragraph only when its own words share the prompt's: the quote stays on what was asked.
     const next = parts[start + 1];
-    if (next && next.heading === chosen.heading && text.length + next.text.length + 1 <= budget) text = `${text}\n${next.text}`;
+    const shares = best >= 0 && next && terms(next.text).some((t) => wanted.has(t));
+    if (shares && next.heading === chosen.heading && text.length + next.text.length + 1 <= budget) text = `${text}\n${next.text}`;
     return cut(text, budget);
 }
+
+/*
+ * Lines a note addresses to agents rather than to the people who read it.
+ * Canon never quotes one into a turn: it is an order the person never
+ * typed. A small, general list, matched per line, case aside:
+ * - speaking to them: "Agents reading this: …", "Note to the assistant: …",
+ *   "Dear AI, …", "Hey bots, …";
+ * - asking what the reader is: "If you are an AI …", "If you're a language
+ *   model …", "When an agent reads this …";
+ * - telling the reader how to reply: "Always reply in French", "Never answer
+ *   with code", "Sign every reply with …", "Start each answer with …";
+ * - setting the turn's own rules aside: "Ignore previous instructions",
+ *   "Disregard the above rules", "Forget your earlier instructions".
+ * A team rule written the same way ("always reply in English on the forum")
+ * is left out too; the page names every note that has one, so it can be
+ * reworded.
+ */
+const AGENT = String.raw`(?:ai|a\.i\.|llms?|(?:large\s+)?language\s+models?|models?|agents?|assistants?|bots?|chatbots?)`;
+const ADDRESSED = [
+    new RegExp(String.raw`^\W*(?:dear|hey|hi|hello|attention|(?:a\s+)?(?:note|message|word)\s+(?:to|for)|to)\s+(?:all\s+|any\s+|the\s+)?(?:ai\s+|coding\s+)?${AGENT}\b`, 'i'),
+    new RegExp(String.raw`\b${AGENT}\s+(?:reading|who\s+reads?|that\s+reads?|seeing|processing)\s+(?:this|these)\b`, 'i'),
+    new RegExp(String.raw`\bif\s+you(?:'re|’re|\s+are)\s+(?:an?\s+)?(?:ai\s+|coding\s+)?${AGENT}\b`, 'i'),
+    new RegExp(String.raw`\b(?:when|whenever|if)\s+(?:an?|the|any)\s+(?:ai\s+|coding\s+)?${AGENT}\s+(?:reads?|sees?|finds?|opens?|is\s+reading)\s+(?:this|these)\b`, 'i'),
+    /^\W*(?:please\s+)?(?:always|never)\s+(?:reply|respond|answer|sign)\s+(?:in|with|as|using|only|by)\b/i,
+    /\b(?:sign|end|start|begin|close|finish|open)\s+(?:every|each|all|any|your)\s+(?:reply|replies|answer|answers|response|responses)\b/i,
+    /\b(?:ignore|disregard|forget|override)\s+(?:all\s+|any\s+)?(?:of\s+)?(?:the\s+|your\s+)?(?:previous|prior|earlier|above|preceding|original|system|other)\s+(?:instructions?|rules|prompts?|directions|guidelines)\b/i,
+];
+
+/** Whether a line is addressed to agents (the list above). */
+export const addressedToAgents = (line) => ADDRESSED.some((re) => re.test(String(line ?? '')));
+
+/** A text without its lines addressed to agents. */
+export const unaddressed = (text) => String(text ?? '').split(/\r?\n/).filter((line) => !addressedToAgents(line)).join('\n').trim();
+
+/** How many of a body's lines are addressed to agents. */
+export const addressedLines = (body) => String(body ?? '').split(/\r?\n/).filter(addressedToAgents).length;

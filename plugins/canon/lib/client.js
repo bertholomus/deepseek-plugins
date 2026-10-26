@@ -1052,6 +1052,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             loading: 'Reading Canon',
             noVault: 'No vault yet',
             noVaultText: 'Set “Vault folder” in Canon\'s settings to your Obsidian vault\'s folder, such as ~/Obsidian/Canon. Canon only reads it unless you allow drafts.',
+            settingsSaved: 'Saved.',
+            emptyVault: 'This folder has no notes: no Markdown (.md) file in it or the folders inside it. Is it your vault? If not, change “Vault folder” in Canon\'s settings.',
             tryTitle: 'Try a prompt',
             trySub: 'See which notes a prompt would get, and why, without sending it.',
             readQuestion: 'Read as a question.',
@@ -1227,6 +1229,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-item[tabindex]:focus{outline:none}`,
             `.${P}-item[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:-2px}`,
             `.${P}-said{margin:8px 0 0;font:var(--dsw-font-xs-13)}`,
+            `.${P}-warn{color:var(--${P}-warn)}`,
+            // Use the default on a switch or a choice drawn as DSH draws it on a typed field: one style in the form.
+            `.${P}-settings .${P}-set-reset{font:inherit;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);text-decoration:none}`,
+            `.${P}-settings .${P}-set-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}`,
             `.${P}-fix{margin-top:10px}`,
             `.${P}-fixed{margin:0 0 8px}`,
             `.${P}-said[tabindex]:focus{outline:none}`,
@@ -1280,6 +1286,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const more = c.closed - names.length;
                 const one = c.closed === 1;
                 out.push(`${plural(c.closed, 'folder')} Canon may not read${names.length ? `: ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}` : ''}. ${one ? 'Its' : 'Their'} notes are never added to turns: give DSH access to ${one ? 'it' : 'them'}, then read the vault again.`);
+            }
+            if (c.addressed > 0) {
+                const names = (v.addressed ?? []).slice(0, 5);
+                const more = c.addressed - names.length;
+                out.push(`${plural(c.addressed, 'note')} ${c.addressed === 1 ? 'has a line' : 'have lines'} addressed to agents, left out of turns${names.length ? `: ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}` : ''}.`);
             }
             if (c.other > 0) out.push(`${plural(c.other, 'note')} with another status (archived, draft and the like) ${c.other === 1 ? 'is' : 'are'} never added.`);
             if (c.unreadable > 0) out.push(`${plural(c.unreadable, 'note')} could not be read.`);
@@ -1380,9 +1391,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function HeaderCard({ data, onRead, reading, said = '' }) {
             const s = data.settings;
             const v = data.vault;
+            // What a fix saved takes the focus: the button pressed is gone with the problem it fixed.
+            const saidRef = React.useRef(null);
+            React.useEffect(() => {
+                if (said) saidRef.current?.focus?.();
+            }, [said]);
             // Read again stays the same button through a read and whatever it finds (an error, then the notes), so
-            // the focus stays on it; pressed again during a read, it changes nothing.
-            const readAgain = h(ui.Button, { key: 'read', variant: 'ghost', size: 'sm', onClick: onRead, 'aria-disabled': reading ? 'true' : undefined, 'data-canon-read': '' }, reading ? 'Reading…' : 'Read again');
+            // the focus stays on it; pressed again during a read, it changes nothing. Beside an error it is one of
+            // the two ways on, drawn as a button.
+            const readAgain = h(ui.Button, { key: 'read', variant: v.state === 'error' ? 'outline' : 'ghost', size: 'sm', onClick: onRead, 'aria-disabled': reading ? 'true' : undefined, 'data-canon-read': '' }, reading ? 'Reading…' : 'Read again');
             let body;
             if (!data.enabled) body = h('p', { className: `${P}-note` }, TEXT.disabled);
             else if (v.state === 'unset' || !s.vault) {
@@ -1397,14 +1414,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         h('span', { key: 'text', className: `${P}-error`, role: 'alert' }, v.error?.text ?? 'Canon cannot read the vault.'),
                         v.readAt ? h('span', { key: 'time' }, 'Tried ', h(kit.TimeText, { at: v.readAt }), '.') : null,
                         readAgain,
-                        h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings', variant: 'ghost' })));
+                        h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings', variant: 'outline' })));
             } else {
                 body = h('div', { className: `${P}-lines` },
                     h('div', { key: 'vault', className: `${P}-line`, 'data-canon-vault': 'ok' },
                         h('span', { key: 'text', className: `${P}-strong` }, vaultText(v)),
                         v.readAt ? h('span', { key: 'time' }, 'Read ', h(kit.TimeText, { at: v.readAt }), '.') : null,
                         readAgain),
-                    ...vaultNotes(v).map((text, i) => h('div', { key: `n${i}`, className: `${P}-line` }, text)),
+                    (v.counts?.notes ?? 0) === 0 && !(v.counts?.closed > 0)
+                        ? h('div', { key: 'empty', className: `${P}-line`, 'data-canon-empty': '' },
+                            h('span', { key: 'text' }, TEXT.emptyVault),
+                            h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings' })) : null,
+                    // Folders it may not read come first, drawn as a warning: notes are missing from turns.
+                    ...vaultNotes(v).map((text, i) => (i === 0 && v.counts?.closed > 0
+                        ? h('div', { key: `n${i}`, className: `${P}-line ${P}-warn`, 'data-canon-closed': '' }, text)
+                        : h('div', { key: `n${i}`, className: `${P}-line`, ...(text.includes('addressed to agents') ? { 'data-canon-addressed': '' } : {}) }, text))),
                     h('div', { key: 'access', className: `${P}-line`, 'data-canon-access': s.access }, writesText(s)),
                     h('div', { key: 'recall', className: `${P}-line`, 'data-canon-recall': s.recall ? 'on' : 'off' }, turnsText(s)));
             }
@@ -1414,8 +1438,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 main: true,
                 sub: TEXT.summary,
                 actions: h(SettingsButton, {}),
-                attrs: { 'data-canon-header': data.enabled ? v.state : 'off' },
-            }, said ? [h('p', { key: 'said', className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, said), h(React.Fragment, { key: 'body' }, body)] : body);
+                // The page is the region "Canon": its first card is not a second one inside it.
+                attrs: { 'aria-label': undefined, 'data-canon-header': data.enabled ? v.state : 'off' },
+            }, said ? [h('p', { key: 'said', ref: saidRef, tabIndex: -1, className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, said), h(React.Fragment, { key: 'body' }, body)] : body);
         }
 
         /**
@@ -1534,7 +1559,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                 h('div', { className: `${P}-title` }, nameOf(r)),
                                 h('div', { className: `${P}-meta ${P}-code` }, r.path),
                                 h('div', { className: `${P}-why` }, whyText(r)),
-                                r.passage ? h('p', { className: `${P}-quote` }, r.passage) : null),
+                                r.passage ? h('p', { className: `${P}-quote` }, r.passage) : null,
+                                r.leftOut ? h('div', { className: `${P}-meta`, 'data-canon-left-out': '' }, `${r.leftOut === 1 ? 'A line' : `${plural(r.leftOut, 'line')}`} of this note ${r.leftOut === 1 ? 'is' : 'are'} addressed to agents, so ${r.leftOut === 1 ? 'it is' : 'they are'} left out: Canon never quotes ${r.leftOut === 1 ? 'it' : 'them'} into a turn.`) : null),
                             r.folder ? h('div', { className: `${P}-item-side` }, h(ui.Tag, { tone: 'info', className: `${P}-tag` }, r.folder === 'repo' ? 'this project' : 'nearby')) : null))),
                         result.block ? h('details', { className: `${P}-details` },
                             h('summary', null, `The exact text the turn gets (${plural(result.block.chars, 'character')})`),
@@ -1678,13 +1704,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const ok = data && data.enabled && !data.problem && data.vault.state === 'ok';
             return h(kit.Page, { label: TEXT.title, attrs: { 'data-canon-page': '' } },
                 down
-                    ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary },
+                    ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined } },
                         h(kit.Trouble, { name: 'Canon', packageName: BUNDLE, code: live.code, text: live.error, onRetry: live.refresh, needsWatch: false }))
                     : data === undefined
-                        ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true }, h(kit.Loading, { text: TEXT.loading }))
+                        ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, attrs: { 'aria-label': undefined } }, h(kit.Loading, { text: TEXT.loading }))
                         : data.problem
                             ? [
-                                h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-canon-header': 'problem' } },
+                                h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined, 'data-canon-header': 'problem' } },
                                     h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem }),
                                     h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed(text); void live.refresh(); } })),
                                 h(HistoryCard, { key: 'history', data, titles }),
@@ -1703,6 +1729,91 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** The panel entry's glyph. */
         function CanonIcon({ size = 16 }) {
             return h('span', { className: `${P}-icon`, 'data-canon-icon': '' }, h(BookGlyph, { size }));
+        }
+
+        /**
+         * A number or true/false written in quotes in the profile that is right without them: the profile's
+         * text, the form's text for what Canon would take ('3', 'on', 'off') and the form's words for it.
+         */
+        function quotedSetting(f, value) {
+            if (typeof value !== 'string' || (f.kind !== 'number' && f.kind !== 'switch')) return undefined;
+            const text = value.trim();
+            let fixed;
+            if (f.kind === 'switch' && /^(?:true|false)$/i.test(text)) fixed = text.toLowerCase() === 'true' ? 'on' : 'off';
+            if (f.kind === 'number' && /^\d+$/.test(text) && Number(text) >= f.min && Number(text) <= f.max) fixed = String(Number(text));
+            if (fixed === undefined) return undefined;
+            return { raw: value, text: fixed, words: `“${value}” is text: it is written in quotes in the profile, so Canon waits. Save writes it as ${f.kind === 'switch' ? `${fixed}, a switch` : `the number ${fixed}`}.` };
+        }
+
+        /**
+         * Canon's settings on its page in Plugins: DSH's own form model and the kit's rows, as the kit's
+         * applySettings draws them (Canon has no secret), and three things more:
+         * - a number or true/false in quotes in the profile is marked wrong in Canon's words, and the value Canon
+         *   would take is put in the form when it opens, so Save is on and writes it as a number or a switch
+         *   (DSH's form drops what it holds when it closes; it is put back the next time it opens);
+         * - "Changed" and Use the default only for a value that is not the default;
+         * - after a Save, the focus goes to a status line that says so: Save is off then, and the focus would be
+         *   lost. A Save DSH refuses is said by DSH's form beside Save, which keeps the focus.
+         */
+        function applyCanonSettings(ctx, { entry, name, summary, fields, note }) {
+            if (typeof ui.SettingsFormModel !== 'function' || typeof ui.SettingsForm !== 'function' || typeof ctx.configForms?.get !== 'function') return;
+            const scope = ctx.configForms.get(entry);
+            const snap = () => scope.getSnapshot?.() ?? {};
+            const quotedNow = (f) => quotedSetting(f, snap().value?.[f.name]);
+            const drawn = fields.map((f) => (f.kind === 'number' || f.kind === 'switch' ? { ...f, get invalid() { return quotedNow(f)?.words; } } : f));
+            const specs = new Map(drawn.map((f) => {
+                const spec = kit.fieldSpec(f);
+                // A value in quotes shows with them until the form holds the fix, so the two differ and Save writes it.
+                return [f.name, { ...spec, format: (v) => (quotedSetting(f, v) ? `“${v}”` : spec.format(v)) }];
+            }));
+            const model = new ui.SettingsFormModel(scope, [...specs.values()], []);
+            const actions = model.actions();
+            const isDefault = (f, text) => text === specs.get(f.name).format(snap().base?.[f.name] ?? f.default);
+            const projection = () => {
+                const out = { ...model.shell() };
+                for (const f of drawn) {
+                    const state = model.field(f.name);
+                    const q = quotedNow(f);
+                    out[f.name] = q && state.text === q.text ? { ...state, invalid: true } : { ...state, overridden: state.overridden && !isDefault(f, state.text) };
+                }
+                return out;
+            };
+            const store = model.bind(projection);
+            const form = { subscribe: (fn) => store.subscribe(fn), getSnapshot: () => store.getSnapshot(), actions, keepers: new Map() };
+            const putFixes = () => {
+                for (const f of drawn) {
+                    const q = quotedNow(f);
+                    if (q && model.field(f.name).text === specs.get(f.name).format(q.raw)) actions.edit(f.name, q.text);
+                }
+            };
+            function CanonSettings() {
+                const [saved, setSaved] = React.useState(false);
+                const line = React.useRef(null);
+                React.useEffect(() => {
+                    putFixes();
+                    return scope.subscribe?.(putFixes);
+                }, []);
+                // A Save that ends well says so; the next change takes the line away.
+                React.useEffect(() => {
+                    let was = form.getSnapshot().saving;
+                    return form.subscribe(() => {
+                        const now = form.getSnapshot();
+                        if (was && !now.saving) setSaved(!now.failed);
+                        else if (now.dirty && !now.saving) setSaved(false);
+                        was = now.saving;
+                    });
+                }, []);
+                React.useEffect(() => {
+                    if (saved) line.current?.focus?.();
+                }, [saved]);
+                return h('div', { className: `${P}-set-wrap` },
+                    h(kit.SettingsBody, { form, name, fields: drawn, note }),
+                    h('p', { ref: line, tabIndex: -1, role: 'status', className: `${P}-said`, 'data-canon-saved': saved ? '' : undefined }, saved ? TEXT.settingsSaved : ''));
+            }
+            const View = (props) => (props?.view === 'summary' ? summary : h(CanonSettings, {}));
+            ctx.effect(() => () => model.dispose(), `${BUNDLE}: settings form`);
+            ctx.effect(() => ctx.configForms.whileServed([entry], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: BUNDLE }, View))), `${BUNDLE}: settings page`);
+            return { model, form, View };
         }
 
         const inject = ['slots'];
@@ -1735,7 +1846,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     saved = scope.configForms?.get?.('canon');
                     views.settings = saved;
                     const fields = settingsFields(() => saved?.getSnapshot?.()?.value?.draftsFolder);
-                    kit.applySettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields, note: SETTINGS_NOTE });
+                    applyCanonSettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields, note: SETTINGS_NOTE });
                 } catch (error) {
                     console?.warn?.('dsh-plugin-canon: settings:', error);
                 }
@@ -1767,7 +1878,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, settingsFields, views, notesOf, sameNotes, writesText, promoteText, turnsText, vaultText, vaultNotes, whyText, missText,
-            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard,
+            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard, quotedSetting, applyCanonSettings,
         };
         return module.exports;
     },

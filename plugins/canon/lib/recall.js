@@ -205,7 +205,7 @@ export class Recall {
             terms,
             folder: keys,
             coding: coding === true,
-            results: entries.filter((e) => shown.has(e.path)).map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, question: e.question === true, passage: e.passage })),
+            results: entries.filter((e) => shown.has(e.path)).map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, question: e.question === true, passage: e.passage, ...(this.vault.addressedIn?.(e.path) ? { leftOut: this.vault.addressedIn(e.path) } : {}) })),
             others: others.map((e) => ({ path: e.path, title: e.title, score: round(e.score), matched: e.matched, words: e.words, folder: e.folder, fits: e.fits, why: e.why, coding: e.coding === true, named: e.named, titled: e.titled, topics: e.topics, plain: e.plain, body: e.body, share: Math.round(e.share * 100) / 100, ...(e.unknown ? { unknown: e.unknown } : {}) })),
             block: block ? { text: block.text, chars: block.chars, summary: block.summary } : null,
         };
