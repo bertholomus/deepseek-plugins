@@ -1,8 +1,8 @@
 /**
  * The plugin's settings, checked in words. Each key takes any value in the
  * profile, so a wrong type (`enabled: "no"`, a number for a path) never
- * stops the plugin: that key counts as its default, DSH's log warns once at
- * start, and the Categories page names it until it is fixed.
+ * stops the plugin: that key counts as its default, the plugin's log warns
+ * once at start, and the Categories page names it until it is fixed.
  *
  * @module dsh-plugin-categories/config
  */

@@ -29,7 +29,7 @@ export class CategoriesRemote {
      * @param {object} ctx - the plugin's context (the binding reads it).
      * @param {object|null} manager - the CategoryManager, or null while the plugin is switched off in its settings.
      * @param {{ problems?: Array<{key: string, text: string}>, warn?: (text: string) => void }} [options]
-     *   problems: the settings that were wrong (config.js), for the page to name; warn: DSH's log.
+     *   problems: the settings that were wrong (config.js), for the page to name; warn: the plugin's log (index.js).
      */
     constructor(ctx, manager, { problems = [], warn = () => {} } = {}) {
         this.ctx = ctx;

@@ -165,7 +165,8 @@ test('settings: a wrong type never stops the plugin; it counts as its default, t
     assert.equal(problems[2].text, 'projectsStoreFile must be a file path, or empty to skip the move from the projects plugin, but it is ["x"]; ~/.dsh/projects/projects.json is used until you change it');
     assert.equal(checkConfig({ storeFile: '  ' }, DEFAULTS).problems[0]?.text, 'storeFile must be a file path, but it is "  "; ~/.dsh/categories/categories.json is used until you change it');
     assert.deepEqual(checkConfig(undefined, DEFAULTS), { config: { ...DEFAULTS }, problems: [] });
-    // In a running plugin: it starts and works, DSH's log warns once per setting, and the window's list names them.
+    // In a running plugin: it starts and works, its log warns once per setting (DSH's logger and its own file), and the
+    // window's list names them.
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
     const warnings = [];
     const host = fakeHost();
@@ -174,6 +175,10 @@ test('settings: a wrong type never stops the plugin; it counts as its default, t
     const remote = host.provided.get('dshPluginCategoriesRemote');
     await tick();
     assert.deepEqual(warnings, ['categories: a setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it']);
+    const logged = readFileSync(join(dir, 'categories', 'categories.log'), 'utf8').split('\n').filter((l) => / warn /.test(l));
+    assert.equal(logged.length, 1, 'DSH 0.2 writes no plugin\'s log lines out, so the warning is in the plugin\'s own log too');
+    assert.match(logged[0], /^\d{4}-\d\d-\d\dT[\d:.]+Z warn a setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it$/);
+    assert.equal(statSync(join(dir, 'categories', 'categories.log')).mode & 0o777, 0o600);
     const list = plain(await remote.list());
     assert.deepEqual(list.problems, [{ key: 'enabled', text: 'enabled must be true or false, but it is "yes"; it counts as true until you change it' }]);
     assert.equal((await remote.createCategory('Lab')).category, 'lab');
@@ -182,8 +187,9 @@ test('settings: a wrong type never stops the plugin; it counts as its default, t
 test('endpoints: a failure that is not a refusal is answered in words and logged, never thrown as it came', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
     const { remote, host } = setup({}, dir);
+    const warn = remote.warn;
     const warnings = [];
-    remote.warn = (text) => warnings.push(text);
+    remote.warn = (text) => { warnings.push(text); warn(text); };
     await tick();
     host.workspaceRegistry.insertBefore = async () => { throw new Error('the registry is closed'); };
     host.workspaceRegistry.add('/work/z');
@@ -200,6 +206,7 @@ test('endpoints: a failure that is not a refusal is answered in words and logged
     assert.equal(listed?.code, 'categories/failed');
     assert.equal(listed?.message, 'Categories could not do that: broken store');
     assert.deepEqual(warnings.at(-1), 'categories: a call failed: broken store');
+    assert.match(readFileSync(join(dir, 'categories', 'categories.log'), 'utf8'), /Z warn a call failed: broken store\n$/, 'and its own log says so');
 });
 
 test('categories: named sets of workspaces in their order, kept in step with DSH\'s own workspace order', async () => {

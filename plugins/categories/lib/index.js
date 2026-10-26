@@ -14,9 +14,10 @@
  * @module dsh-plugin-categories
  */
 import z from '@deepseek-ai/schemastery';
-import { CategoryManager } from './categories.js';
+import { CategoryManager, appendLog } from './categories.js';
 import { checkConfig } from './config.js';
 import { CategoriesRemote, SERVICE } from './remote.js';
+import { dataPath } from './store.js';
 
 export const name = 'categories';
 
@@ -25,8 +26,8 @@ export const inject = ['workspaceRegistry'];
 
 /**
  * Settings. Each takes any value, so a wrong type in the profile never
- * stops the plugin: it counts as its default, DSH's log warns once at
- * start, and the Categories page names it (config.js).
+ * stops the plugin: it counts as its default, the plugin's log warns once
+ * at start, and the Categories page names it (config.js).
  */
 export const Config = z.object({
     /** Master switch. Off: no headers, no chip; the page says so; the store is kept as it is. */
@@ -48,8 +49,13 @@ export const DEFAULTS = Object.freeze(Config({}));
 
 export function apply(ctx, raw) {
     const { config, problems } = checkConfig(raw, DEFAULTS);
+    // Every warning goes to DSH's logger (kept in memory by DSH 0.2) and to the plugin's own log file, where it can be
+    // read; switched off in its settings, the plugin writes nothing, its log included.
+    let logFile = '';
+    try { logFile = config.enabled && config.logFile ? dataPath(config.logFile) : ''; } catch { /* no home to put it in: no log */ }
     const warn = (text) => {
         try { ctx.logger?.warn?.('%s', text); } catch { /* the log never fails the plugin */ }
+        appendLog(logFile, `warn ${String(text).replace(/^categories: /, '')}`);
     };
     for (const problem of problems) warn(`categories: a setting is wrong: ${problem.text}`);
     if (!config.enabled) {
@@ -74,6 +80,6 @@ export function apply(ctx, raw) {
     manager.start().then(() => {
         ctx.logger?.info?.('categories: %d categor%s', Object.keys(manager.store.categories).length, Object.keys(manager.store.categories).length === 1 ? 'y' : 'ies');
     }, (error) => {
-        ctx.logger?.warn?.('categories: startup failed: %s', error?.message ?? error);
+        warn(`categories: startup failed: ${String(error?.message ?? error).slice(0, 300)}`);
     });
 }

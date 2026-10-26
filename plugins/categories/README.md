@@ -15,7 +15,7 @@ Every control the plugin draws shows DSH's focus ring when you reach it with the
 
 ## How it works
 
-The plugin keeps its own store, `~/.dsh/categories/categories.json` (in `$DSH_HOME` when DSH runs with one): each category's name and place in the list, and which category each workspace is in. A workspace is in one category at most. The store and the log beside it are mode 600, in a folder of mode 700. The log holds ids and counts.
+The plugin keeps its own store, `~/.dsh/categories/categories.json` (in `$DSH_HOME` when DSH runs with one): each category's name and place in the list, and which category each workspace is in. A workspace is in one category at most. The store and the log beside it are mode 600, in a folder of mode 700. The log holds ids and counts, and what went wrong in words (a wrong setting, a call that failed, a move that could not be made); DSH 0.2 writes no plugin's log lines out, so this file is where the plugin's warnings can be read.
 
 DSH keeps one workspace order for every window, and its session list draws it. The plugin keeps that order in step with the categories, through the same call DSH's own workspace drag makes: each category's workspaces together, the categories in their order, then the workspaces in none. It moves as few workspaces as it can. A workspace DSH adds later (DSH puts a new one first) goes back among the ones in none the next time the window lists the categories.
 
@@ -73,12 +73,12 @@ Optional, in the profile's `cordis.patch.yml`, addressing the plugin's row by id
 | --- | --- | --- | --- |
 | `enabled` | true or false | `true` | Off: no headers, no chip, no changes to DSH's workspace order; the Categories page says it is off and how to switch it on. The store is kept as it is. |
 | `storeFile` | a file path | `~/.dsh/categories/categories.json` | The categories and their workspaces (mode 600, in a folder of mode 700). |
-| `logFile` | a file path, or empty | `~/.dsh/categories/categories.log` | The action log (ids and counts only). Empty turns it off. |
+| `logFile` | a file path, or empty | `~/.dsh/categories/categories.log` | The plugin's log: ids and counts, and what went wrong in words. Empty turns it off. |
 | `projectsStoreFile` | a file path, or empty | `~/.dsh/projects/projects.json` | The projects plugin's store, read once at the first start (see above). Empty skips that move. |
 
 A path under `~/.dsh` follows `$DSH_HOME`. A change to the row restarts the plugin with it.
 
-**A wrong value never stops the plugin.** A value of the wrong type (`enabled: "no"`, a number for a path, an empty `storeFile`) counts as that key's default, DSH's log warns once at start (`categories: a setting is wrong: enabled must be true or false, but it is "no"; it counts as true until you change it`), and the Categories page names it in a note until it is fixed. Every endpoint answers in words: a change it can't make is refused with the reason, and anything else is answered "Categories could not do that: …" and logged.
+**A wrong value never stops the plugin.** A value of the wrong type (`enabled: "no"`, a number for a path, an empty `storeFile`) counts as that key's default, its log warns once at start (`warn a setting is wrong: enabled must be true or false, but it is "no"; it counts as true until you change it`), and the Categories page names it in a note until it is fixed. Every endpoint answers in words: a change it can't make is refused with the reason, and anything else is answered "Categories could not do that: …" and logged.
 
 ## Switching it off
 

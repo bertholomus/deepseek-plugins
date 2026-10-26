@@ -22,6 +22,26 @@ const NAME_BYTES = 80;
 /** A refusal the user can act on: the window shows its message. */
 export class CategoryError extends Error {}
 
+/**
+ * One line in the plugin's log file: its time, then the line. The folder is
+ * made 700 and the file 600; a log that cannot be written never fails the
+ * plugin. It is the plugin's own because DSH 0.2 writes no plugin's log
+ * lines out (they stay in its logger's memory).
+ * @param {string} file - the log's path ('' for no log).
+ * @param {string} line - one line (line breaks become spaces).
+ * @returns whether the line reached the file.
+ */
+export function appendLog(file, line) {
+    if (!file) return false;
+    try {
+        ensurePrivateDir(dirname(file));
+        appendFileSync(file, `${new Date().toISOString()} ${String(line).replace(/[\r\n]+/g, ' ')}\n`, { mode: 0o600 });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /** A name as the user typed it: one line, cut after the last whole word within 80 bytes, with "…". */
 export function clipName(value) {
     const line = String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -111,15 +131,11 @@ export class CategoryManager {
         this.store = new CategoryStore(config.storeFile);
         this.disposed = false;
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
-        if (this.logFile) {
-            try { ensurePrivateDir(dirname(this.logFile)); } catch {}
-        }
     }
 
-    /** One line in the action log (mode 600), never more than ids and counts. */
+    /** One line in the action log (mode 600): ids and counts, and what went wrong, in words. */
     log(line) {
-        if (!this.logFile) return;
-        try { appendFileSync(this.logFile, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 }); } catch {}
+        appendLog(this.logFile, line);
     }
 
     /** The one-time moves, then DSH's workspace order in step with the categories. */
