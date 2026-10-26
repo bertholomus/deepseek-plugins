@@ -234,6 +234,9 @@ try {
         let fit = await fits(page);
         check('at 760 px nothing scrolls sideways', fit.scroll <= 0 && fit.over.length === 0, json(fit));
         await snap(page, 'chat-760-light');
+        await setDark(page, true);
+        await snap(page, 'chat-760-dark');
+        await setDark(page, false);
         await button.click();
         await menuOf(page).waitFor({ state: 'visible', timeout: 10000 });
         const menuBox = await menuOf(page).boundingBox();
@@ -366,6 +369,9 @@ try {
         }, 'the plugin\'s views, marks and styles to go', 30000, 300).catch(async () => leftovers(page));
         check('switched off, no view, mark or style of it is left in the window', gone.views === 0 && gone.marks === 0 && gone.styles === 0, json(gone));
         await snap(page, 'off-light');
+        await setDark(page, true);
+        await snap(page, 'off-dark');
+        await setDark(page, false);
         const back = await run.api('pluginManager/setBundleEnabled', { name: BUNDLE, enabled: true });
         check('switched on again, DSH reports it applied, with no failure', back.ok === true && !back.value?.error, json(back));
         await trigger(page).waitFor({ state: 'visible', timeout: 45000 });
@@ -377,6 +383,9 @@ try {
         const nested = await page.evaluate((id) => Boolean(document.querySelector(`[data-projects-nests] > [data-projects-nested] [data-row-key="session:${id}"]`)), ids.done);
         check('and the thread rows are nested under their chat again', nested);
         await snap(page, 'on-again-light');
+        await setDark(page, true);
+        await snap(page, 'on-again-dark');
+        await setDark(page, false);
         check('no errors from the plugin in the window', ours().length === 0, ours().join('\n'));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-off-on');
