@@ -1424,18 +1424,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     const shown = store.get().results;
                     if (shown.length === 0 || store.get().loading) return false;
                     const mine = seq;
-                    let answer;
+                    // Running rows first (they are the ones that move), then the rest, 100 to a call as the index takes them.
+                    const ids = [...shown.filter((r) => stateOf(r) === 'running'), ...shown.filter((r) => stateOf(r) !== 'running')].map((r) => `${r.file}.${r.turn}`);
+                    const states = new Map();
                     try {
-                        answer = await read('states', { ids: shown.slice(0, 100).map((r) => `${r.file}.${r.turn}`) });
+                        for (let at = 0; at < ids.length; at += 100) {
+                            const answer = await read('states', { ids: ids.slice(at, at + 100) });
+                            if (kit.isRecord(answer?.states)) for (const [id, s] of Object.entries(answer.states)) states.set(id, s);
+                            // A search that started meanwhile has newer rows of its own.
+                            if (mine !== seq) return false;
+                        }
                     } catch {
                         return false;
                     }
-                    const states = kit.isRecord(answer?.states) ? answer.states : {};
-                    // A search that started meanwhile has newer rows of its own.
-                    if (mine !== seq) return false;
                     let changed = false;
                     const results = store.get().results.map((r) => {
-                        const s = states[`${r.file}.${r.turn}`];
+                        const s = states.get(`${r.file}.${r.turn}`);
                         if (!kit.isRecord(s) || s.gone || typeof s.state !== 'string') return r;
                         const why = s.state && typeof s.why === 'string' ? s.why : undefined;
                         if ((r.state ?? '') === s.state && (r.why ?? undefined) === why) return r;

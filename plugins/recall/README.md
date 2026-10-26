@@ -476,7 +476,7 @@ node --test test/recall*.test.js   # the index, search, the tool, the page's hos
 node scripts/e2e.mjs recall        # real DSH in a throwaway home, on every DSH build here
 ```
 
-**Unit tests** (71: 46 for the host half, 17 for the browser half, 6 for
+**Unit tests** (72: 46 for the host half, 18 for the browser half, 6 for
 the plugin, 2 for the bench). The host tests cover:
 
 - reading DSH session logs, transcripts (undated ones take their file's

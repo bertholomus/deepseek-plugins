@@ -526,6 +526,24 @@ test('shown rows follow their turns: when the index\'s change number moves, rows
     assert.match(textIn(page.tree), /failed/);
 });
 
+test('shown rows follow their turns past the first 100: running rows are asked for first, 100 to a call', async (t) => {
+    const { client } = loadClient(CLIENT, { react: standInReact() });
+    const { finder, kit } = client.internals;
+    const many = Array.from({ length: 130 }, (_, i) => ({ ...TRANSCRIPT, id: `${i + 1}.1`, file: i + 1, turn: 1, state: i === 119 ? 'running' : '', running: i === 119 }));
+    const stopped = (id) => (id === '120.1' ? { state: 'stopped', running: false, why: 'user' } : { state: '', running: false });
+    const calls = connect(kit, { search: { ...FOUND, total: 130, sessions: 130, results: many }, states: ({ ids }) => ({ version: 2, states: Object.fromEntries(ids.map((id) => [id, stopped(id)])) }) });
+    t.after(() => kit.setConnection(undefined));
+    finder.set({ text: 'deploy' });
+    await settle(5);
+    assert.equal(finder.store.get().results.length, 130);
+    assert.equal(await finder.refreshStates(), true);
+    const asked = calls.filter(([name]) => name === 'states').map(([, args]) => args.ids);
+    assert.deepEqual(asked.map((ids) => ids.length), [100, 30]);
+    assert.equal(asked[0][0], '120.1', 'the running row is asked for first');
+    assert.equal(new Set(asked.flat()).size, 130, 'every shown row once');
+    assert.deepEqual([finder.store.get().results[119].state, finder.store.get().results[119].why], ['stopped', 'user']);
+});
+
 test('filters: a long folder is cut in the middle at whole folders, so folders that differ at the end look different; its whole path is its name', () => {
     const { client } = loadClient(CLIENT, { react: standInReact() });
     const { cutPath, folderLabel, finder, kit } = client.internals;
