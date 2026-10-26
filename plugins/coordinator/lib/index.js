@@ -24,7 +24,7 @@ import z from '@deepseek-ai/schemastery';
 import { ProjectManager, COMMAND } from './projects.js';
 import { projectTools } from './tools.js';
 import { coordinatorSessionProjection } from './projection.js';
-import { ProjectsRemote, SERVICE } from './remote.js';
+import { OffRemote, ProjectsRemote, SERVICE } from './remote.js';
 import { DEFAULTS, checkConfig } from './config.js';
 
 export const name = 'coordinator';
@@ -39,15 +39,16 @@ export const inject = ['sessionController', 'workspaceRegistry', 'agents', 'tool
  */
 const live = (schema) => (typeof schema.volatile === 'function' ? schema.volatile() : schema);
 
-// Settings that are not live take any value here: config.js checks them in words, so a wrong one never stops the
-// plugin (DSH would show only "Problem", and every coordinating chat would lose its thread tools).
+// Every setting takes any value here: config.js checks them in words, so a wrong one never stops the plugin (DSH
+// would show only "Problem", and every coordinating chat would lose its thread tools). A live text setting that is
+// not text (a bare number in YAML, say) counts as not set, and the plugin's page says so.
 export const Config = z.object({
     /** Master switch. */
     enabled: z.any().default(DEFAULTS.enabled),
     /** Plugin-wide default model for new threads; empty uses the DSH default model. */
-    threadModel: live(z.string()),
+    threadModel: live(z.any()),
     /** Plugin-wide default effort for new threads; empty uses the model's default. */
-    threadEffort: live(z.string()),
+    threadEffort: live(z.any()),
     /**
      * Which threads may use the user's own tools (guardedTools, and the
      * ones other plugins mark as the user's own). A coordinating chat has
@@ -56,9 +57,9 @@ export const Config = z.object({
      * them, and only the prompts' rule and the thread checks stand between
      * them and the model.
      */
-    yourTools: live(z.string()),
+    yourTools: live(z.any()),
     /** Plugin-wide permission new threads start on: a DSH permission preset (read-only, workspace-write, danger-full-access), or "default" for DSH's default. Empty means workspace-write. */
-    threadPermission: live(z.string()),
+    threadPermission: live(z.any()),
     /** "idle": when a thread ends a turn the coordinator started without a handback, nudge it once, and tell the coordinator when it ends that way again. "off": only explicit handbacks. */
     autoHandback: z.any().default(DEFAULTS.autoHandback),
     /** Handbacks one thread may send per hour, explicit plus the plugin's notes and nudges; stops runaway loops. */
@@ -104,7 +105,13 @@ export function apply(ctx, given) {
     // A wrong setting falls back to its default and is named in DSH's log, the plugin's log and on its page.
     const { config, problems } = checkConfig(given);
     if (!config.enabled) {
+        // Switched off in its settings: no chat coordinates and no thread tool is offered. The window still asks the
+        // plugin, hears it is off, and offers no Coordinate; anything else it asks is answered in words.
         for (const p of problems) ctx.logger.warn('coordinator: %s', p.message);
+        ctx.logger.info('coordinator: switched off (enabled: false); no chat coordinates until it is true again');
+        ctx.inject(['typertGateway'], (scope) => {
+            scope.provide(SERVICE, new OffRemote(scope, problems));
+        });
         return;
     }
     const manager = new ProjectManager({ ctx, config, buildTools: projectTools, problems });

@@ -60,7 +60,7 @@ import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf, isSame, bornOf, CLOCK_SLACK_MS } from './deletes.js';
 import { SHELL_TOOLS, MUTATING_TOOLS, snapshotFolder, diffFolder, Mutations } from './shell.js';
-import { guardedToolsOf, trustedHostsOf } from './config.js';
+import { guardedToolsOf, textSettingProblem, trustedHostsOf } from './config.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
 const SECTION_ORDER = 9500;
@@ -709,6 +709,10 @@ export class ProjectManager {
         const out = [...this.fixedProblems];
         for (const found of [guardedToolsOf(liveValue(this.config.guardedTools)), trustedHostsOf(liveValue(this.config.trustedHosts))]) {
             if (found.problem) out.push(found.problem);
+        }
+        for (const key of ['threadModel', 'threadEffort', 'yourTools', 'threadPermission']) {
+            const found = textSettingProblem(key, liveValue(this.config[key]));
+            if (found) out.push(found);
         }
         const tools = liveValue(this.config.yourTools);
         if (typeof tools === 'string' && tools.trim() !== '' && !['asked', 'always'].includes(tools.trim().toLowerCase())) {

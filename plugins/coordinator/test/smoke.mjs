@@ -4753,3 +4753,52 @@ test('config: a fixed list of hosts or tools may be one name; YAML\'s bare off t
     assert.equal(checks.checkConfig({ autoHandback: false }).config.autoHandback, 'off');
     assert.doesNotMatch(readFileSync(join(dir, 'coordinator.log'), 'utf8'), /config-problem/);
 });
+
+test('config: enabled: false switches the plugin off; no chat coordinates, the window hears it is off, and anything it asks is answered in words', async () => {
+    const host = fakeHost({ gateway: true });
+    const said = [];
+    host.logger = { info: (format, ...args) => said.push(args.reduce((text, arg) => text.replace('%s', String(arg)), format)), warn: (format, ...args) => said.push(args.reduce((text, arg) => text.replace('%s', String(arg)), format)) };
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    assert.doesNotThrow(() => plugin.apply(host, plugin.Config({ enabled: false, maxThreadsPerHour: 'lots', storeFile: join(dir, 'coordinator.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'coordinator.log') })));
+    const chat = openChat(host, CHAT, { title: 'DSH Plugins', folder: '/work/dsh' });
+    await tick();
+    assert.equal(await coordinateIn(host, chat), undefined, 'no /coordinate: DSH answers it as no command');
+    assert.ok(!host.live.get(CHAT)?.ctx?.registered?.has?.('thread_start'), 'the chat gets no thread tools');
+    assert.ok(said.includes('coordinator: switched off (enabled: false); no chat coordinates until it is true again'), said.join(' | '));
+    assert.ok(said.some((line) => line.startsWith('coordinator: maxThreadsPerHour must be')), 'a wrong value is still named');
+    const remote = host.provided.get('dshPluginCoordinatorRemote');
+    // DSH's gateway finds it as it finds the running plugin's: the same binding, the same endpoints.
+    assert.deepEqual([remote.typertRemote.namespace, remote.typertRemote.serviceKey], ['dsh-plugin-coordinator', 'dshPluginCoordinatorRemote']);
+    assert.deepEqual(remoteMethods(remote).map((m) => m.method), [
+        'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'coordinate', 'archive', 'restore',
+    ]);
+    assert.deepEqual(await remote.sessions(), { sessions: {}, off: true });
+    const listed = await remote.list();
+    assert.deepEqual([listed.off, listed.projects, listed.problems.length], [true, [], 1]);
+    assert.deepEqual(await remote.news(), { news: [] });
+    const words = /^The coordinator is switched off: its row in your profile's cordis\.patch\.yml says enabled: false\. Set it to true, or take the line out, to coordinate again\.$/;
+    for (const [name, args] of [['coordinate', [CHAT, true]], ['describe', [CHAT]], ['update', [CHAT, {}]], ['changes', [CHAT, 't1']], ['archive', [CHAT]], ['restore', [CHAT]], ['continueThread', [CHAT, 't1']]]) {
+        await assert.rejects(remote[name](...args), (error) => error.code === 'coordinator/refused' && words.test(error.message), name);
+    }
+    assert.deepEqual(readdirSync(dir), [], 'nothing written: no store, no notes, no log');
+});
+
+test('config: a live text setting of the wrong type (YAML\'s bare 5 or yes) never stops the plugin; it counts as not set, in words', async () => {
+    let host;
+    assert.doesNotThrow(() => { ({ host } = setup({ threadModel: 5, threadEffort: true, yourTools: ['asked'], threadPermission: { preset: 'x' } }, undefined, { gateway: true, presets: true })); });
+    await tick();
+    const coord = coordinatorOf(host);
+    assert.ok(coord.ctx.registered.has('thread_start'), 'the chat still coordinates');
+    const { problems } = await host.provided.get('dshPluginCoordinatorRemote').list();
+    assert.deepEqual(problems, [
+        'threadModel must be text: a model, such as "provider:model" (it is 5), so the plugin uses DSH\'s default model for new threads until you fix it.',
+        'threadEffort must be text (it is true), so the plugin uses the model\'s default effort for new threads until you fix it.',
+        'yourTools must be text (it is ["asked"]), so the plugin uses "asked" until you fix it.',
+        'threadPermission must be text (it is {"preset":"x"}), so the plugin uses "workspace-write" for new threads until you fix it.',
+    ]);
+    // New threads start on what each line says.
+    const described = await host.provided.get('dshPluginCoordinatorRemote').describe(CHAT);
+    assert.deepEqual([described.settings.threadModel.source, described.settings.threadEffort.source], ['DSH default', 'DSH default'], JSON.stringify(described.settings));
+    await coord.ctx.call('thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a workflow.' });
+    assert.equal([...host.live.values()].filter((a) => a.id !== coord.id).length, 1, 'and a thread starts');
+});

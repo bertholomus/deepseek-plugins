@@ -7,8 +7,8 @@
  * meanwhile: in DSH's log, in the plugin's own log, and on its page (Plugins
  * → Coordinator).
  *
- * The schema in index.js gives defaults only (any value passes it); the
- * types and ranges live here. Pure, no host imports.
+ * The schema in index.js gives defaults only (any value passes it, the
+ * live ones too); the types and ranges live here. Pure, no host imports.
  *
  * @module dsh-plugin-coordinator/config
  */
@@ -137,6 +137,25 @@ export function guardedToolsOf(value) {
         return bad ? { value: out, problem: problem('guardedTools', 'a list of names, or a map from each name to a list of the words you call it by', value, 'each name without the words it could not read') } : { value: out };
     }
     return { value: [], problem: problem('guardedTools', 'a list of names, or a map from each name to a list of the words you call it by', value, 'none') };
+}
+
+/** What each live text setting falls back to while its value is not text. */
+const TEXT_FALLBACK = Object.freeze({
+    threadModel: 'DSH\'s default model for new threads',
+    threadEffort: 'the model\'s default effort for new threads',
+    yourTools: '"asked"',
+    threadPermission: '"workspace-write" for new threads',
+});
+
+/**
+ * A live text setting (threadModel, threadEffort, yourTools,
+ * threadPermission) that is not text, such as a bare number in YAML, as a
+ * problem in words; the plugin reads such a value as not set.
+ * @returns {{key, message}|undefined}
+ */
+export function textSettingProblem(key, value) {
+    if (value === undefined || value === null || typeof value === 'string') return undefined;
+    return problem(key, key === 'threadModel' ? 'text: a model, such as "provider:model"' : 'text', value, TEXT_FALLBACK[key] ?? 'its default');
 }
 
 /**

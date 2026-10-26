@@ -221,6 +221,59 @@ export class ProjectsRemote {
     }
 }
 
+/** What every endpoint but the window's reads answers while the plugin is switched off in its settings. */
+export const OFF_TEXT = 'The coordinator is switched off: its row in your profile\'s cordis.patch.yml says enabled: false. Set it to true, or take the line out, to coordinate again.';
+
+/**
+ * The endpoints while the plugin is switched off in its settings
+ * (`enabled: false`): the window's reads say so (sessions and list answer
+ * `off: true`), so it offers no Coordinate anywhere, and anything else is
+ * refused in those words. Nothing here reads or writes the plugin's state.
+ */
+export class OffRemote {
+    /**
+     * @param {object} ctx - the plugin's context (the binding reads it).
+     * @param {{message: string}[]} problems - the settings to fix, as checkConfig found them.
+     */
+    constructor(ctx, problems = []) {
+        this.ctx = ctx;
+        this.problems = problems.map((p) => p.message);
+        this.typertRemote = bindTypertRemote(this, SERVICE, { namespace: NAMESPACE });
+    }
+
+    async sessions() {
+        return { sessions: {}, off: true };
+    }
+
+    async list() {
+        return { projects: [], guarded: [], permissions: null, problems: this.problems, off: true };
+    }
+
+    async news() {
+        return { news: [] };
+    }
+
+    async seeNews() {
+        return { news: [] };
+    }
+
+    async describe() { throw off(); }
+
+    async update() { throw off(); }
+
+    async continueThread() { throw off(); }
+
+    async changes() { throw off(); }
+
+    async coordinate() { throw off(); }
+
+    async archive() { throw off(); }
+
+    async restore() { throw off(); }
+}
+
+const off = () => new RemoteError('coordinator/refused', OFF_TEXT, {});
+
 /** Mark methods the way the `@Remote` decorator does in DSH's TypeScript. */
 function markRemote(Class, names) {
     for (const name of names) {
@@ -230,6 +283,6 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProjectsRemote, [
-    'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'coordinate', 'archive', 'restore',
-]);
+const METHODS = ['describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'coordinate', 'archive', 'restore'];
+markRemote(ProjectsRemote, METHODS);
+markRemote(OffRemote, METHODS);
