@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 /**
  * The session bridge in a real DSH: every route against DSH's own session
- * controller, with each claim checked in the session's own log; its
- * security claims (a Unix socket only, 700 and 600, no prompt text in the
- * log); a restart under a running turn and a crash, which repeat nothing;
- * settings changed while DSH runs, wrong ones too; switched off and on in
- * Plugins; a socket another program holds, which it never takes over; and
- * a bridged session in a real window, light and dark, taking a prompt live.
+ * controller, with each claim checked in the session's own log (through the
+ * bridge, and on disk where it matters); its security claims (a Unix socket
+ * only, 700 and 600, no prompt text in the log); creates and prompts retried
+ * with their request ids, across restarts too; settings changed while DSH
+ * runs, wrong ones too; a socket another program holds, which it never takes
+ * over and which shows as failed in Plugins; its Plugins face; switched off
+ * and on in Plugins; and a bridged session in a real window, light and dark,
+ * taking a prompt live.
  *
  * DSH runs from a throwaway DSH_HOME (test/e2e/harness.mjs) with this repo's
  * session bridge and a scripted model (test/e2e/fake-model.mjs). The socket,
- * its folder and the log are inside the throwaway folder.
+ * its folder, the create record and the log are inside the throwaway folder.
  *
  * - Security: the socket's folder is made 700 and the socket 600; the log is
  *   600 and holds actions and sizes, never a prompt's text or a title; the
@@ -18,20 +20,27 @@
  *   the bridge on and off.
  * - Sessions: made in a folder with a title, a model and a first prompt;
  *   followup, steer into a running turn, cancel, rename, model; what became
- *   of each prompt (waiting, read, answered) matches the session's log; a
- *   retry with the caller's request id is sent once, even after a restart;
- *   waits answer when DSH commits the event, or say they ran out.
+ *   of each prompt (queued, read, answered) matches the session's log; a
+ *   retried prompt and a retried create (two at once, then a third) are
+ *   sent once and make one session; waits answer when DSH commits the
+ *   event, or say they ran out.
  * - Refusals in words: bad JSON, a body over maxBodyBytes, an unknown
  *   session, path or method, a relative folder, a model DSH does not have
- *   (the session's id comes back with the failed step).
- * - Restart under a running turn (DSH's SIGTERM) and a crash (SIGKILL): the
- *   old socket is replaced, the turn reads as interrupted, nothing is sent
- *   again.
+ *   (the session's id comes back with the failed step), a create's request
+ *   id used for another folder.
+ * - Restarts under a running turn (DSH's SIGTERM): the old socket is
+ *   replaced; the turn reads as interrupted; its prompt reads as the log on
+ *   disk says (dropped, or unfinished) and is sent again once; one restart
+ *   waits until DSH saved the prompt, so that the unfinished path is always
+ *   run: attempt 2 goes as `<id>~2`, is answered, and the log on disk holds
+ *   each attempt once. A crash (SIGKILL): the stale socket is replaced.
  * - Settings while DSH runs: a new log file; wrong values named in
- *   GET /health and DSH's log while the bridge keeps working; enabled: false
+ *   GET /health and the bridge's log while it keeps working; enabled: false
  *   (nothing listens, nothing written) and back; a socket path another
- *   program answers on is refused and left alone.
- * - Plugins: switched off (no socket left) and on again.
+ *   program answers on is refused and left alone, and DSH shows the plugin
+ *   as failed until the row is fixed.
+ * - Plugins: its title, sentence and icon; switched off (no socket left)
+ *   and on again.
  * - The window: the bridged session in DSH's sidebar, and a prompt sent
  *   through the bridge showing in the open chat live; light, dark, 760 px.
  *
@@ -378,13 +387,13 @@ try {
         ids.saved = (await run.bridge('POST', '/sessions', { workspacePath: run.ws, title: 'Saved then cut off', text: 'E2E:slow', requestId: rid })).sessionId;
         await waitFor(async () => (await run.session(ids.saved)).status === 'running', 'the slow turn to run', 30000, 200);
         await waitFor(() => savedWith(ids.saved, rid).length === 1, 'DSH to save the message on disk', 30000, 100);
-        const read = (await call('GET', `/sessions/${ids.saved}/requests/${rid}`)).body;
-        check('before the restart: read by the running turn', read.state === 'read' && read.turn === 1, json(read));
+        const taken = (await call('GET', `/sessions/${ids.saved}/requests/${rid}`)).body;
+        check('before the restart: read by the running turn', taken.state === 'read' && taken.turn === 1, json(taken));
         await run.stop();
         await startKeepingSocket('restart after the message was saved');
         await waitFor(async () => (await run.session(ids.saved)).turns.ended >= 1, 'the interrupted turn to be closed', 30000, 300);
         const cut = (await call('GET', `/sessions/${ids.saved}/requests/${rid}?wait=30`)).body;
-        check('after it: unfinished, the turn interrupted, and a wait ends on it at once', cut.state === 'unfinished' && cut.end?.kind === 'interrupted' && cut.timedOut === false && cut.seq === read.seq, json(cut));
+        check('after it: unfinished, the turn interrupted, and a wait ends on it at once', cut.state === 'unfinished' && cut.end?.kind === 'interrupted' && cut.timedOut === false && cut.seq === taken.seq, json(cut));
         const resent = (await call('POST', `/sessions/${ids.saved}/prompt`, { text: AGAIN, requestId: rid })).body;
         check('a retry with the same id is sent once more, as attempt 2', resent.accepted === true && !resent.alreadySent && resent.resent === true && resent.attempt === 2 && resent.requestId === rid, json(resent));
         const done = (await call('GET', `/sessions/${ids.saved}/requests/${rid}?wait=60`)).body;
@@ -415,7 +424,7 @@ try {
         check('actions now go to the new log', read(newLog).includes(`rename ${ids.first} chars=${TITLE.length}`));
     });
 
-    await step('wrong settings: the bridge keeps working on its defaults and names each problem, in GET /health and DSH\'s log', async () => {
+    await step('wrong settings: the bridge keeps working on its defaults and names each problem, in GET /health and its own log', async () => {
         writeRow({ logFile: newLog, maxBodyBytes: 'lots', socketpath: '/tmp/typo.sock' });
         const health = await waitFor(async () => {
             const h = (await call('GET', '/health', undefined, { timeout: 3000 }).catch(() => ({}))).body;
