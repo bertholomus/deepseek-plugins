@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
-Updated: 2026-10-26 1:51 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 1:52 PM PDT by A (gmail), thread "Goal 9.5 builder"
 Branch: bookkeeping on `suite/v1` (this worktree); plugin work on `goal95/<plugin>` in worktrees under `~/Projects/goal95/wt/<plugin>`. Base `goal95/base` = 341ff4e (live's 1914abe merged into suite/v1 at a904aa6, plus the brief).
 Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19 freeze for this goal only): every plugin we own scores >= 9.5 with no criterion below 9 from a fresh judge per `briefs/JUDGE.md` (raised bar: `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop 6:00 PM PDT today; no new build round after 5:30 PM; `review/GOAL95-RESULT.md` by 6:00 PM.
 
@@ -20,7 +20,7 @@ Goal: `briefs/GOAL-95-1026.md` (Albert, Discord 8:28 AM PT; lifts the 2026-10-19
 - Live fingerprint at the start: pid 43210, started Mon Oct 26 07:14:47 2026, patch sha256 bcfc982d6938f319… (the live DSH restarted at 7:14 AM today, before this work).
 
 ## Next steps (GOAL95, in order)
-0. **No plugin goes beyond round 2** (Albert, 1:46 PM PDT, in the thread): a first GOAL95 judge, at most one fix round, a second judge, then that plugin stops whatever its score. dsh-site, Reasoning Pill and Session Bridge are on their last build round now. Then (Albert, "Score all projects after a round 2"): every plugin ends with a judged score: round-1 judge within about 60 minutes of each hand-over, one fix round of about 50 minutes for a NOT YET, a final judge done by 5:50 PM; where round 2 cannot finish in time, the round-1 score stands.
+0. **No plugin goes beyond round 2** (Albert, 1:46 PM PDT, in the thread): a first GOAL95 judge, at most one fix round, a second judge, then that plugin stops whatever its score. dsh-site, Reasoning Pill and Session Bridge are on their last build round now. Then (Albert, 1:52 PM PDT, replacing the plan before it): "let the current rounds finish and see where we are at": every running builder hands over and each hand-over gets its judge; no new fix round starts until Albert says so. The Notifications round-2 builder (started 1:50 PM, before this was read) was stopped at once with nothing changed; Notifications stays at its round-1 8.0 for now.
 1. As each builder hands over (`COMMIT <sha>`), start a fresh judge subagent with `JUDGE-GOAL95.md` (round numbers: Autopilot 5, Decisions 5, Agent Terminals 4, Proof 4 (round 3 never scored), Canon 4, Recall 3, every other plugin 1).
 2. Each scorecard: commit it (and its pictures) here, add the SCOREBOARD row; resume the builder with the findings while time allows (no new build round after 5:30 PM).
 3. A judged PASS may merge to its repo's main (standing approval); nothing else is tagged or released.
