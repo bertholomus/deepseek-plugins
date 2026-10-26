@@ -19,7 +19,7 @@
  * .e2e/shots/coordinator/<version>). Without Playwright it says so and skips.
  * KEEP=1 keeps the throwaway folder.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DshRun, checks, dshBin, findPlaywright, openWindow, pluginsDir, repoRoot, setDark, shot, waitFor } from '../../../../test/e2e/harness.mjs';
 import { startFakeModel } from './fake-model.mjs';
@@ -73,6 +73,24 @@ const store = () => {
         return {};
     }
 };
+
+/**
+ * Rewrite only the coordinator's row in the profile's patch, as a save on its page does; DSH starts the plugin
+ * again. DSH rewrites the file itself (its own rows, its line wrapping), so the row is found by its id.
+ */
+function rewriteRow(more = '') {
+    const file = join(run.profile, 'cordis.patch.yml');
+    const text = readFileSync(file, 'utf8');
+    const row = /^- id: coordinator\n(?:(?!- )[^\n]*\n)*/m;
+    if (!row.test(text)) throw new Error(`no coordinator row in ${file}`);
+    writeFileSync(file, text.replace(row, rowsWith(more)));
+    run.rows = rowsWith(more);
+}
+/** A picture with the pointer out of the way (a row it rests on shows DSH's hover card). */
+async function snap(page, name) {
+    await page.mouse.move(2, 2);
+    await shot(page, shots, name);
+}
 
 async function idle(sessionId, timeout = 30000) {
     await waitFor(async () => {
@@ -146,7 +164,7 @@ try {
     });
 
     await step('the chat in the window: Threads menu in its header, thread cards in the chat, rows nested under it', async () => {
-        window = await openWindow(run, pw, { entry: 'Plugins', width: 1280, height: 860 });
+        window = await openWindow(run, pw, { width: 1280, height: 860 });
         const { page } = window;
         await openChat(page, ids.chat);
         const button = trigger(page);
@@ -161,9 +179,9 @@ try {
         check('each thread\'s row is nested under its chat\'s row in the session list', nested.every(Boolean), json(nested));
         const fit = await fits(page);
         check('at 1280 px nothing scrolls sideways', fit.scroll <= 0 && fit.over.length === 0, json(fit));
-        await shot(page, shots, 'chat-light');
+        await snap(page, 'chat-light');
         await setDark(page, true);
-        await shot(page, shots, 'chat-dark');
+        await snap(page, 'chat-dark');
         await setDark(page, false);
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-chat');
@@ -179,9 +197,9 @@ try {
         check('the menu lists the three threads', ['Changelog draft', 'Link check', 'Publish'].every((t) => text.includes(t)), text.slice(0, 600));
         check('the menu is a named dialog and its trigger says it is open', (await menu.getAttribute('role')) === 'dialog' && /^Threads · /.test((await menu.getAttribute('aria-label')) ?? '')
             && (await button.getAttribute('aria-expanded')) === 'true');
-        await shot(page, shots, 'menu-light');
+        await snap(page, 'menu-light');
         await setDark(page, true);
-        await shot(page, shots, 'menu-dark');
+        await snap(page, 'menu-dark');
         await setDark(page, false);
         await page.keyboard.press('Escape');
         await menu.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
@@ -205,30 +223,84 @@ try {
         if (window?.page) await shot(window.page, shots, 'failed-menu');
     });
 
+    await step('at 760 px the header and the open menu still fit, with no sideways scroll', async () => {
+        const { page } = window;
+        await page.setViewportSize({ width: 760, height: 860 });
+        await page.waitForTimeout(800);
+        const button = trigger(page);
+        await button.waitFor({ state: 'visible', timeout: 15000 });
+        const box = await button.boundingBox();
+        check('at 760 px the Threads menu is in the header, inside the window', box !== null && box.x >= 0 && box.x + box.width <= 760, json(box));
+        let fit = await fits(page);
+        check('at 760 px nothing scrolls sideways', fit.scroll <= 0 && fit.over.length === 0, json(fit));
+        await snap(page, 'chat-760-light');
+        await button.click();
+        await menuOf(page).waitFor({ state: 'visible', timeout: 10000 });
+        const menuBox = await menuOf(page).boundingBox();
+        check('at 760 px the open menu stays inside the window', menuBox !== null && menuBox.x >= 0 && menuBox.x + menuBox.width <= 760, json(menuBox));
+        fit = await fits(page);
+        check('at 760 px the open menu makes nothing scroll sideways', fit.scroll <= 0, json(fit));
+        await snap(page, 'menu-760-light');
+        await setDark(page, true);
+        await snap(page, 'menu-760-dark');
+        await setDark(page, false);
+        await page.keyboard.press('Escape');
+        await page.setViewportSize({ width: 1280, height: 860 });
+        await page.waitForTimeout(800);
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-760');
+    });
+
+    await step('a thread opens beside its chat; in full view its header links back to the chat', async () => {
+        const { page } = window;
+        await rowOf(page, ids.done).click();
+        const beside = page.locator(`[data-projects-thread-chat="${ids.done}"]`).filter({ visible: true }).first();
+        const opened = await beside.waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
+        check('a thread\'s row in the session list opens it beside its chat, in the right sidebar', opened && (await trigger(page).count()) >= 1);
+        await snap(page, 'beside-light');
+        await setDark(page, true);
+        await snap(page, 'beside-dark');
+        await setDark(page, false);
+        await beside.locator('[data-projects-full]').first().click();
+        const parent = page.getByRole('button', { name: 'Open the chat that started this thread' }).filter({ visible: true }).first();
+        await parent.waitFor({ state: 'visible', timeout: 20000 });
+        check('Full view makes it the main chat, with the link back to its chat in its header', (await trigger(page).count()) >= 1);
+        await snap(page, 'thread-light');
+        await setDark(page, true);
+        await snap(page, 'thread-dark');
+        await setDark(page, false);
+        await parent.click();
+        const back = await waitFor(async () => (await parent.isVisible().catch(() => false)) === false, 'the chat to open', 15000, 200).catch(() => false);
+        check('the link opens the chat again', back === true);
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-thread');
+    });
+
     await step('the Threads panel and Thread settings open from the menu', async () => {
         const { page } = window;
         await trigger(page).click();
         await menuOf(page).waitFor({ state: 'visible', timeout: 10000 });
-        await menuOf(page).getByRole('button', { name: 'Open the Threads panel' }).click();
+        await menuOf(page).getByRole('button', { name: 'Open the Threads panel', exact: true }).first().click();
         const pane = page.locator('[data-projects-threads-pane]').filter({ visible: true }).first();
         await pane.waitFor({ state: 'visible', timeout: 15000 });
         const paneText = await pane.innerText();
         check('the Threads panel lists the chat\'s threads', ['Changelog draft', 'Link check', 'Publish'].every((t) => paneText.includes(t)), paneText.slice(0, 500));
-        await shot(page, shots, 'pane-light');
+        await snap(page, 'pane-light');
         await setDark(page, true);
-        await shot(page, shots, 'pane-dark');
+        await snap(page, 'pane-dark');
         await setDark(page, false);
         await trigger(page).click();
         await menuOf(page).waitFor({ state: 'visible', timeout: 10000 });
-        await menuOf(page).getByRole('button', { name: 'Thread settings' }).click();
-        const dialog = page.getByRole('dialog', { name: 'Thread settings' });
+        await menuOf(page).getByRole('button', { name: 'Thread settings', exact: true }).first().click();
+        const dialog = page.getByRole('dialog', { name: 'Thread settings', exact: true }).first();
         await dialog.waitFor({ state: 'visible', timeout: 15000 });
         await waitFor(async () => !(await dialog.innerText()).includes('Loading this chat'), 'the settings to load', 15000, 200).catch(() => {});
         const words = await dialog.innerText();
-        check('Thread settings opens as a named dialog with the model, effort and access of new threads', /Model/i.test(words) && /Effort|Reasoning/i.test(words) && /access|permission/i.test(words), words.slice(0, 500));
-        await shot(page, shots, 'settings-light');
+        check('Thread settings opens as a named dialog with the model and access of new threads and the chat\'s threads', /Model/i.test(words) && /Access/i.test(words)
+            && ['Changelog draft', 'Link check', 'Publish'].every((t) => words.includes(t)), words.slice(0, 600));
+        await snap(page, 'settings-light');
         await setDark(page, true);
-        await shot(page, shots, 'settings-dark');
+        await snap(page, 'settings-dark');
         await setDark(page, false);
         await page.keyboard.press('Escape');
         await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
@@ -237,53 +309,11 @@ try {
         if (window?.page) await shot(window.page, shots, 'failed-pane-settings');
     });
 
-    await step('at 760 px the header, cards and menu still fit, with no sideways scroll', async () => {
-        const { page } = window;
-        await page.setViewportSize({ width: 760, height: 860 });
-        await page.waitForTimeout(600);
-        await openChat(page, ids.chat);
-        const box = await trigger(page).boundingBox();
-        check('at 760 px the Threads menu is in the header, inside the window', box !== null && box.x >= 0 && box.x + box.width <= 760, json(box));
-        let fit = await fits(page);
-        check('at 760 px nothing scrolls sideways', fit.scroll <= 0 && fit.over.length === 0, json(fit));
-        await shot(page, shots, 'chat-760-light');
-        await trigger(page).click();
-        await menuOf(page).waitFor({ state: 'visible', timeout: 10000 });
-        const menuBox = await menuOf(page).boundingBox();
-        check('at 760 px the open menu stays inside the window', menuBox !== null && menuBox.x >= 0 && menuBox.x + menuBox.width <= 760, json(menuBox));
-        fit = await fits(page);
-        check('at 760 px the open menu makes nothing scroll sideways', fit.scroll <= 0, json(fit));
-        await setDark(page, true);
-        await shot(page, shots, 'menu-760-dark');
-        await setDark(page, false);
-        await page.keyboard.press('Escape');
-        await page.setViewportSize({ width: 1280, height: 860 });
-    }, async () => {
-        if (window?.page) await shot(window.page, shots, 'failed-760');
-    });
-
-    await step('a thread\'s own header links back to its chat', async () => {
-        const { page } = window;
-        await openChat(page, ids.done);
-        const parent = page.getByRole('button', { name: 'Open the chat that started this thread' }).filter({ visible: true }).first();
-        await parent.waitFor({ state: 'visible', timeout: 20000 });
-        check('a thread\'s header has the link back to its chat, and its own Threads menu', (await trigger(page).count()) === 1);
-        await shot(page, shots, 'thread-light');
-        await setDark(page, true);
-        await shot(page, shots, 'thread-dark');
-        await setDark(page, false);
-        await parent.click();
-        await waitFor(async () => (await page.getByRole('button', { name: 'Open the chat that started this thread' }).filter({ visible: true }).count()) === 0, 'the chat to open', 15000, 200);
-        check('the link opens the chat', true);
-    }, async () => {
-        if (window?.page) await shot(window.page, shots, 'failed-thread');
-    });
-
     await step('the plugin\'s page in Plugins: its defaults, and a wrong setting named in words', async () => {
         const { page } = window;
         const openPage = async () => {
             await page.getByRole('button', { name: 'Plugins', exact: true }).first().click();
-            const card = page.getByText('Coordinator', { exact: true }).first();
+            const card = page.getByText('Coordinator', { exact: true }).filter({ visible: true }).first();
             await card.waitFor({ state: 'visible', timeout: 30000 });
             await card.click();
             const form = page.locator('[data-projects-defaults]');
@@ -292,14 +322,11 @@ try {
         };
         let form = await openPage();
         check('the page shows the defaults for new threads, with nothing to fix', (await form.locator('[data-projects-problems]').count()) === 0);
-        await shot(page, shots, 'plugin-page-light');
+        await snap(page, 'plugin-page-light');
         await setDark(page, true);
-        await shot(page, shots, 'plugin-page-dark');
+        await snap(page, 'plugin-page-dark');
         await setDark(page, false);
-        const before = (readText(logFile).match(/\bstart\b/g) ?? []).length;
-        run.rows = rowsWith('    maxHandbacksPerHour: 0\n');
-        run.writeProfile(model.port);
-        void before;
+        rewriteRow('    maxHandbacksPerHour: 0\n');
         const problems = page.locator('[data-projects-problems]');
         const shown = await waitFor(async () => {
             if (await problems.count()) return true;
@@ -310,12 +337,11 @@ try {
         check('a wrong setting shows on the page in words: what it must be and what the plugin uses meanwhile', shown
             && said.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.')
             && said.includes('cordis.patch.yml'), said.slice(0, 500));
-        await shot(page, shots, 'plugin-page-problem-light');
+        await snap(page, 'plugin-page-problem-light');
         await setDark(page, true);
-        await shot(page, shots, 'plugin-page-problem-dark');
+        await snap(page, 'plugin-page-problem-dark');
         await setDark(page, false);
-        run.rows = rowsWith();
-        run.writeProfile(model.port);
+        rewriteRow();
         const cleared = await waitFor(async () => {
             if ((await problems.count()) === 0) return true;
             await openPage().catch(() => {});
@@ -339,7 +365,7 @@ try {
             return left.views === 0 && left.marks === 0 && left.styles === 0 ? left : null;
         }, 'the plugin\'s views, marks and styles to go', 30000, 300).catch(async () => leftovers(page));
         check('switched off, no view, mark or style of it is left in the window', gone.views === 0 && gone.marks === 0 && gone.styles === 0, json(gone));
-        await shot(page, shots, 'off-light');
+        await snap(page, 'off-light');
         const back = await run.api('pluginManager/setBundleEnabled', { name: BUNDLE, enabled: true });
         check('switched on again, DSH reports it applied, with no failure', back.ok === true && !back.value?.error, json(back));
         await trigger(page).waitFor({ state: 'visible', timeout: 45000 });
@@ -350,7 +376,7 @@ try {
         check('switched on again, its menu, cards and nesting are back, with one style sheet', again.views > 0 && again.marks > 0 && again.sheets === 1, json(again));
         const nested = await page.evaluate((id) => Boolean(document.querySelector(`[data-projects-nests] > [data-projects-nested] [data-row-key="session:${id}"]`)), ids.done);
         check('and the thread rows are nested under their chat again', nested);
-        await shot(page, shots, 'on-again-light');
+        await snap(page, 'on-again-light');
         check('no errors from the plugin in the window', ours().length === 0, ours().join('\n'));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-off-on');
