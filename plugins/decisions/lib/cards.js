@@ -56,6 +56,24 @@ const CONTEXT_LINES = 4;
 const CONTEXT_MAX = 400;
 
 /**
+ * The line of a reply that holds its question: the last one with the
+ * question's start (a long question is found by its first words), and where
+ * in that line (as plain text) the question starts. Undefined when not found.
+ */
+function questionLine(lines, question) {
+    const wanted = findable(question).replace(/…$/, '');
+    if (wanted.length < 4) return undefined;
+    for (const size of [60, 24]) {
+        const probe = wanted.slice(0, size);
+        for (let i = lines.length - 1; i >= 0; i -= 1) {
+            const index = findable(lines[i]).indexOf(probe);
+            if (index >= 0) return { at: i, from: index };
+        }
+    }
+    return undefined;
+}
+
+/**
  * The lines of a reply just before its question: what the question is
  * about ("1. tidy … 2. sweep … Which one do you prefer?"). Up to four lines
  * or 400 characters, in their order, as plain text; empty when the question
@@ -65,21 +83,10 @@ const CONTEXT_MAX = 400;
  */
 export function contextOf(text, question) {
     if (typeof text !== 'string' || typeof question !== 'string') return '';
-    const wanted = findable(question).replace(/…$/, '');
-    if (wanted.length < 4) return '';
     const lines = text.replace(/\r/g, '').split('\n');
-    // The line that holds the question: the last one with its start (a long question is found by its first words).
-    let at = -1;
-    let from = -1;
-    for (const size of [60, 24]) {
-        const probe = wanted.slice(0, size);
-        for (let i = lines.length - 1; i >= 0 && at < 0; i -= 1) {
-            const index = findable(lines[i]).indexOf(probe);
-            if (index >= 0) { at = i; from = index; }
-        }
-        if (at >= 0) break;
-    }
-    if (at < 0) return '';
+    const found = questionLine(lines, question);
+    if (!found) return '';
+    const { at, from } = found;
     const out = [];
     let size = 0;
     // What the question's own line says before it ("Here are three: A, B, C."), without a marker.
@@ -101,22 +108,109 @@ export function contextOf(text, question) {
     return out.join('\n');
 }
 
-/** "Recommend 9090 for the status page.", "I'd recommend 9090", "Recommendation: 9090", "My recommendation is 9090". */
-const PICK_SAID = /(?:^|[.!?;]\s+|\n)\s*(?:[-*]\s+|\d{1,2}[.)]\s+)?(?:(?:(?:I|we)(?:'d|’d|\s+would)?\s+)?recommend\b(?:\s*[:：])?|(?:my\s+|our\s+)?recommendation(?:\s+is\b|\s*[:：]))\s*(?!\s|(?:that|you|we|against|not|it|this|these|those|doing|to|a\s+few|some)\b)([^.;!?\n]{1,160})/i;
+/** Markdown's marks dropped, with where each bold or code span is in what is left: [start, end) pairs. */
+function unmark(text) {
+    let flat = '';
+    const spans = [];
+    let last = 0;
+    for (const m of text.matchAll(/(\*\*|__)(?=\S)([^\n]*?\S)\1|`([^`\n]+)`/g)) {
+        flat += text.slice(last, m.index).replace(/\*\*|__|`/g, '');
+        const inner = (m[2] ?? m[3]).replace(/\*\*|__|`/g, '');
+        spans.push([flat.length, flat.length + inner.length]);
+        flat += inner;
+        last = m.index + m[0].length;
+    }
+    return { flat: flat + text.slice(last).replace(/\*\*|__|`/g, ''), spans };
+}
+
+/**
+ * Where a pick starts: "Recommend …", "I'd recommend …", "Recommendation: …",
+ * "My recommendation is …", "Recommended: …" at a sentence's or a line's
+ * start; "… but I would recommend …" and "… — recommend …" inside one.
+ */
+const PICK_LEAD = new RegExp([
+    String.raw`(?:^|[.!?;]["'”’)\]]*\s+|\n)[ \t>]*(?:[-*]\s+|\d{1,2}[.)]\s+)?(?:(?:(?:I|we)(?:['’]d|\s+would)?\s+)?recommend\b(?:\s*[:：])?|recommended\s*[:：]|(?:my\s+|our\s+)?recommendation(?:\s+is\b|\s*[:：]))`,
+    String.raw`\b(?:I|we)(?:['’]d|\s+would)?(?:\s+(?:still|strongly|really))?\s+recommend\b(?:\s*[:：])?`,
+    String.raw`\s(?:—|–|--)\s*recommend(?:ation|ed)?\b(?:\s*[:：])?`,
+].join('|'), 'gi');
+
+/** "I recommend that you …", "recommend against …": advice, not a pick. */
+const NOT_A_PICK = /^(?:that|you|we|against|not|it|this|these|those|doing|to|a\s+few|some|one\s+of|either)\b/i;
+
 /** "9090 (recommended)", "9090 (the thread's recommendation)". */
 const PICK_MARKED = /(?:^|[\n.;:!?,]\s*)(?:[-*]\s+|\d{1,2}[.)]\s+)?([^\n.;:!?(),]{1,120}?)\s*\((?:recommended|my\s+recommendation|(?:the\s+)?thread['’]s\s+recommendation|recommendation)\)/i;
 
+/** A sentence's end: a full stop, ! or ? before a space (not the dot in "v2.0" or "notes.md"), a semicolon, a line's end. */
+const PICK_END = /[.!?。！？](?=["'”’)\]]*(?:\s|$))|[;\n]/;
+
+/** Where the pick's own words end and its reason or a contrast begins: " because …", ", which …", ": it …", " — …", " (…". */
+const PICK_BREAK = /\s+(?:because|since|as\s+(?:it|they|this|that|its|their|the\s+(?:former|latter))|so\s+that|given\s+that|due\s+to|whereas|while|though|although|rather\s+than|instead\s+of)\b|,\s*(?:as|because|since|which|whereas|while|but|though|although|so|given|and\s+(?:it|this|that)|it|this|that)\b|:\s|\s+[—–]\s*|\s+--?\s+|\s*\(/i;
+
+/** The longest pick a card shows; a longer one is cut at a word, with "…". */
+const PICK_MAX = 160;
+
+const pickTidy = (words) => words.replace(/\s+/g, ' ').replace(/[\s,:;—–-]+$/, '').trim().replace(/^(?:or|and|either|to)\s+/i, '');
+
 /**
  * A pick stated as a sentence anywhere in a handback or a reply's end, when
- * no "Recommendation:" closes it: "Recommend 9090 for the status page." or
- * "**9090 (thread's recommendation)**" give "9090 for the status page" and
- * "9090". Undefined when nothing is recommended.
+ * no "Recommendation:" closes it, in the pick's own words: "Recommend 9090
+ * for the status page." gives "9090 for the status page"; "I would
+ * recommend **release/v2** because …" gives "release/v2" (a bold or code
+ * span the pick starts with, when the reason follows it); "Recommendation:
+ * 9090, as it is unused." gives "9090" (its reason left out); a dot inside
+ * a word ("v2.0") does not end it, and a long one is cut at a word, with
+ * "…". "**9090 (thread's recommendation)**" gives "9090". Undefined when
+ * nothing is recommended.
  */
 export function pickIn(text) {
-    const flat = String(text ?? '').replace(/\*\*|__|`/g, '');
-    const found = PICK_SAID.exec(flat) ?? PICK_MARKED.exec(flat);
-    const words = found?.[1]?.replace(/\s+/g, ' ').replace(/[\s,:—–-]+$/, '').trim().replace(/^(?:or|and|either)\s+/i, '');
-    return words && words.length >= 1 ? words : undefined;
+    const { flat, spans } = unmark(plainLinks(text));
+    for (const lead of flat.matchAll(PICK_LEAD)) {
+        const start = lead.index + lead[0].length;
+        const from = start + /^\s*/.exec(flat.slice(start))[0].length;
+        const rest = flat.slice(from);
+        // "I recommend that you …" is advice; "My recommendation is to keep both" is a pick.
+        if (!rest || (/recommend\s*$/i.test(lead[0]) && NOT_A_PICK.test(rest))) continue;
+        const span = spans.find(([a]) => a === from);
+        if (span) {
+            const after = flat.slice(span[1]);
+            if (/^\s*$/.test(after) || /^[,:;)]/.test(after) || PICK_END.exec(after)?.index === 0 || PICK_BREAK.exec(after)?.index === 0) {
+                const words = pickTidy(flat.slice(span[0], span[1]));
+                if (words) return clip(words, PICK_MAX);
+            }
+        }
+        const end = PICK_END.exec(rest);
+        let words = end ? rest.slice(0, end.index) : rest;
+        const cut = PICK_BREAK.exec(words);
+        if (cut && cut.index > 0) words = words.slice(0, cut.index);
+        words = pickTidy(words);
+        if (words) return clip(words, PICK_MAX);
+    }
+    const marked = PICK_MARKED.exec(flat);
+    const words = marked ? pickTidy(marked[1]) : '';
+    return words ? clip(words, PICK_MAX) : undefined;
+}
+
+/** A decision line's pick after a dash without its colon: "Send it? — recommend sending it after the review". */
+const DASHED_PICK = /^(.+?)\s+(?:—|–|--)\s*(?:(?:I|we)(?:['’]d|\s+would)?\s+)?recommend(?:ed)?\b\s*[:：]?\s*(?!(?:that|you|against|not)\b)(\S.*)$/i;
+
+/**
+ * Split a decision line's question from a pick written "— recommend X"
+ * (the suite's form, without its colon), or undefined.
+ */
+export function dashedPick(question) {
+    const found = DASHED_PICK.exec(String(question ?? ''));
+    if (!found) return undefined;
+    const pick = found[2].replace(/^[\s*_`]+|[\s*_`]+$/g, '').replace(/(?<![.])\.$/, '').trim();
+    const asked = found[1].trim();
+    return pick && asked ? { question: asked, recommendation: clip(pick, 300) } : undefined;
+}
+
+/** The raw lines of a reply up to its question's line (marks kept, for a pick's bold or code span), or ''. */
+export function linesToQuestion(text, question) {
+    if (typeof text !== 'string' || typeof question !== 'string') return '';
+    const lines = text.replace(/\r/g, '').split('\n');
+    const found = questionLine(lines, question);
+    return found ? lines.slice(Math.max(0, found.at - CONTEXT_LINES * 2), found.at + 1).join('\n') : '';
 }
 
 /**
@@ -142,13 +236,18 @@ export function replyCard(row, { replies = true, windowMs = 0, now = Date.now(),
     const kind = ask.kind === 'decision' ? 'decision' : ask.kind === 'blocked' ? 'blocked' : 'reply';
     // An offer ("Let me know if you want the docs too") waits on nobody: Autopilot still leaves the session alone.
     if (kind === 'reply' && (!replies || ask.soft === true)) return undefined;
-    const question = plainLinks(ask.question);
+    // "DECISION NEEDED: Send it? — recommend sending it after the review" (no colon) still splits off its pick.
+    const dashed = kind === 'decision' && !ask.recommendation ? dashedPick(plainLinks(ask.question)) : undefined;
+    const question = dashed?.question ?? plainLinks(ask.question);
     // The reply's lines before its question ("1. tidy 2. sweep … Which one do you prefer?"), so the card can be answered in place.
     const said = reply ?? (typeof state.text === 'string' ? { text: state.text, turn: state.textTurn } : undefined);
     const text = said?.turn === ask.turn ? said.text : undefined;
     const context = contextOf(text, ask.question);
-    // A plain question after "I'd recommend 9090 for the page." gets the pick too, with its own answer.
-    const pick = ask.recommendation ? plainLinks(ask.recommendation) : kind === 'reply' ? pickIn(`${context}\n${question}`) : undefined;
+    // A plain question after "I'd recommend **9090** for the page." gets the pick too, with its own answer: read
+    // from the reply's own lines, so a bold or code span is still known.
+    const pick = ask.recommendation ? plainLinks(ask.recommendation)
+        : dashed ? dashed.recommendation
+            : kind === 'reply' ? pickIn(linesToQuestion(text, ask.question) || `${context}\n${question}`) : undefined;
     return {
         id: `${kind}:${row.sessionId}:${end.turn}`,
         kind,
@@ -234,6 +333,33 @@ export function coordinatorView(value) {
 /** Handback statuses that wait on a person. */
 const WAITING = new Set(['needs_decision', 'blocked']);
 
+/** A coordinator thread's card id: one per thread turn, whether its reply or its handback (or both) say what it needs. */
+export const threadCardId = (sessionId, turn) => `thread:${sessionId}:${turn}`;
+
+/**
+ * A coordinator thread's own reply card (`replyCard` on the thread's row)
+ * as the thread's card: under the id its handback's card takes for the same
+ * turn (`threadCards`), so the two are one card from the first sight.
+ * `handedBack` when the thread's own log shows it handed back in that turn
+ * waiting on the person (the coordinator announces such a handback itself).
+ * @param {object} card - the reply's card.
+ * @param {object} view - the thread's `coordinatorSession` view (role 'thread').
+ * @param {{ sessionId: string, title: string } | undefined} chat - its coordinating chat.
+ */
+export function ownThreadCard(card, view, chat) {
+    const handback = (Array.isArray(view?.cards) ? view.cards : []).filter((c) => isRecord(c) && c.kind === 'handback' && c.turn === card.turn).at(-1);
+    return {
+        ...card,
+        id: threadCardId(card.sessionId, card.turn),
+        kind: 'thread',
+        // What the reply is, for the answer's first line: a DECISION NEEDED line, a BLOCKED line or a question.
+        ask: card.kind,
+        status: card.kind === 'blocked' || handback?.status === 'blocked' ? 'blocked' : 'needs_decision',
+        ...(chat ? { via: chat } : {}),
+        ...(handback && WAITING.has(handback.status) ? { handedBack: true } : {}),
+    };
+}
+
 /**
  * Cards for a coordinating chat's threads that handed back needing a
  * decision (or blocked) and have heard nothing since: no message to the
@@ -263,8 +389,15 @@ export function threadCards(row, projection, rowsById) {
         const pick = split ? undefined : pickIn(summary);
         const question = split?.question || summary;
         const blocked = thread.handback.status === 'blocked';
+        // One id per thread turn, the same as the thread's own reply's card (lib/inbox.js): a handback the chat takes
+        // late updates the card the thread's reply made, never a second one. Before the thread's turn is known
+        // (its session not listed), the handback's time.
+        const turn = Number.isSafeInteger(own?.state?.end?.turn) ? own.state.end.turn : undefined;
+        const legacy = `thread:${thread.session}:${at || thread.id}`;
         cards.push({
-            id: `thread:${thread.session}:${at || thread.id}`,
+            id: turn !== undefined ? threadCardId(thread.session, turn) : legacy,
+            ...(turn !== undefined ? { legacy, turn } : {}),
+            handback: true,
             kind: 'thread',
             sessionId: thread.session,
             title: clip(String(thread.title ?? 'Thread'), 120) || 'Thread',
@@ -362,7 +495,7 @@ const LEADS = {
  * @param {{ text?: string, recommended?: boolean }} answer
  */
 export function answerMessage(card, { text, recommended } = {}) {
-    const lead = card.kind === 'thread' ? 'your handback' : LEADS[card.kind] ?? 'your question';
+    const lead = card.kind === 'thread' ? (card.handback || !LEADS[card.ask] ? 'your handback' : LEADS[card.ask]) : LEADS[card.kind] ?? 'your question';
     const what = clip(String(card.question ?? ''), 300);
     if (recommended) {
         return `[Decisions] The person answered ${lead} (“${what}”): go with your recommendation${card.recommendation ? ` (${clip(card.recommendation, 300)})` : ''}.`;

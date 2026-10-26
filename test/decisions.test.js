@@ -1291,8 +1291,8 @@ test('cards: a plain question carries the reply\'s lines before it, folded on th
     assert.equal(replyCard({ ...row(reply, { kind: 'question', question: 'Which one do you prefer?' }), state: { ...row(reply, { kind: 'question', question: 'Which one do you prefer?' }).state, textTurn: 2 } }, { now }).context, undefined);
     // A pick the reply states before its question goes under Recommended, with its own answer.
     const picked = replyCard(row('Both build.\nI\'d recommend tidy, as it is short.\nWhich name should I use?', { kind: 'question', question: 'Which name should I use?' }), { now });
-    assert.equal(picked.recommendation, 'tidy, as it is short');
-    assert.match(answerMessage(picked, { recommended: true }), /go with your recommendation \(tidy, as it is short\)\.$/);
+    assert.equal(picked.recommendation, 'tidy', 'the pick, without its reason');
+    assert.match(answerMessage(picked, { recommended: true }), /go with your recommendation \(tidy\)\.$/);
 });
 
 test('cards: a BLOCKED line is said as what the session is blocked on', () => {
@@ -1322,10 +1322,186 @@ test('cards: a handback\'s pick counts wherever it is said, and a handback that 
     assert.equal(pickIn('**9090 (thread\'s recommendation)** or 8080 if it must share the dev origin.'), '9090');
     assert.equal(pickIn('Options: 8080, or 9090 (recommended).'), '9090');
     assert.equal(pickIn('Both are free. My recommendation is 9090.'), '9090');
-    assert.equal(pickIn('Both are free. Recommendation: 9090, as it is unused.'), '9090, as it is unused');
+    assert.equal(pickIn('Both are free. Recommendation: 9090, as it is unused.'), '9090');
     assert.equal(pickIn('I recommend that you pick one soon.'), undefined, 'advice is no pick');
     assert.equal(pickIn('We tried the recommended settings first.'), undefined);
     assert.equal(pickIn('Which port should the page use?'), undefined);
+});
+
+test('cards: a pick in the real model\'s words: its bold or code span, up to its reason, a dot inside a word kept, a long one cut at a word', () => {
+    // The live reply of round 4 (its pictures 20 and 30): the pick was cut mid-word at 160 characters, reason and all.
+    const r4 = 'Both are valid names.\n\n1. **release/v2**\n2. **rel-2**\n\nI would recommend **release/v2** because the `release/` prefix is a widely recognized convention for release branches in most Git tooling, CI filters and branch protection rules, whereas `rel-2` is shorter but less clear.\n\nWhich one do you prefer?';
+    assert.equal(pickIn(r4), 'release/v2');
+    const now = Date.UTC(2026, 9, 17, 6);
+    const card = replyCard({ sessionId: 's', title: 'Release branch name', status: 'idle', state: { ask: { kind: 'question', question: 'Which one do you prefer?', turn: 1 }, end: { kind: 'completed', turn: 1, at: now - MIN }, text: r4, textTurn: 1 } }, { now });
+    assert.equal(card.recommendation, 'release/v2');
+    assert.match(answerMessage(card, { recommended: true }), /go with your recommendation \(release\/v2\)\.$/);
+    // GLM-5.3 Flash on 2026-10-26: a code span with a dot in it (it read "release/v2" before).
+    assert.equal(pickIn('I would recommend `release/v2.0` because it names the exact version being released.'), 'release/v2.0');
+    assert.equal(pickIn('I would recommend release/v2.0 for the branch.'), 'release/v2.0 for the branch', 'a dot inside a word does not end it');
+    assert.equal(pickIn('**Recommended:** `rel-2`'), 'rel-2');
+    assert.equal(pickIn('**Recommendation:** 9090'), '9090');
+    assert.equal(pickIn('Both build, but I\'d recommend tidy rather than sweep.'), 'tidy');
+    assert.equal(pickIn('My recommendation is to keep both.'), 'keep both');
+    assert.equal(pickIn('I would recommend going with option B: it keeps the history.'), 'going with option B');
+    assert.equal(pickIn('I\'d recommend npm ci with a clean cache for the CI job.'), 'npm ci with a clean cache for the CI job');
+    // Round 4's "Ping sink" thread, and a pick that runs on past 160 characters: cut at a word, with "…".
+    assert.equal(pickIn('It was declined at the prompt — recommend approving the exact one-shot command, since it only pings the sink.'), 'approving the exact one-shot command');
+    const long = `I recommend ${'moving every job in the build matrix over to the new runner image '.repeat(4)}today.`;
+    const cut = pickIn(long);
+    assert.ok(cut.length <= 160 && cut.endsWith('…'), cut);
+    assert.ok(long.includes(`${cut.slice(0, -1)} `), `cut at a word: ${cut}`);
+});
+
+test('cards: a decision line\'s "— recommend X" without its colon still splits off the pick', () => {
+    const now = Date.UTC(2026, 9, 17, 6);
+    const row = (question) => ({ sessionId: 's', title: 'Report send', status: 'idle', state: { ask: { kind: 'decision', question, turn: 2 }, end: { kind: 'completed', turn: 2, at: now - MIN } } });
+    // GLM-5.3 Flash on 2026-10-26, and round 4's Ping sink thread (its picture 49).
+    let card = replyCard(row('Should I send the report to the list now? — recommend sending it after the second review'), { now });
+    assert.equal(card.question, 'Should I send the report to the list now?');
+    assert.equal(card.recommendation, 'sending it after the second review');
+    card = replyCard(row('Should I send the ping to the sink again? It was declined at the prompt — recommend approving the exact one-shot command.'), { now });
+    assert.equal(card.question, 'Should I send the ping to the sink again? It was declined at the prompt');
+    assert.equal(card.recommendation, 'approving the exact one-shot command');
+    // A dash that is not a pick stays in the question.
+    assert.equal(replyCard(row('Ship today — or wait for Monday?'), { now }).recommendation, undefined);
+    assert.equal(replyCard(row('Ship today? — recommend that you ask QA first'), { now }).recommendation, undefined, 'advice is no pick');
+});
+
+/** A coordinating chat 'c' whose thread 'th' is known by its own view, and whose roster the test fills in. */
+function threadOf(dsh, { roster = () => [], chatCards = () => [{ turn: 1, seq: 3, kind: 'start', thread: 't1' }], threadCards: own = () => [] } = {}) {
+    dsh.add('c', { title: 'Release' });
+    dsh.write('c', '/coordinate');
+    dsh.end('c', { kind: 'completed' }, { reply: 'Started a thread for CI.' });
+    dsh.extra.coordinatorSession = (s) => (s.id === 'c'
+        ? { turn: 1, v: { role: 'coordinator', threads: roster(), cards: chatCards() } }
+        : s.id === 'th' ? { turn: 1, v: { role: 'thread', coordinator: 'c', thread: { id: 't1', title: 'Fix CI' }, cards: own() } } : undefined);
+}
+
+test('inbox: a thread\'s own question and the handback its chat takes late are one card: one new line, one mirror note, one wait, the coordinator\'s notification', async () => {
+    const { dsh, clock, inbox, journal, mirrored, notified } = setup();
+    await clock.advance(1000);
+    let roster = [];
+    let chatCards = [{ turn: 1, seq: 3, kind: 'start', thread: 't1' }];
+    let handedBack = [];
+    threadOf(dsh, { roster: () => roster, chatCards: () => chatCards, threadCards: () => handedBack });
+    // The thread hands back (the tool's result is in its own log) and its reply asks; the chat is in a turn on something else.
+    replied(dsh, 'th', 'CI passes on both.\n\nI\'d recommend **node 22** because 20 leaves support in April.\nShould I pin node 20 or move to 22?', { title: 'Fix CI', ask: 'Fix the CI matrix.' });
+    const turn = dsh.state('th').turn;
+    handedBack = [{ turn, seq: 40, kind: 'handback', thread: 't1', status: 'needs_decision' }];
+    dsh.write('c', 'Also look at the flaky test.');
+    await clock.advance(1000);
+    let { waiting } = await inbox.list();
+    assert.deepEqual(waiting.map((c) => [c.kind, c.id]), [['thread', `thread:th:${turn}`]], 'the thread\'s card from its first sight');
+    const [first] = waiting;
+    assert.equal(first.recommendation, 'node 22');
+    assert.equal(first.via?.title, 'Release');
+    // Four minutes later the chat's turn ends and it takes the handback, then relays it.
+    await clock.advance(4 * MIN);
+    dsh.end('c', { kind: 'completed' }, { reply: 'The flaky test is fixed.' });
+    roster = [{ id: 't1', session: 'th', title: 'Fix CI', resolved: false, handback: { status: 'needs_decision', summary: 'CI passes on node 20 and 22. Pin node 20 or move to 22?', at: new Date(clock.now()).toISOString() } }];
+    chatCards = [...chatCards, { turn: 3, seq: 60, kind: 'handback', thread: 't1', status: 'needs_decision' }];
+    chatTurn(dsh, 'Thread “Fix CI” needs you: pin node 20 or move to 22?', { kind: 'agent-message', form: 'relay', senderSessionId: 'th' });
+    await clock.advance(1000);
+    ({ waiting } = await inbox.list());
+    assert.deepEqual(waiting.map((c) => c.id), [first.id], 'the same card, not a second one');
+    assert.equal(waiting[0].question, 'CI passes on node 20 and 22. Pin node 20 or move to 22?', 'in the handback\'s words');
+    assert.equal(waiting[0].recommendation, 'node 22', 'the pick does not change');
+    assert.equal(waiting[0].at, first.at, 'its wait goes on');
+    assert.equal(entries(journal, 'new').length, 1, 'one new line');
+    assert.equal(mirrored.length, 1, 'one mirror note');
+    assert.deepEqual(notified, [], 'the coordinator announces a handback itself');
+    // Answered here, it goes straight to the thread.
+    await inbox.answer(first.id, { recommended: true });
+    await clock.advance(1000);
+    assert.deepEqual(notesIn(dsh, 'th'), ['[Decisions] The person answered your handback (“CI passes on node 20 and 22. Pin node 20 or move to 22?”): go with your recommendation (node 22).']);
+});
+
+test('inbox: a thread\'s question with no handback stands a few seconds: a nudge that makes it hand back leaves one card; one no nudge follows is listed and notified', async () => {
+    const { dsh, clock, inbox, journal, notified } = setup();
+    await clock.advance(1000);
+    let handedBack = [];
+    let roster = [];
+    threadOf(dsh, { roster: () => roster, threadCards: () => handedBack });
+    replied(dsh, 'th', 'DECISION NEEDED: Pin node 20 or move to 22? — recommend: move to 22', { title: 'Fix CI', ask: 'Fix the CI matrix.' });
+    await clock.advance(1000);
+    assert.deepEqual((await inbox.list()).waiting, [], 'not yet: the coordinator nudges a thread that did not hand back');
+    // The coordinator's nudge, and the thread hands back in the next turn.
+    dsh.write('th', 'Finish the task and call thread_handback.', { kind: 'agent-message', senderSessionId: 'c' });
+    const turn = dsh.state('th').turn;
+    handedBack = [{ turn, seq: 80, kind: 'handback', thread: 't1', status: 'needs_decision' }];
+    roster = [{ id: 't1', session: 'th', title: 'Fix CI', resolved: false, handback: { status: 'needs_decision', summary: 'Pin node 20 or move to 22?', at: new Date(clock.now()).toISOString() } }];
+    dsh.end('th', { kind: 'completed' }, { reply: 'Handed back.\n\nDECISION NEEDED: Pin node 20 or move to 22? — recommend: move to 22' });
+    await clock.advance(10000);
+    const { waiting } = await inbox.list();
+    assert.deepEqual(waiting.map((c) => c.id), [`thread:th:${turn}`]);
+    assert.equal(waiting[0].recommendation, 'move to 22');
+    assert.equal(entries(journal, 'new').length, 1);
+    assert.deepEqual(notified, []);
+    // The person answers in the thread; it asks again without handing back, and no nudge comes (hand-backs off).
+    dsh.write('th', 'Move to 22.');
+    dsh.end('th', { kind: 'completed' }, { reply: 'Moved.\n\nDECISION NEEDED: Drop the node 18 job too? — recommend: yes' });
+    await clock.advance(1000);
+    assert.equal((await inbox.list()).waiting.length, 0, 'it stands a few seconds first');
+    await clock.advance(6000);
+    const [asked] = (await inbox.list()).waiting;
+    assert.equal(asked.kind, 'thread');
+    assert.equal(asked.question, 'Drop the node 18 job too?');
+    assert.deepEqual(notified.map((n) => n.title), ['Thread “Fix CI” needs a decision'], 'no handback, so Decisions tells the person');
+    await inbox.answer(asked.id, { text: 'Yes, drop it.' });
+    await clock.advance(1000);
+    assert.equal(notesIn(dsh, 'th').at(-1), '[Decisions] The person answered your DECISION NEEDED line (“Drop the node 18 job too?”):\n\nYes, drop it.');
+});
+
+test('inbox: thread cards seen, dismissed or answered under their old id (the handback\'s time) keep that under the new one', async () => {
+    const { dsh, clock, inbox, store, journal } = setup();
+    await clock.advance(1000);
+    const at = new Date(clock.now()).toISOString();
+    threadOf(dsh, { roster: () => [{ id: 't1', session: 'th', title: 'Fix CI', resolved: false, handback: { status: 'needs_decision', summary: 'Pin node 20 or move to 22?', at } }], chatCards: () => [{ turn: 1, seq: 3, kind: 'start', thread: 't1' }, { turn: 1, seq: 9, kind: 'handback', thread: 't1', status: 'needs_decision' }] });
+    replied(dsh, 'th', 'Both work.', { title: 'Fix CI', ask: 'Fix the CI matrix.' });
+    // What the version before kept: the card dismissed under its old id.
+    const seenAt = clock.now() - HOUR;
+    store.data.dismissed[`thread:th:${Date.parse(at)}`] = clock.now();
+    store.data.seen[`thread:th:${Date.parse(at)}`] = seenAt;
+    await clock.advance(1000);
+    const { waiting, dismissed } = await inbox.list();
+    assert.deepEqual(waiting, []);
+    assert.deepEqual(dismissed.map((c) => c.id), [`thread:th:${dsh.state('th').turn}`]);
+    assert.equal(dismissed[0].at, seenAt, 'its wait counts from when the old id was first seen');
+    assert.equal(entries(journal, 'new').length, 0, 'nothing announced again');
+});
+
+test('inbox: after a restart a reply card keeps its lines and its pick, read once from the session\'s log; one that came meanwhile is announced with them', async () => {
+    const dir = tempDir('decisions');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const first = setup({ dir, clock, dsh });
+    await clock.advance(1000);
+    const reply = 'Two names fit:\n\n1. **release/v2**\n2. **rel-2**\n\nI would recommend **release/v2** because the prefix is the convention.\nWhich one do you prefer?';
+    replied(dsh, 'n', reply, { title: 'Release branch name' });
+    await clock.advance(1000);
+    const [before] = (await first.inbox.list()).waiting;
+    assert.equal(before.recommendation, 'release/v2');
+    assert.match(before.context, /^Two names fit:\n1\. release\/v2\n2\. rel-2\nI would recommend release\/v2/);
+    const announced = entries(first.journal, 'new').length;
+    first.inbox.stop();
+    first.store.flush();
+    // A reply comes while Decisions is not running.
+    replied(dsh, 'm', 'Both are free.\n\nI\'d recommend `9090` since nothing uses it.\nWhich port should the page use?', { title: 'Port pick' });
+    dsh.stop();
+    // DSH starts again: neither session is loaded, and their saved state leaves the reply out.
+    const second = setup({ dir, clock, dsh });
+    await clock.advance(1000);
+    const waiting = (await second.inbox.list()).waiting;
+    const after = waiting.find((c) => c.id === before.id);
+    assert.equal(after.context, before.context, 'the reply\'s lines are back');
+    assert.equal(after.recommendation, 'release/v2', 'and its pick, with Go with the recommendation');
+    assert.equal(after.reading, undefined);
+    assert.equal(dsh.sessions.get('n').loaded, false, 'read from its log: the session is not loaded');
+    const port = waiting.find((c) => c.sessionId === 'm');
+    assert.equal(port.recommendation, '9090');
+    assert.deepEqual(second.mirrored.map((c) => [c.sessionId, c.recommendation, c.context]), [['m', '9090', 'Both are free.\nI\'d recommend 9090 since nothing uses it.']], 'only the new one is announced, with its lines and pick');
+    assert.deepEqual(entries(second.journal, 'new').slice(0, -announced).map((e) => e.recommendation), ['9090']);
 });
 
 test('inbox: a plain question\'s card carries the reply\'s lines before it, read from the watcher (its rows leave the reply out)', async () => {
