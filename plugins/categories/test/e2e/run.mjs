@@ -488,7 +488,8 @@ try {
         });
 
         await section('the Categories page on its glass card', async () => {
-            await page.getByText('Categories', { exact: true }).first().click();
+            // Its entry in DSH's sidebar panel list (a button named by its label, with or without the label showing).
+            await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
             const pageRoot = page.locator('[data-categories-page]');
             await pageRoot.waitFor({ state: 'visible', timeout: 20000 });
             const heading = await pageRoot.locator('h1').innerText();
