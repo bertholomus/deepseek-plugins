@@ -16,7 +16,9 @@
  * 72.5% of everyday coding requests, floor 90%), so its shape is a plain test
  * and its floors a `todo` test that runs and prints the misses on every run
  * without hiding a new failure behind it (#40); it is tuned on from round 4
- * (#41). Since round 4's rules the first misses two of its floors (first
+ * (#41), and since round 5 it misses only the block floor (83.3%; no block
+ * for all 40 everyday coding requests) and is held to the figures it reached
+ * (HOLDOUT2_REACHED). Since round 4's rules the first misses two of its floors (first
  * note 75.0%, an answering note in the block 79.2%; GUARD_MEASURED): it is
  * held to no worse, and its floors run the same way. The third is measured
  * once when round 4's rules are frozen; its tests skip while it is not there.
@@ -46,6 +48,8 @@ const PROBES_REACHED = Object.freeze({ first: 71, inBlock: 76, extra: 30, noBloc
  * floors it meets; a `todo` test runs all four floors and prints the misses.
  */
 const GUARD_MEASURED = Object.freeze({ first: 18, inBlock: 19, n: 24 });
+/** The second hold-out (tuned on from round 4), held to what it reached with round 5's rules: figures only. */
+const HOLDOUT2_REACHED = Object.freeze({ first: 20, inBlock: 20, extra: 3, noBlock: 48, coding: 40 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
@@ -215,7 +219,7 @@ test('first hold-out: within the four floors of OPEN-QUESTIONS #29 (its figures 
     assert.deepEqual(belowFloors(m), [], `floors ${JSON.stringify(FLOORS)}`);
 });
 
-test('second hold-out: well formed with kinds and apart from the dev set and the first hold-out', async (t) => {
+test('second hold-out: well formed with kinds, apart from the dev set and the first hold-out, and no worse than reached', async (t) => {
     if (!existsSync(HOLDOUT2)) {
         t.skip('the second hold-out set is not there yet');
         return;
@@ -227,12 +231,18 @@ test('second hold-out: well formed with kinds and apart from the dev set and the
     assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
     const s = m.summary;
     assert.ok(s.answerable.n > 0 && s.unanswerable.n > 0 && s.coding.n > 0, 'it has prompts a note answers, prompts none does, and everyday coding requests');
+    // No worse than reached (figures only, never its prompts).
+    assert.ok(s.answerable.first >= HOLDOUT2_REACHED.first, `first note answers ${s.answerable.first} of ${s.answerable.n}`);
+    assert.ok(s.answerable.inBlock >= HOLDOUT2_REACHED.inBlock, `an answering note in the block ${s.answerable.inBlock} of ${s.answerable.n}`);
+    assert.ok(s.answerable.extra <= HOLDOUT2_REACHED.extra, `${s.answerable.extra} notes that do not answer in ${s.answerable.blocks} blocks`);
+    assert.ok(s.unanswerable.noBlock >= HOLDOUT2_REACHED.noBlock, `no block for ${s.unanswerable.noBlock} of ${s.unanswerable.n}`);
+    assert.ok(s.coding.noBlock >= HOLDOUT2_REACHED.coding, `no block for ${s.coding.noBlock} of ${s.coding.n} everyday coding requests`);
 });
 
 // Measured once at 638044e with the rules frozen, the second hold-out missed two floors. The misses stand as
 // measured: every floor still runs and the misses print, but as known misses they do not fail the run
 // (OPEN-QUESTIONS #40). It is tuned on from round 4 (#41); the README gives its figures with round 4's rules.
-test('second hold-out: within all five floors (its figures only)', { todo: 'missed when measured once at 638044e: an answering note in the block 20 of 24 (83.3%, floor 90%); no block for 29 of 40 everyday coding requests (72.5%, floor 90%) (OPEN-QUESTIONS #40)' }, async (t) => {
+test('second hold-out: within all five floors (its figures only)', { todo: 'missed since 638044e: an answering note in the block 20 of 24 (83.3%, floor 90%); the everyday-coding floor, missed there (29 of 40), is met since round 5 (40 of 40) (OPEN-QUESTIONS #40)' }, async (t) => {
     if (!existsSync(HOLDOUT2)) {
         t.skip('the second hold-out set is not there yet');
         return;

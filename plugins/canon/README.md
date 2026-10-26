@@ -670,9 +670,10 @@ promote-folder check, lines addressed to agents, and where the focus goes
 after each switch, Read again and Promote. `test/canon-relevance.test.js`
 holds the dev set and the probe sets to the figures they reached, the first
 hold-out to no worse than measured and to the floors it meets (its four
-floors run as a known miss), and the second hold-out's shape, with its five
-floors run as a known miss (OPEN-QUESTIONS #40); a hold-out's test prints
-its figures only, never its prompts.
+floors run as a known miss), and the second hold-out's shape and the
+figures it reached, with its five floors run as a known miss (OPEN-QUESTIONS
+#40; it misses only the block floor now); a hold-out's test prints its
+figures only, never its prompts.
 
 The real-DSH test (about one minute a build) starts DSH from each
 `.e2e/dsh-<version>` install and from the installed app's own DSH, each in
@@ -696,7 +697,8 @@ note the next turn gets; the focus goes to the line that says so), and
 switches Canon off and on in Plugins (its card, entry and style go and
 come back; a turn in between gets nothing). It restarts DSH (a session
 switched off stays off), runs without Session Watch (the page still
-follows), with sessions on Read Only (notes, but no draft), with two
+follows), with sessions on Read Only (notes, but never offered
+`canon_capture`, so no draft), with two
 numbers in quotes in the profile (both named as text; **Save it as 3** and
 the form's **Save** each put the focus on the line that says what was
 saved), with a copy of the vault made unreadable (`chmod 000` in its own
