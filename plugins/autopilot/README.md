@@ -28,9 +28,8 @@ It leaves a session alone while its turn waits on you (a tool waiting for
 approval, or a question in DSH's question box: its row says *waiting for
 approval* or *waiting for your answer*), when its last reply asks you
 something (a question, `DECISION NEEDED`, `BLOCKED:`), when you paused
-its goal or the agent marked it blocked, when you stopped
-its last turn, when anything was written in it since, and for subagents'
-sessions; the session's row on its page says which. Every note starts with
+its goal or the agent marked it blocked, when you stopped its last turn,
+when anything was written in it since, and for subagents' sessions; the session's row on its page says which. Every note starts with
 `[Autopilot]` and asks the agent to end with a `DECISION NEEDED` line if it
 is blocked, which Decisions picks up when it runs. In the chat, DSH shows
 each note the way it shows any message a plugin sends: a collapsed *Plugin
@@ -57,19 +56,20 @@ note, or read it on Autopilot's page under *What it sent*.
   session works), and the cursor comes back to it. A rule (a session's, or
   the default) that leaves Off looks at the sessions it now covers at once,
   cut-off ones included.
-- **Waiting for you**: its questions (under Ask first), with the action, Leave
-  it, and Open; and sessions it backed off from (*backed off*) or stopped
-  retrying (*gave up*), with Try again. When Decisions runs, the same questions show there too, and an
-  answer in either place counts once. A row you answered or tried again
-  leaves, and the cursor moves to the row now in its place (else the card's
-  heading), never off the page.
+- **Waiting for you**: its questions (under Ask first), with the action,
+  Leave it, and Open; and sessions it backed off from (*backed off*) or
+  stopped retrying (*gave up*), with Try again. When Decisions runs, the
+  same questions show there too, and an answer in either place counts
+  once. A row you answered or tried again leaves, and the cursor moves to
+  the row now in its place (else the card's heading), never off the page.
 - **Sessions**: each with its state, its open work, when Autopilot looks
   next (*next: gives up at 6:24 PM* when the tries are spent) or why it
   leaves the session to you (*Waits for you: its last reply asks you
   something.*, *Waits for your answer: Autopilot asked whether to tell it to
-  carry on.*), its last action as it ended (*DSH refused to start its goal*,
-  *its note was not delivered*) with the time it ended, and its own rule. *Open work*
-  lists the ones it could act on; *All* lists every recent session.
+  carry on.*), its last action as it ended (*DSH refused to start its
+  goal*, *its note was not delivered*) with the time it ended, and its own
+  rule. *Open work* lists the ones it could act on; *All* lists every
+  recent session.
 - **What Autopilot did**: every action, every question, every settings
   change and every time it held back for a reason you would want to know,
   each with a *Why* line that says who acted (Autopilot, or you), its
