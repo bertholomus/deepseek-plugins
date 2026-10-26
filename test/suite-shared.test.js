@@ -717,20 +717,21 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     ];
     // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included.
     assert.equal(kit.fieldSpec(fields[0]).format(2), '2');
-    // A number or a list of the wrong type keeps its quotes: "90" is text, so it does not parse, the form flags it as
-    // it opens, and the number typed back is a change it saves.
     assert.equal(kit.fieldSpec(fields[0]).format('soon'), '"soon"');
-    assert.equal(kit.fieldSpec(fields[0]).format('90'), '"90"');
+    assert.equal(kit.fieldSpec(fields[0]).format('600'), '"600"');
+    assert.equal(kit.fieldSpec(fields[1]).format('120'), '"120"');
+    assert.equal(kit.fieldSpec(fields[1]).format([120, 600]), '120, 600');
+    assert.equal(kit.fieldSpec(fields[1]).format(['120', 600]), '["120",600]');
+    assert.equal(kit.fieldSpec(fields[2]).format(7), '7');
+    assert.equal(kit.fieldSpec(fields[2]).format('b'), 'b');
+    assert.equal(kit.fieldSpec(fields[3]).format('yes'), '"yes"');
+    assert.equal(kit.fieldSpec(fields[3]).format('on'), '"on"');
+    assert.equal(kit.fieldSpec(fields[3]).format(undefined), '');
+    // "90" is text, so it does not parse (the form flags it as it opens), and the number typed back is a change it saves.
     assert.equal(kit.fieldSpec(fields[0]).parse('"90"'), undefined);
     assert.deepEqual(kit.fieldSpec(fields[0]).parse('90'), { kind: 'set', value: 90 });
-    assert.equal(kit.fieldSpec(fields[1]).format('120'), '"120"');
     assert.equal(kit.fieldSpec(fields[1]).format('30, 90'), '"30, 90"');
-    assert.equal(kit.fieldSpec(fields[1]).format(['30', 90]), '["30",90]');
     assert.equal(kit.fieldSpec(fields[1]).parse('"30, 90"'), undefined);
-    assert.equal(kit.fieldSpec(fields[1]).format([120, 600]), '120, 600');
-    assert.equal(kit.fieldSpec(fields[2]).format(7), '7');
-    assert.equal(kit.fieldSpec(fields[3]).format('yes'), '"yes"');
-    assert.equal(kit.fieldSpec(fields[3]).format(undefined), '');
     const snap = {
         writable: true, saving: false,
         idle: { text: '2', overridden: true, invalid: false },
