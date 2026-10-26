@@ -65,7 +65,8 @@ it).
 DSH → Plugins → Notifications:
 
 - **Send system notifications**, and one switch per kind of news (below).
-  Saved with DSH's own form, in the profile's `cordis.patch.yml`.
+  Saved with DSH's own form, in the profile's `cordis.patch.yml`; a save
+  applies at once.
 - **Where they go now**, in a sentence: DSH's window, a browser tab, a
   command, or nowhere (and what to do about it).
 - **This window**: whether it may show notifications, and the **Allow
@@ -82,9 +83,11 @@ DSH → Plugins → Notifications:
 
 ## Settings
 
-The row's id is `notifications`. Every setting is a switch. A save on the
-settings page restarts the plugin, which costs nothing (its queue and list
-are on disk).
+The row's id is `notifications`. Every setting is a switch, and every one
+is live: DSH serves the settings page for live settings only, and a save
+there (or an edit of the profile) changes them in place, with no restart.
+The plugin checks them again and its log says which changed, by title
+(`settings changed: “Fleet findings” (on; sender now: window)`).
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -102,8 +105,8 @@ Terminals' agents that wait on you and Autopilot's questions
 and Agent Terminals also have a switch for theirs in their own settings.
 
 A value that is not true or false (`"yes"`, `0`) never stops the plugin: it
-counts as the default, its log file warns once at start, and the settings
-page names the setting until it is fixed.
+counts as the default, its log file warns (at start, or when a change makes
+it wrong), and the settings page names the setting until it is fixed.
 
 ```yaml
 # In the profile's cordis.patch.yml (a patch row replaces the whole config: list every key you set)
@@ -208,20 +211,22 @@ node --test plugins/notifications/test/notifications.test.js
 node scripts/e2e.mjs notifications                          # real DSH, every build under .e2e/ and the app's
 ```
 
-- The unit tests (41) cover the senders and their quoting, the settings
-  check, the state file (modes, a broken file, ids across restarts), the
-  log file (its lines, modes, the move to `.1`, a folder it cannot write), every
-  outcome the notifier records and logs, the endpoints (the Remote markers
-  the gateway needs, failures in words), the host wiring, the coordinator's
-  news contract, and the browser half's sender: shown, watched, stale,
-  blocked, failed, unconfirmed, bursts, a click that opens the chat, a
-  reload that does not show twice. DSH's packages come from the newest
-  runtime under `.e2e/` (`test/peers.mjs`); link `.e2e` into a fresh copy.
-- The real-DSH test (`test/e2e/run.mjs`) runs DSH in a throwaway home with a
-  stand-in caller plugin (`test/e2e/caller`) and a real window whose Web
-  Notifications are replaced by a recorder, so nothing reaches the screen:
-  everything listed at the top of that file, with pictures light and dark
-  and at 760 px in `.e2e/shots/notifications/<DSH version>/`.
+- The unit tests (42) cover the senders and their quoting, the settings
+  check and live changes to it, the state file (modes, a broken file, ids
+  across restarts), the log file (its lines, modes, the move to `.1`, a
+  folder it cannot write), every outcome the notifier records and logs, the
+  endpoints (the Remote markers the gateway needs, failures in words), the
+  host wiring, the coordinator's news contract, and the browser half's
+  sender: shown, watched, stale, blocked, failed, unconfirmed, bursts, a
+  click that opens the chat, a reload that does not show twice. DSH's
+  packages come from the newest runtime under `.e2e/` (`test/peers.mjs`);
+  link `.e2e` into a fresh copy.
+- The real-DSH test (`test/e2e/run.mjs`, 52 checks on each build) runs DSH
+  in a throwaway home with a stand-in caller plugin (`test/e2e/caller`) and
+  a real window whose Web Notifications are replaced by a recorder, so
+  nothing reaches the screen: everything listed at the top of that file,
+  with pictures light and dark and at 760 px in
+  `.e2e/shots/notifications/<DSH version>/`.
 - By hand, in a DSH Test instance with the plugin and `test/e2e/caller`
   loaded: `node plugins/notifications/test/e2e/send.mjs "$(dsh-test url)"`
   sends one the way another plugin does and prints the answer and what came

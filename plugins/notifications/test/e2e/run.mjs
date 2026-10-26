@@ -23,12 +23,13 @@
  * - A window you are looking at: nothing shows, and the page says why.
  * - Five at once: the newest two alone and one summary of the rest.
  * - The settings page in Plugins (DSH's own form): where notifications go,
- *   this window's permission, the recent list with Open chat, a kind
- *   switched off and saved (the next one of that kind is "off", in words),
- *   the test button; light and dark pictures, a 760 px window, keyboard
- *   focus on its controls.
- * - A browser that has not answered the permission ask: news waits, the
- *   Allow button asks, focus stays on the row, and the news then shows.
+ *   this window's permission, the recent list with Open chat and the log
+ *   file's path, a kind switched off and saved (applied at once with no
+ *   restart, the next one of that kind is "off", in words, and the log
+ *   names the setting), the test button by keyboard; light and dark
+ *   pictures, a 760 px window, text contrast.
+ * - A browser that has not answered the permission ask: the row says so,
+ *   the Allow button asks, and the keyboard's place stays on the row.
  * - A restart with news waiting: after it the news shows once, and a
  *   reload does not show it again.
  * - Switched off and on from Plugins: callers get nothing while off, its
