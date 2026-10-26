@@ -228,7 +228,56 @@ export function changedWords(paths) {
  * undefined when nothing did.
  */
 export function savedEntry(check, paths) {
-    return changedEntry(check, paths, { name: 'Canon', titles: SETTING_TITLES });
+    const entry = changedEntry(check, paths, { name: 'Canon', titles: SETTING_TITLES });
+    if (entry?.state === 'waiting on a setting') {
+        // Every wrong setting, not only the first.
+        const also = alsoWrong(check);
+        return also.length ? { ...entry, why: `${entry.why} ${also.length === 1 ? 'Also wrong:' : `${also.length} more are wrong:`} ${also.map((p) => `${p.text}.`).join(' ')}` } : entry;
+    }
+    if (entry?.state !== 'done' || !entry.text.startsWith('Settings changed: ')) return entry;
+    // A switch, a number or a choice is said with its new value: “Add notes to turns” off.
+    const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
+    const words = keys.map((key) => {
+        const value = valueWords(key, check.settings?.[key]);
+        return `“${SETTING_TITLES[key] ?? key}”${value === undefined ? '' : ` ${value}`}`;
+    });
+    return { ...entry, text: `Settings changed: ${words.join(', ')}` };
+}
+
+/** A setting's value in What happened's words: a switch on or off, a number, a choice's name; undefined for others. */
+function valueWords(key, value) {
+    if (SWITCHES.includes(key) && typeof value === 'boolean') return value ? 'on' : 'off';
+    if (Object.hasOwn(RANGES, key) && Number.isInteger(value)) return value.toLocaleString('en-US');
+    if (key === 'access' && typeof value === 'string' && Object.hasOwn(ACCESS_CHOICES, value)) return `“${ACCESS_CHOICES[value]}”`;
+    return undefined;
+}
+
+/**
+ * The wrong settings after the first one a check found, in its order and
+ * words: each one found is set aside (its default in its place) and the
+ * rest checked again. Empty when only one is wrong.
+ * @param {import('./shared/settings.js').SettingsCheck} check
+ * @returns {{ key: string, text: string }[]}
+ */
+export function alsoWrong(check) {
+    const first = check?.problem?.key;
+    if (typeof first !== 'string' || !Object.hasOwn(DEFAULTS, first) || typeof check.checkFn !== 'function') return [];
+    const out = [];
+    const seen = new Set([first]);
+    let rest = { ...check.settings, [first]: DEFAULTS[first] };
+    for (let i = 0; i < Object.keys(DEFAULTS).length; i += 1) {
+        try {
+            check.checkFn(rest);
+            break;
+        } catch (error) {
+            const key = error?.key;
+            if (typeof key !== 'string' || seen.has(key) || !Object.hasOwn(DEFAULTS, key)) break;
+            seen.add(key);
+            out.push({ key, text: String(error.message) });
+            rest = { ...rest, [key]: DEFAULTS[key] };
+        }
+    }
+    return out;
 }
 
 /**

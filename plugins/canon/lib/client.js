@@ -1057,6 +1057,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             tryTitle: 'Try a prompt',
             trySub: 'See which notes a prompt would get, and why, without sending it.',
             readQuestion: 'Read as a question.',
+            noFit: 'A turn with it gets no notes.',
             readCoding: 'Read as a coding request: it asks for work on code, or speaks of “this function” or “my script”.',
             noFitQuestion: 'A turn with it gets no notes. A note fits a question when it shares two words with it (a project\'s name counts as one). One word is enough when it is all the prompt asks beyond everyday request words like “run” or “test”, in the note\'s title, tags, aliases or headings, or in its body when few notes have it or the body has it twice. One word in the note\'s title, tags, aliases or headings is also enough when few notes have it, the prompt shares no rarer word with the vault and has no word the vault lacks; and one in its body beside a project the prompt or this folder names, when few notes have it or the body has it twice. An everyday request word is enough alone only when it is all the prompt asks. A question that names something no note has, as “Kafka” or “CORS”, needs three words in common, or a note of a project it or this folder names. A term a list in the note defines counts as one of its aliases.',
             noFitCoding: 'A turn with it gets no notes. A note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 45% when none is. It also fits when the request works on what the note is titled for and the note is a project\'s the prompt or this folder names, as “Add a route…” and Routing rules.',
@@ -1230,6 +1231,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-item[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:-2px}`,
             `.${P}-said{margin:8px 0 0;font:var(--dsw-font-xs-13)}`,
             `.${P}-warn{color:var(--${P}-warn)}`,
+            `.${P}-also{margin-top:10px}`,
+            `.${P}-also-list{margin:4px 0 0;padding-left:18px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-primary)}`,
             // Use the default on a switch or a choice drawn as DSH draws it on a typed field: one style in the form.
             `.${P}-settings .${P}-set-reset{font:inherit;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);text-decoration:none}`,
             `.${P}-settings .${P}-set-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}`,
@@ -1473,6 +1476,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 failed ? h('p', { className: `${P}-said ${P}-error`, role: 'alert' }, 'DSH did not save it. Change it in Canon\'s settings in Plugins instead.') : null);
         }
 
+        /** The other wrong settings, each in Canon's words, after the first (which the problem above names). */
+        function AlsoWrong({ also }) {
+            return h('div', { className: `${P}-also`, 'data-canon-also': '' },
+                h('p', { className: `${P}-trouble-text` }, also.length === 1 ? 'Also wrong:' : `${also.length} more are wrong:`),
+                h('ul', { className: `${P}-also-list` }, ...also.map((p) => h('li', { key: p.key, 'data-canon-also-key': p.key }, `${p.text}.`))));
+        }
+
         /** Why a note fits, in words. */
         function whyText(r) {
             const words = (r.words ?? r.matched ?? []).slice(0, 8);
@@ -1500,6 +1510,30 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             }
             if (r.why === 'other') return 'It belongs to another project than the one this folder or the prompt points at.';
             return 'It fits less well than the notes above, or too little to add.';
+        }
+
+        /** Why a note was close but not added, in a few words (missText says the rule, once, behind Why). */
+        function missShort(r) {
+            if (r.why === 'name') return 'It shares only a project\'s name.';
+            if (r.why === 'few' && !r.coding) {
+                if (r.unknown?.length) return `Too little in common: the prompt names ${listWords(r.unknown.map((w) => `“${w}”`))}, which no note has.`;
+                if (r.plain === 0) return 'Too little in common: only an everyday request word.';
+                return r.body ? 'Too little in common: one word, only in its body.' : 'Too little in common: one word, and the prompt asks more.';
+            }
+            if (r.why === 'few' && r.named) return 'Too little in common: the project\'s name and one word.';
+            if (r.why === 'few') return r.titled ? 'Too little in common: one word that says what it is about.' : 'Too little in common: one word, not in its title, tags, aliases or headings.';
+            if (r.why === 'part') return typeof r.share === 'number' ? `Too little of what the request asks: ${Math.round(r.share * 100)}% of it.` : 'Too little of what the request asks.';
+            if (r.why === 'other') return 'It belongs to another project.';
+            return 'It fits less well than the notes above.';
+        }
+
+        /** The rules behind a few words, said once each: a "Why" to open. */
+        function WhyRules({ rules }) {
+            const once = [...new Set(rules.filter(Boolean))];
+            if (!once.length) return null;
+            return h('details', { className: `${P}-details`, 'data-canon-why': '' },
+                h('summary', null, 'Why'),
+                ...once.map((text, i) => h('p', { key: `w${i}`, className: `${P}-why` }, text)));
         }
 
         function TryCard() {
@@ -1551,7 +1585,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('div', { 'data-canon-try-result': '' },
                 h('p', { className: `${P}-meta`, 'data-canon-try-place': '', 'data-canon-try-coding': result.coding ? '' : undefined }, `${result.place ? `For a session in ${result.place}.` : 'For a session with no folder.'} ${result.coding ? TEXT.readCoding : TEXT.readQuestion}`),
                 result.results.length === 0
-                    ? h(kit.Empty, { title: 'No note fits this prompt', text: result.coding ? TEXT.noFitCoding : TEXT.noFitQuestion })
+                    ? h(kit.Empty, { title: 'No note fits this prompt', text: TEXT.noFit, action: h(WhyRules, { rules: [(result.coding ? TEXT.noFitCoding : TEXT.noFitQuestion).replace(`${TEXT.noFit} `, '')] }) })
                     : h('div', { className: `${P}-section` },
                         h('h3', { className: `${P}-section-title` }, `A turn with this prompt gets ${plural(result.results.length, 'note')}`),
                         h('ul', { className: `${P}-list` }, ...result.results.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-result': r.path },
@@ -1570,7 +1604,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('ul', { className: `${P}-list` }, ...result.others.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-other': r.path },
                         h('div', { className: `${P}-item-main` },
                             h('div', null, nameOf(r)),
-                            h('div', { className: `${P}-why` }, missText(r))))))) : null);
+                            h('div', { className: `${P}-why` }, missShort(r)))))),
+                    h(WhyRules, { rules: result.others.map(missText) })) : null);
         }
 
         function SessionsCard({ data }) {
@@ -1712,6 +1747,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined, 'data-canon-header': 'problem' } },
                                     h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem }),
+                                    data.problem.also?.length ? h(AlsoWrong, { key: 'also', also: data.problem.also }) : null,
                                     h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed(text); void live.refresh(); } })),
                                 h(HistoryCard, { key: 'history', data, titles }),
                             ]
@@ -1878,7 +1914,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, settingsFields, views, notesOf, sameNotes, writesText, promoteText, turnsText, vaultText, vaultNotes, whyText, missText,
-            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard, quotedSetting, applyCanonSettings,
+            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard, quotedSetting, applyCanonSettings, missShort, AlsoWrong,
         };
         return module.exports;
     },

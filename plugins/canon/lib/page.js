@@ -4,7 +4,7 @@
  *
  * @module dsh-plugin-canon/page
  */
-import { RANGES, unquoted } from './config.js';
+import { RANGES, alsoWrong, unquoted } from './config.js';
 
 /** Log entries the page's history lists, newest first. */
 const HISTORY = 150;
@@ -128,7 +128,9 @@ export async function pageState({ config, check, current, vault, events, recalls
     const on = working({ config, check });
     // A number or true/false in quotes that would be right without them: the page offers to save it so.
     const fix = check?.problem?.live && check.problem.key ? unquoted(config, check.problem.key) : undefined;
-    const problem = check?.problem && (fix === undefined ? check.problem : { ...check.problem, unquoted: fix });
+    // Every wrong setting is named: the first, and the others after it.
+    const also = check?.problem ? alsoWrong(check) : [];
+    const problem = check?.problem && { ...check.problem, ...(fix === undefined ? {} : { unquoted: fix }), ...(also.length ? { also } : {}) };
     const sessions = on ? recentSessions(recalls.list({ limit: 300 }), switches) : [];
     const drafts = on ? vault.drafts() : [];
     const history = events.list({ limit: HISTORY });

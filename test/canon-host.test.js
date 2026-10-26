@@ -11,7 +11,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rm
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
+import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, alsoWrong, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
 import { ABOUT_THE_VAULT, EVERYDAY, distinctTerms, isCodingRequest, promptTerms, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
 import { Index, MANY_DISTINCT, MIN_SCORE, SHARE_BODY, SHARE_TITLED, asksOf, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
@@ -89,6 +89,29 @@ test('config: a vault is a full path or ~/…; the home folder, the disk and DSH
     for (const bad of ['Projects/app', './app', '~user/app', 42, 'x'.repeat(1001)]) assert.equal(sessionFolder(bad, HOME), undefined, String(bad).slice(0, 20));
 });
 
+test('config: What happened gives a switch\'s, a number\'s and a choice\'s new value, and names every wrong setting, not only the first', () => {
+    const settings = { ...DEFAULTS, vault: '/srv/Canon', recall: false, maxNotes: 5, access: 'drafts' };
+    const check = new SettingsCheck({ settings, check: (s) => checkConfig(s, { home: HOME }), liveKeys: LIVE_SETTINGS, label: 'canon' });
+    check.run();
+    assert.deepEqual(savedEntry(check, [['recall'], ['maxNotes'], ['access'], ['vault']]), { kind: 'settings', text: 'Settings changed: “Add notes to turns” off, “Notes a turn, at most” 5, “What Canon may write” “Drafts”, “Vault folder”', why: 'They apply now.', state: 'done' });
+    settings.recall = true;
+    assert.equal(savedEntry(check, [['recall']]).text, 'Settings changed: “Add notes to turns” on');
+    // Three wrong at once: the first, then the others, in the check's order and words.
+    Object.assign(settings, { maxNotes: 30, recall: 'yes', draftsFolder: '../x' });
+    const entry = savedEntry(check, [['maxNotes'], ['recall'], ['draftsFolder']]);
+    assert.equal(entry.state, 'waiting on a setting');
+    assert.equal(entry.why, 'Drafts folder (draftsFolder) must be a folder inside the vault, such as Drafts or Canon/Drafts: letters, digits and spaces, no part starting with a dot, no .. (it is “../x”). 2 more are wrong: Add notes to turns (recall) must be true or false (it is “yes”). Notes a turn, at most (maxNotes) must be a whole number from 1 to 10 (it is 30).');
+    assert.deepEqual(alsoWrong(check).map((p) => p.key), ['recall', 'maxNotes']);
+    // One wrong: nothing more is said.
+    Object.assign(settings, { maxNotes: 3, recall: true });
+    check.run();
+    assert.deepEqual(alsoWrong(check), []);
+    assert.doesNotMatch(savedEntry(check, [['maxNotes']]).why, /more are wrong|Also wrong/);
+    settings.draftsFolder = 'Drafts';
+    check.run();
+    assert.deepEqual(alsoWrong(check), [], 'none wrong');
+});
+
 test('config: drafts and promoted folders stay inside the vault and apart; numbers in range; the log says what changed', () => {
     const ok = (settings) => checkConfig({ ...DEFAULTS, ...settings }, { home: HOME });
     assert.equal(folderIn(' Canon/Drafts/ '), 'Canon/Drafts');
@@ -142,7 +165,7 @@ test('config: drafts and promoted folders stay inside the vault and apart; numbe
     const settings = { ...DEFAULTS, vault: '~/Canon' };
     const check = new SettingsCheck({ settings, check: (s) => checkConfig(s, { home: HOME }), liveKeys: LIVE_SETTINGS, label: 'canon' });
     check.run();
-    assert.deepEqual(savedEntry(check, [['access']]), { kind: 'settings', text: 'Settings changed: “What Canon may write”', why: 'They apply now.', state: 'done' });
+    assert.deepEqual(savedEntry(check, [['access']]), { kind: 'settings', text: 'Settings changed: “What Canon may write” “Read only”', why: 'They apply now.', state: 'done' });
     settings.maxNotes = 50;
     const entry = savedEntry(check, [['maxNotes']]);
     assert.equal(entry.state, 'waiting on a setting');
@@ -1050,6 +1073,11 @@ test('drafts: capture refuses in words while Canon is read only, for a note it c
     assert.equal(slugOf(`${'a'.repeat(79)} bc`), 'a'.repeat(79), 'a word that would end past 80 is left out');
     assert.equal(slugOf(`${'a'.repeat(80)} b`), 'a'.repeat(80), 'a word that ends at 80 stays');
     assert.equal(slugOf('x'.repeat(100)), 'x'.repeat(80), 'one longer word is cut at 80');
+    // Cut, a name never ends on a small word.
+    assert.equal(slugOf(`${'x'.repeat(70)} of the tail words`), 'x'.repeat(70));
+    assert.equal(slugOf(`${'Ledger amounts are kept in each account in its own currency and '.repeat(2)}`), 'Ledger amounts are kept in each account in its own currency and Ledger amounts');
+    assert.equal(slugOf('a '.repeat(50)), 'a', 'all small words: one stays');
+    assert.equal(slugOf('What to look for'), 'What to look for', 'a title that fits is kept as it is');
     assert.equal(cleanTitle('two\nlines'), 'two lines');
     assert.deepEqual(cleanTags('a, #b ,c d'), ['a', 'b', 'c-d']);
     assert.deepEqual(KINDS, ['decision', 'fact', 'howto', 'gotcha']);
@@ -1364,7 +1392,7 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     let history = (await remote.state()).history;
     assert.equal(history[0].kind, 'capture');
     assert.equal(history[0].text, 'Draft saved: “Gateway health check port”');
-    assert.equal(history[1].text, 'Settings changed: “What Canon may write”');
+    assert.equal(history[1].text, 'Settings changed: “What Canon may write” “Drafts”');
     // A Read Only session saves nothing.
     dsh.states.set('s-ro\0sandboxMode', 'read-only');
     const ro = await tool.execute({ title: 'Anything', body: 'Body.', kind: 'fact' }, { agent: { session: { id: 's-ro', header: { cwd: '/work' } } } });
@@ -1493,6 +1521,47 @@ test('plugin: the folders it may not list are said again only when they change: 
     assert.deepEqual(parseSwitches({ v: 1, off: {}, closed: { vault: dir, names: ['A', 3], count: 2 } }), { v: 1, off: {}, closed: { vault: dir, names: ['A'], count: 2 } });
     assert.deepEqual(parseSwitches({ v: 1, off: {}, closed: { vault: dir, names: 'A', count: 1 } }), { v: 1, off: {} });
     assert.deepEqual(parseSwitches({ v: 1, closed: { vault: dir, names: [], count: 0 } }), { v: 1, off: {}, closed: { vault: dir, names: [], count: 0 } });
+});
+
+test('plugin: a Read Only session is never offered canon_capture; its mode changed, it is offered again', async () => {
+    await import('./fixtures/canon/stubs/hooks.mjs');
+    const canon = await import('../plugins/canon/lib/index.js');
+    process.env.CANON_TEST_DSH_HOME = tempDir('canon-dsh-ro');
+    const dsh = standInDsh();
+    const config = { ...DEFAULTS, vault: vaultCopy('canon-ro'), access: 'drafts' };
+    canon.apply(dsh.ctx, config);
+    // DSH's per-agent tool mask: what each agent is not offered.
+    const masks = [];
+    const agentOf = (id) => ({ id, session: { id }, ctx: { tools: { restrict: (filter) => { const mask = { id, deny: filter.deny, on: true }; masks.push(mask); return () => { mask.on = false; }; } } } });
+    const hidden = (id) => masks.filter((m) => m.id === id && m.on).flatMap((m) => m.deny);
+    dsh.states.set('s-ro\0sandboxMode', 'read-only');
+    const ro = agentOf('s-ro');
+    await dsh.emit('agent/created', { agent: ro });
+    await dsh.emit('agent/created', { agent: agentOf('s-rw') });
+    assert.deepEqual([...dsh.tools.keys()], ['canon_capture']);
+    assert.deepEqual(hidden('s-ro'), ['canon_capture']);
+    assert.deepEqual(hidden('s-rw'), []);
+    // Its mode changed: offered again; Read Only again: not.
+    dsh.states.set('s-ro\0sandboxMode', 'workspace-write');
+    await dsh.emit('session/event', ro.session, { type: 'sandbox/mode', mode: 'workspace-write' });
+    assert.deepEqual(hidden('s-ro'), []);
+    dsh.states.set('s-ro\0sandboxMode', 'read-only');
+    await dsh.emit('session/event', ro.session, { type: 'sandbox/mode', mode: 'read-only' });
+    assert.deepEqual(hidden('s-ro'), ['canon_capture']);
+    await dsh.emit('session/event', ro.session, { type: 'tool/call' });
+    assert.equal(masks.length, 2, 'other events change nothing');
+    // Canon read only: the tool goes, and the mask that names it first; drafts again: both come back.
+    config.access = 'read-only';
+    await dsh.emit('loader/volatile-update', [['access']]);
+    assert.equal(dsh.tools.size, 0);
+    assert.deepEqual(hidden('s-ro'), []);
+    config.access = 'drafts';
+    await dsh.emit('loader/volatile-update', [['access']]);
+    assert.deepEqual(hidden('s-ro'), ['canon_capture']);
+    // The agent goes: so does its mask.
+    await dsh.emit('agent/disposed', { agent: ro });
+    assert.deepEqual(hidden('s-ro'), []);
+    dsh.stop();
 });
 
 test('plugin: switched off in the profile, Canon reads no vault, offers no tool and says so', async () => {

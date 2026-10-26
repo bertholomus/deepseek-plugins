@@ -248,7 +248,9 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     assert.match(text, /Gateway portsProjects\/harbor-gateway\/Gateway ports\.mdShares the words “port”, “harbor”, “gateway” and “listen”\. It belongs to this folder's project, so it counts for more\./);
     assert.match(text, /this project/);
     assert.match(text, /The exact text the turn gets \(140 characters\)/);
-    assert.match(text, /Close, but not addedLedger backupsIt fits less well than the notes above, or too little to add\.GlossaryToo little in common: one word, only in the note's body\. That is enough when few notes have the word or the body has it twice, beside a project the prompt or this folder names, or when it is all the prompt asks beyond everyday request words\.Routing rules/);
+    // A short reason under each near miss; the rules behind them once each, behind Why.
+    assert.match(text, /Close, but not addedLedger backupsIt fits less well than the notes above\.GlossaryToo little in common: one word, only in its body\.Routing rulesToo little in common: one word, only in its body\.WhyIt fits less well than the notes above, or too little to add\.Too little in common: one word, only in the note's body\. That is enough when few notes have the word or the body has it twice, beside a project the prompt or this folder names, or when it is all the prompt asks beyond everyday request words\.$/);
+    assert.equal(withAttr(tryCard(), 'data-canon-why')[0].type, 'details');
     assert.doesNotMatch(text, /project's name/, 'no project is named in these near misses');
     assert.equal(withAttr(tryCard(), 'data-canon-block')[0].children.join(''), TRY.block.text);
     // A coding request: the page says so, and why its close note stayed out.
@@ -257,8 +259,8 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     await settle(5);
     text = textIn(tryCard());
     assert.match(text, /Read as a coding request: it asks for work on code, or speaks of “this function” or “my script”\./);
-    assert.match(text, /No note fits this promptA turn with it gets no notes\. A note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks/);
-    assert.match(text, /Rate limitsToo little of what the coding request asks: the words in common weigh 30% of it, and a note needs a third\./);
+    assert.match(text, /No note fits this promptA turn with it gets no notes\.WhyA note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks/);
+    assert.match(text, /Rate limitsToo little of what the request asks: 30% of it\.WhyToo little of what the coding request asks: the words in common weigh 30% of it, and a note needs a third\.$/);
     // A prompt with nothing to search for, and an empty one.
     elementsOf(tryCard()).find((e) => e.props?.['data-canon-try-prompt'] !== undefined).props.onChange({ target: { value: 'thanks, looks good' } });
     await button(tryCard(), 'Try it').props.onClick();
@@ -545,6 +547,10 @@ test('the page: a note with a line addressed to agents is named; the try-out say
     t.after(() => error.unmount());
     assert.deepEqual(buttons(withAttr(error.tree, 'data-canon-vault')[0]).map((b) => [textIn(b), b.props.variant]), [['Read again', 'outline'], ['Open Canon\'s settings', 'outline']]);
     assert.equal(button(head.tree, 'Read again').props.variant, 'ghost', 'beside a vault that reads, it stays quiet');
+    // Waiting on a setting: every wrong one is named, the others after the first.
+    const also = client.internals.AlsoWrong({ also: [{ key: 'recall', text: 'Add notes to turns (recall) must be true or false (it is “yes”)' }, { key: 'maxNotes', text: 'Notes a turn, at most (maxNotes) must be a whole number from 1 to 10 (it is 30)' }] });
+    assert.equal(textIn(also), '2 more are wrong:Add notes to turns (recall) must be true or false (it is “yes”).Notes a turn, at most (maxNotes) must be a whole number from 1 to 10 (it is 30).');
+    assert.equal(textIn(client.internals.AlsoWrong({ also: [{ key: 'recall', text: 'X' }] })), 'Also wrong:X.');
     // The try-out: under the note, that a line addressed to agents was left out of its quote.
     const tried = TryResult({ result: { ...TRY, results: [...TRY.results, { path: 'Misc/Lantern mascot.md', title: 'Lantern mascot', score: 9, matched: ['mascot'], words: ['mascot'], folder: '', passage: 'Lantern mascot: The lantern team\'s mascot is Wick.', leftOut: 1 }] } });
     const rows = withAttr(tried, 'data-canon-result');

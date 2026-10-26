@@ -74,17 +74,22 @@ export function cleanTags(tags) {
 /** A file name's longest title part, in characters. */
 const SLUG_MAX = 80;
 
+/** The small words a cut file name never ends on: "… kept in each account and" reads unfinished. */
+const SMALL_WORDS = new Set(['a', 'an', 'the', 'for', 'to', 'of', 'and', 'or', 'in', 'on', 'with']);
+
 /**
  * A file name from a title: letters, digits, spaces, - and _, never hidden,
  * at most 80 characters, cut after the last whole word that fits (a single
- * longer word is cut at 80).
+ * longer word is cut at 80), and never ending on a small word once cut.
  */
 export function slugOf(title) {
     const text = String(title ?? '').replace(/[^\p{L}\p{N} _-]+/gu, ' ').replace(/\s+/g, ' ').trim();
     let slug = text;
     if (text.length > SLUG_MAX) {
         const space = text.lastIndexOf(' ', SLUG_MAX);
-        slug = space > 0 ? text.slice(0, space) : text.slice(0, SLUG_MAX);
+        const words = (space > 0 ? text.slice(0, space) : text.slice(0, SLUG_MAX)).split(' ');
+        while (words.length > 1 && SMALL_WORDS.has(words.at(-1).toLowerCase())) words.pop();
+        slug = words.join(' ');
     }
     return slug.replace(/^[-_ ]+|[-_ ]+$/g, '') || 'Note';
 }
