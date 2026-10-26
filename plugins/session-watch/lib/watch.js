@@ -301,7 +301,7 @@ export class SessionWatch {
                     changed = true;
                 }
                 if (changed) this.hub?.bump('sessions');
-            })();
+            })().catch((error) => this.logger?.warn?.(`session-watch: could not read the sessions a stop cut off: ${errorText(error)}`));
         }
         return this.leftRead;
     }
