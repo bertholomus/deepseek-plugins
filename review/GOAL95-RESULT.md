@@ -4,7 +4,7 @@ Goal (Albert, 2026-10-26): every DSH plugin we own scores **>= 9.5 with no crite
 independent judge per `briefs/JUDGE.md` (bar raised in `~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Hard stop
 6:00 PM PDT. Scorecards: `review/<plugin>-round-<N>.md`; every row: `review/SCOREBOARD.md`.
 
-**Interim, 3:06 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
+**Interim, 3:16 PM PDT.** The account's usage limit stopped every builder and judge at about 11:00 AM; all resumed
 at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is final.
 
 | Plugin | Best GOAL95 score | Commit | Branch | Verdict | Top remaining finding |
@@ -19,7 +19,7 @@ at 1:40 PM. This file is rewritten as scorecards arrive; the 6:00 PM version is 
 | Discord | 8.0 (round 1) | f2b4d73 | goal95/discord (dsh-plugin-discord) | NOT YET | two safety findings (which sessions get the bot's tools, and its channel limit) in the local scorecard (not committed); after a restart, catch-up can miss a person's message without a word |
 | DNA Studio | 8.0 (round 1) | cdac02e | goal95/dna-studio (local copy, no remote) | NOT YET | a chat never shows the pictures it made; saving the plugin's settings during a page job marks the job cut off, and Rerun then runs it twice |
 | dsh-site | 9.0 (round 2, its last) | af7f673 | goal95/dsh-site (dsh-plugin-dsh-site) | NOT YET | all minor: an answer DSH drops mid-stream stays open on the device; the rest is in the local scorecard (not committed) |
-| Fleet | being judged (round 1; card flip 4e24735 and MiniMe's b399db0, b44d7f8 merged) | 3142189 | goal95/fleet (redesign repo) | NOT YET | judge working |
+| Fleet | 8.5 (round 1; card flip 4e24735 and MiniMe's b399db0, b44d7f8 merged) | 3142189 | goal95/fleet (redesign repo) | NOT YET | a power cycle cut off by a restart stays "running" for good and hides that Ascent's alarm; Fleet states facts it never read ("nothing running", "No updates") |
 | Focus | 8.5 (round 1) | 3859b8d | goal95/focus | NOT YET | the end of a timer leaves no mark once its 6-second toast is gone, and a hidden window announces the end while still hidden (the README says it tells it later) |
 | Hermes Bridge | 8.9 (round 1) | 717b595 | goal95/hermes-bridge (dsh-plugin-hermes-bridge) | NOT YET | UX 8.5: the first read of a window terminal takes the person's control, the icon vanishes in dark, the window never says the bridge is down |
 | Notifications | 8.0 (round 1) | b7836d2 | goal95/notifications | NOT YET | news is dropped while DSH's window is in front with nobody at it; a window that cannot show notifications drops the queue; round 2 building |
