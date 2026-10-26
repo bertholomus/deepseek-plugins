@@ -686,9 +686,12 @@ try {
     window = undefined;
     await start('readOnly', gatewayWs, P.readOnly, 'Read Only work');
     await step('a session on Read Only gets its notes but is never offered canon_capture, so it saves no draft', async () => {
+        // Every session since the restart is on Read Only: the one without Session Watch got its block.
+        const watchOff = requestsOf(P.watchOff);
+        check('a Read Only session still gets its notes (the session without Session Watch, on Read Only too and not offered canon_capture, got its block)',
+            citesOf(freshOf(P.watchOff)[0])[0] === 'Projects/harbor-gateway/Gateway ports.md' && watchOff.length >= 1 && watchOff.every((r) => !r.tools.includes('canon_capture')),
+            json(watchOff.map((r) => [citesOf(r.fresh[0]), r.tools.includes('canon_capture')])));
         const asked = requestsOf(P.readOnly);
-        const cites = citesOf(freshOf(P.readOnly)[0]);
-        check('its prompt gets its block', cites.includes('Projects/harbor-gateway/Gateway ports.md'), json(cites));
         const s = await pageState();
         // Canon may still write drafts (access: drafts): it is the session's mode that keeps the tool away.
         check('while Canon may write drafts, the Read Only session is not offered canon_capture: the agent cannot call it',
