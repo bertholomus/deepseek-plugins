@@ -764,18 +764,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const whole = (text) => (/^\d+$/.test(text) ? Number(text) : undefined);
         // A stored value of the wrong kind shows as it is, so the form can flag it rather than show it as empty.
         const raw = (v) => (v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
-        // For a number or a list, a value of the wrong type shows with its quotes ("90" is text, not a number): it
-        // does not parse, so the form flags it as it opens, and typing the number back counts as a change.
-        const typed = (v) => (v === undefined || v === null ? '' : JSON.stringify(v) ?? String(v));
+        // Where text is the wrong kind (a number, a list or a switch saved in quotes), it shows with its quotes: the
+        // form flags it as it opens, and the value typed without them counts as a change, so Save stores it.
+        const quoted = (v) => (typeof v === 'string' ? JSON.stringify(v) : raw(v));
         switch (f.kind) {
             case 'switch':
-                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : raw(v)), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
+                return { field: f.name, format: (v) => (v === true ? 'on' : v === false ? 'off' : quoted(v)), parse: (t) => (t === 'on' ? { kind: 'set', value: true } : t === 'off' ? { kind: 'set', value: false } : t === '' ? clear : undefined) };
             case 'choice':
                 return { field: f.name, format: raw, parse: (t) => (t === '' ? clear : f.options.some((o) => o.value === t) ? { kind: 'set', value: t } : undefined) };
             case 'number':
                 return {
                     field: f.name,
-                    format: (v) => (Number.isFinite(v) ? String(v) : typed(v)),
+                    format: (v) => (Number.isFinite(v) ? String(v) : quoted(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -786,7 +786,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             case 'numbers':
                 return {
                     field: f.name,
-                    format: (v) => (Array.isArray(v) && v.every((n) => Number.isFinite(n)) ? v.join(', ') : typed(v)),
+                    format: (v) => (Array.isArray(v) && v.every((n) => Number.isFinite(n)) ? v.join(', ') : Array.isArray(v) ? JSON.stringify(v) : quoted(v)),
                     parse: (t) => {
                         const text = String(t).trim();
                         if (text === '') return clear;
@@ -808,8 +808,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
     }
 
-    /** The words under a value that does not fit: what does. */
-    function invalidWords(f) {
+    /** Whether a setting's text is a value saved in quotes (text where a number or a list of numbers belongs). */
+    const inQuotes = (text) => typeof text === 'string' && text.length >= 2 && text.startsWith('"') && text.endsWith('"');
+
+    /** The words under a value that does not fit: what does (and, for one saved in quotes, that the quotes are what is wrong). */
+    function invalidWords(f, text) {
+        if (inQuotes(text) && (f.kind === 'number' || f.kind === 'numbers')) {
+            const what = f.kind === 'number' ? `a whole number from ${f.min} to ${f.max}` : `up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them`;
+            return `It is saved as text, in quotes. Type ${what}, without the quotes, then save.`;
+        }
         if (f.invalid) return f.invalid;
         if (f.kind === 'number') return `A whole number from ${f.min} to ${f.max}, or empty for the default (${f.default}).`;
         if (f.kind === 'numbers') return `Up to ${f.maxItems ?? 10} whole numbers from ${f.min} to ${f.max}, with commas between them, or empty for the default (${(f.default ?? []).join(', ')}).`;
@@ -913,7 +920,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-set-text` },
                     h('div', { className: `${P}-set-title`, id: `${id}-label` }, f.title),
                     h('div', { className: `${P}-set-hint` }, f.hint),
-                    state.invalid ? h('p', { className: `${P}-set-error`, role: 'alert' }, invalidWords(f)) : null),
+                    state.invalid ? h('p', { className: `${P}-set-error`, role: 'alert' }, invalidWords(f, state.text)) : null),
                 h('div', { className: `${P}-set-control` }, reset,
                     f.kind === 'switch'
                         ? h(ui.Switch, { checked: state.text === 'on', label: f.title, disabled, onChange: (next) => edit(next ? 'on' : 'off') })
@@ -930,7 +937,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     invalid: state.invalid,
                     overriddenLabel: 'Changed',
                     resetLabel: 'Use the default',
-                    invalidLabel: invalidWords(f),
+                    invalidLabel: invalidWords(f, state.text),
                     disabled,
                     numeric: f.kind === 'number',
                     onEdit: edit,

@@ -753,7 +753,7 @@ try {
             const input = page.locator('[data-suite-setting="maxNudges"] input');
             const shown = await input.inputValue();
             const flaggedWords = (await flagged.count()) ? await flagged.innerText() : '';
-            check('the form shows the value with its quotes, flagged as it opens with what fits', shown === '"2"' && /A whole number from 1 to 10, or empty for the default \(2\)\./.test(flaggedWords), `${shown} | ${flaggedWords}`);
+            check('the form shows the value with its quotes, flagged as it opens as text in quotes, with what to type', shown === '"2"' && /It is saved as text, in quotes\. Type a whole number from 1 to 10, without the quotes, then save\./.test(flaggedWords), `${shown} | ${flaggedWords}`);
             await shot(page, shots, 'settings-quoted-light');
             await setDark(page, true);
             await shot(page, shots, 'settings-quoted-dark');

@@ -110,8 +110,9 @@ seconds)*). **Use the default** clears one. The form will not save a value
 out of range and says what fits instead; a value saved in the profile that
 does not fit is flagged the same way as soon as the form opens. A number
 written in quotes in the profile (`idleSeconds: "90"`) shows with its
-quotes, so it is flagged too: type the number and **Save**. **Open
-Autopilot's settings** on its page puts the cursor in the setting to fix.
+quotes, flagged as text in quotes: type the number without them and
+**Save**. **Open Autopilot's settings** on its page puts the cursor in the
+setting to fix.
 
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |

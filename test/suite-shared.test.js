@@ -713,6 +713,7 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         { name: 'mode', kind: 'choice', title: 'Mode', hint: '', default: 'a', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'Ask first' }, { value: 'c', label: 'Off' }] },
         { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
         { name: 'fine', kind: 'number', title: 'Fine', hint: '', default: 2, min: 1, max: 10 },
+        { name: 'quoted', kind: 'number', title: 'Quoted', hint: '', default: 2, min: 1, max: 10 },
     ];
     // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included.
     assert.equal(kit.fieldSpec(fields[0]).format(2), '2');
@@ -728,7 +729,7 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(kit.fieldSpec(fields[1]).parse('"30, 90"'), undefined);
     assert.equal(kit.fieldSpec(fields[1]).format([120, 600]), '120, 600');
     assert.equal(kit.fieldSpec(fields[2]).format(7), '7');
-    assert.equal(kit.fieldSpec(fields[3]).format('yes'), 'yes');
+    assert.equal(kit.fieldSpec(fields[3]).format('yes'), '"yes"');
     assert.equal(kit.fieldSpec(fields[3]).format(undefined), '');
     const snap = {
         writable: true, saving: false,
@@ -737,6 +738,7 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         mode: { text: 'maybe', overridden: true, invalid: false },
         resume: { text: 'yes', overridden: true, invalid: false },
         fine: { text: '3', overridden: true, invalid: false },
+        quoted: { text: '"2"', overridden: true, invalid: false },
     };
     const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
     const body = kit.SettingsBody({ form, name: 'X', fields });
@@ -746,6 +748,9 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(field('idle').props.invalidLabel, 'A whole number from 5 to 86400, or empty for the default (600).');
     assert.equal(field('waits').props.invalid, true);
     assert.equal(field('fine').props.invalid, false);
+    // A number saved in quotes is flagged for what it is: text, with what to type instead.
+    assert.equal(field('quoted').props.invalid, true);
+    assert.equal(field('quoted').props.invalidLabel, 'It is saved as text, in quotes. Type a whole number from 1 to 10, without the quotes, then save.');
     assert.equal(row('idle').props['data-suite-invalid'], '');
     assert.equal(row('fine').props['data-suite-invalid'], undefined);
     assert.match(textIn(row('mode')), /The saved value is not one of the choices\. Choose Auto, Ask first or Off, then save\./);
