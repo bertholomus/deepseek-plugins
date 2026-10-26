@@ -580,6 +580,13 @@ export function codesIn(text) {
 }
 
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** Words as a message and a reply both say them: lower case, no quotes or Markdown marks, single spaces. */
+const flatWords = (text) => String(text ?? '').toLowerCase().replace(/[`*_"“”'‘’]/g, '').replace(/\s+/g, ' ').trim();
+/** The person's message holds the claim's whole sentence: the person dictated it ("Reply: mean latency dropped from 200 ms to 50 ms."). */
+const dictated = (prompt, claim) => {
+    const said = flatWords(claim?.text ?? claim?.part);
+    return said.length >= 12 && flatWords(prompt).includes(said);
+};
 /** A command as a card shows it: a program run by its full path is named by its own name (`node --test a.test.mjs`, not `/opt/tools/node-v22/bin/node --te…`), so a long path does not hide what ran. */
 const shownCommand = (command) => oneLine(command).replace(/(^|&&|\|\||[;|(])(\s*)\/(?:[^\s/'"]+\/)+([^\s/'"]+)(?=\s|$)/g, '$1$2$3');
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -1409,8 +1416,9 @@ function namedChecks(claim, list, prompt = '') {
     const covered = coverageClash(claim, list);
     if (covered) return covered;
     const required = claim.metrics ?? [];
-    // "Last run the median was 240 ms": a figure the person's message gave needs no output of this turn.
-    const given = typeof prompt === 'string' && prompt ? numsIn(prompt) : [];
+    // "Last run the median was 240 ms": a figure the person's message gave needs no output of this turn, unless the
+    // message gave the claim itself (a reply the person dictated, figures and all), which still needs them printed.
+    const given = typeof prompt === 'string' && prompt && !dictated(prompt, claim) ? numsIn(prompt) : [];
     const missing = required.filter((m) => !printed(list, m) && !given.some((n) => near(n, m.value, slack(m))) && !(!m.arrow && (m.amount || m.unit === 'x' || m.unit === '×') && derivable(list, m, claim)));
     if (missing.length) {
         return { verdict: 'unbacked', evidence: [], why: `It quotes ${listed(missing.slice(0, 3).map((m) => m.text))}, which no output in this turn shows.` };

@@ -906,6 +906,8 @@ test('host half: a session saved while Proof was off is listed again, its claims
     const row = later.sessions[0];
     assert.equal(row.total, ledgerOf(cold).claims.length);
     assert.equal(row.flagged, ledgerOf(cold).claims.filter((c) => c.verdict !== 'backed').length);
+    // Each log is read once (the page lists a session as soon as its log is read, before the others are).
+    assert.ok(await until(() => proof.asked.inspected.length >= 3), 'every log without claims is read');
     assert.deepEqual([...proof.asked.inspected].sort(), ['cold', 'lost', 'quiet'], 'each read once; the session DSH gives claims for is not read');
     // The page again: nothing read again while the sessions stay as they were.
     await new Promise((resolve) => { setTimeout(resolve, 2100); });

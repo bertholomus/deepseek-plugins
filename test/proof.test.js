@@ -921,6 +921,17 @@ test('judge: counts borrowed from another clause, a past run of a named command,
     assert.equal(judge(only('Tests pass across every crate.'), [edit('src/lib.rs'), bash('cargo test --workspace', 'test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s')]).verdict, 'backed');
 });
 
+test('judge: a figure the message gave needs no output, but a reply the person dictated still needs its figures printed', () => {
+    const change = edit('src/sum.mjs');
+    const bench = bash('node bench.mjs', 'sums per second: 1520000');
+    const given = judge(only('The median is now 120 ms, down from 240 ms.'), [change, bash('node bench.mjs', 'median 120 ms')], { prompt: 'Last run the median was 240 ms. Make it faster.' });
+    assert.equal(given.verdict, 'backed');
+    const reply = 'Mean latency dropped from 200 ms to 50 ms.';
+    const told = judge(only(reply), [change, bench], { prompt: `Make the sums faster, then reply exactly: "${reply}"` });
+    assert.equal(told.verdict, 'unbacked');
+    assert.equal(told.why, 'It quotes 200 ms and 50 ms, which no output in this turn shows.');
+});
+
 test('judge: a factor far from the turn\'s own runs, a bar given as a bare figure, an escaped search, and a PR read without its checks', () => {
     const k6 = (med) => bash('k6 run --quiet bench/search.js', `http_req_duration..............: avg=331.2ms  min=98.4ms  med=${med}ms max=1.21s   p(90)=512.4ms  p(95)=588.91ms\nhttp_reqs......................: 2000    61.98/s`);
     const wrong = judge(only('So `/search` is about 2.6x faster at the median.'), [k6('312.06'), edit('db/migrations/001_trgm.sql'), k6('301.44')]);

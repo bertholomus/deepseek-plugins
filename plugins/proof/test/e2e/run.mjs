@@ -210,6 +210,8 @@ const say = (text) => `E2E:say ${text}`;
 const turn = (calls, reply) => `E2E:turn ${json({ calls, reply })}`;
 const bash = (command, description) => ({ tool: 'bash', args: { command, description } });
 const write = (file, content) => ({ tool: 'write', args: { file_path: join(run.ws, file), content } });
+/** DSH changes a file the session has read: a read before a write over one that is there. */
+const readFile = (file) => ({ tool: 'read', args: { file_path: join(run.ws, file) } });
 /** A claim's check, as Proof keeps it. */
 const checkOf = async (sessionId, claimId) => (await sessionOf(sessionId)).checks.find((c) => c.claimId === claimId);
 const ACTIVE = new Set(['queued', 'running']);
@@ -1241,11 +1243,11 @@ test('applies the coupon once', () => assert.ok(round !== 2));
         '',
         'Also fixed the typo in the README (`intall` → `install`). I did not touch any other file.',
     ].join('\n');
-    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `Fix it, and the README typo too.\n${turn([fixAll, typo, bash(`${NODE} --test report.test.mjs`, 'Run the report tests again')], shapesFixed)}` });
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `Fix it, and the README typo too.\n${turn([readFile('calc.mjs'), readFile('README.md'), fixAll, typo, bash(`${NODE} --test report.test.mjs`, 'Run the report tests again')], shapesFixed)}` });
     await turnsEnded(ids.shapes, 2);
     const coupon = write('coupon.test.mjs', readFileSync(join(run.ws, 'coupon.test.mjs'), 'utf8').replace('// Fails on the second round only: a flake.', '// Waits for the clock (it still fails on the second round).'));
     const loop = bash(`rm -f .round; for i in 1 2 3; do ${NODE} --test coupon.test.mjs 2>&1 | grep -E '^(ℹ|#) (tests|pass|fail)'; done`, 'Run the coupon test three times');
-    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `The coupon test is flaky. Fix it and run it a few times.\n${turn([coupon, loop], 'Fixed the flaky coupon test; it passes reliably now.')}` });
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `The coupon test is flaky. Fix it and run it a few times.\n${turn([readFile('coupon.test.mjs'), coupon, loop], 'Fixed the flaky coupon test; it passes reliably now.')}` });
     await turnsEnded(ids.shapes, 3);
     await step('the real model\'s reply shapes: list headings, "No files were changed", a bold "Fixed" label and a doc typo stay quiet; a flake fix after a failed round is contradicted', async () => {
         const claims = (await ledgerOf(ids.shapes)).claims;
@@ -1263,6 +1265,12 @@ test('applies the coupon once', () => assert.ok(round !== 2));
         if (!pw) return;
         if (!window) window = await openWindow(run, pw, { entry: 'Proof' });
         const { page } = window;
+        // Proof's page stayed open since the step before: it lists the new session once its claims come, by itself.
+        if (await page.locator('[data-proof-page]').isVisible()) {
+            const listed = await page.locator(`[data-proof-session="${ids.shapes}"]`).waitFor({ state: 'attached', timeout: 20000 }).then(() => true, () => false);
+            check('the page, open all along, lists the new session once its claims come, without being opened again', listed);
+            if (!listed) await openChat(page, ids.rounding);
+        }
         await openChat(page, ids.shapes);
         await page.getByText('Fixed the flaky coupon test', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
         const cards = flagsShown(page);
