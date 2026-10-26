@@ -29,9 +29,10 @@
  *   node scripts/e2e.mjs categories      every DSH under .e2e/ and the app's own, with the live fingerprint
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/categories/test/e2e/run.mjs
  *
- * Without DSH_BIN it runs `dsh` from PATH. KEEP=1 keeps the temp folder.
+ * Without DSH_BIN it runs the newest DSH under .e2e/ (never one from PATH).
+ * KEEP=1 keeps the temp folder.
  */
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
@@ -39,25 +40,22 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
-import { findPlaywright, openWindow, repoRoot, setDark, shot } from '../../../../test/e2e/harness.mjs';
+import { dshBin, findPlaywright, openWindow, repoRoot, setDark, shot } from '../../../../test/e2e/harness.mjs';
 import { startFakeModel } from '../../../../test/e2e/fake-model.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginsDir = resolve(here, '../../..');
 const WITH_COORDINATOR = process.env.COORDINATOR === '1';
 /** Which DSH this is, for the pictures' folder (scripts/e2e.mjs names it). */
-const version = process.env.DSH_LABEL || (/dsh-([^/]+)\/node_modules/.exec(process.env.DSH_BIN ?? '')?.[1] ?? 'dsh');
+const version = process.env.DSH_LABEL || (/dsh-([^/]+)\/node_modules/.exec(dshBin() ?? '')?.[1] ?? 'dsh');
 const shots = process.env.SHOTS || join(repoRoot, '.e2e', 'shots', 'categories', version);
 const json = (value) => JSON.stringify(value);
 
+/** DSH_BIN, else the newest test runtime under .e2e/ (harness.mjs); a bin.js runs under this Node (the app's binary, for the app's DSH). */
 function findDsh() {
-    const bin = process.env.DSH_BIN;
-    if (bin) return bin.endsWith('.js') ? [process.execPath, bin] : [bin];
-    try {
-        const found = execFileSync('which', ['dsh'], { encoding: 'utf8' }).trim();
-        if (found) return [found];
-    } catch {}
-    return null;
+    const bin = dshBin();
+    if (!bin) return null;
+    return bin.endsWith('.js') ? [process.execPath, bin] : [bin];
 }
 
 let passed = 0;
@@ -245,7 +243,7 @@ async function boot(dsh, what) {
 
 const dsh = findDsh();
 if (!dsh) {
-    console.log('skipped: set DSH_BIN to a DSH bin.js (or put dsh on PATH) to run the real-host test');
+    console.log('skipped: no DSH to run (set DSH_BIN, or install one under .e2e/dsh-<version>)');
     process.exit(0);
 }
 
@@ -584,7 +582,8 @@ try {
 } catch (error) {
     failed += 1;
     console.log(`not ok - e2e aborted: ${error?.stack ?? error}`);
-    console.log(readText(dshLog).split('\n').slice(-40).join('\n'));
+    // DSH's last lines, without its sign-in links (they carry a token).
+    console.log(readText(dshLog).split('\n').filter((l) => !l.includes('dsh web: ')).slice(-40).join('\n'));
 } finally {
     await win?.browser?.close().catch(() => {});
     await stopDsh(child);
