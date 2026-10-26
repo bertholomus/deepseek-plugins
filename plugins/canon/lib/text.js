@@ -219,6 +219,27 @@ small short simple quick little tiny faster slow better proper correct
 `.split(/\s+/).filter(Boolean).flatMap((word) => terms(word)));
 
 /**
+ * Words every software project uses for its everyday parts and doings
+ * ("port", "endpoint", "deploy", "build", "server", "request", "log",
+ * "commit"), as terms. They are everyday in coding requests, so they never
+ * carry a fit on their own, whatever the vault says about them (search.js):
+ * a coding request leaves them out of the words in common, as it does its
+ * everyday request words (they still weigh in what it asks), and a question
+ * whose words in common are all of these fits only a note of a project it
+ * or the session names.
+ */
+export const COMMON = new Set(`
+port ports endpoint endpoints server servers service services client clients request requests response responses
+deploy deploys deployed deploying deployment build builds built building install installed installing release
+version versions commit commits push pull merge branch log logs logging call calls error errors local locally dev
+prod production staging env config setting settings database table tables query queries column index data user users
+page time date read reads start started stop restart host url path header token timeout retry retries health job jobs
+task queue worker handler middleware http https container image process memory cpu network listen listens listening ci
+laptop machine computer second seconds minute minutes hour hours day days week weeks cache caches web app apps proxy
+fail fails failed failing failure crash crashes crashed broken
+`.split(/\s+/).filter(Boolean).flatMap((word) => terms(word)));
+
+/**
  * Verbs that ask for work on code when a sentence starts with them ("Write
  * a function…", "Fix the failing test", "Can you add retries…"). Verbs that
  * ask to be told something ("tell", "show", "explain", "list") are not here,
@@ -228,7 +249,7 @@ small short simple quick little tiny faster slow better proper correct
 export const WORK = new Set(`
 add write create make set fix update change save modify edit remove delete rename refactor rewrite convert generate
 implement run check test improve optimize optimise split format print return handle parse validate debug translate
-upgrade bump clean review profile lint mock simplify extract wrap sort replace read
+upgrade bump clean review profile lint mock simplify extract wrap sort replace read kill
 `.split(/\s+/).filter(Boolean));
 
 /**
@@ -275,19 +296,103 @@ const HEAD = /^([A-Za-z]+)(?:\s+(?:me|us)\b(\s+(?:through|on|in|about)\b)?)?/i;
 const WHERE_IN_CODE = /[\w./-]\.(?:c|cc|cjs|cpp|cs|dart|ex|exs|go|h|java|js|jsx|kt|lua|mjs|php|py|rb|rs|scala|sh|svelte|swift|ts|tsx|vue):\d+\b|\bFile "[^"]+", line \d+/;
 
 /**
+ * Names of programming languages, tools, libraries, services and file
+ * formats, as everyday coding requests name them ("kubectl command to
+ * restart a deployment", "pandas groupby month", "redis-cli command to…",
+ * "health check endpoint in fastapi"). Words that are also everyday English
+ * ("go", "make", "express", "spark") are left out.
+ */
+export const CODE_NAMES = new Set(`
+python py javascript js typescript ts nodejs node.js deno golang rust rustc cargo java kotlin scala swiftui objective-c
+ruby rails php perl lua haskell elixir erlang clojure dart flutter csharp c# c++ cpp bash zsh sh shell powershell
+sql plsql tsql regex regexp html css scss sass json yaml yml toml xml csv tsv markdown graphql protobuf proto
+grpc wasm jsx tsx
+git github gitlab bitbucket docker dockerfile docker-compose podman kubectl kubernetes k8s helm kustomize terraform
+ansible nginx apache caddy haproxy envoy traefik systemd systemctl journalctl cron crontab ssh scp rsync curl wget jq
+yq sed awk grep xargs tar gzip openssl makefile cmake npm npx yarn pnpm pip pip3 pipenv poetry conda virtualenv venv
+gradle maven mvn webpack vite rollup esbuild babel eslint prettier jest mocha vitest pytest unittest junit playwright
+cypress selenium puppeteer react reactjs vue vuejs angular svelte nextjs next.js nuxt fastapi flask django sqlalchemy
+alembic prisma sequelize typeorm knex pandas numpy scipy matplotlib tensorflow pytorch sklearn kafka rabbitmq redis
+redis-cli memcached postgres postgresql psql pg_dump mysql mariadb sqlite sqlite3 mongodb mongo mongoose elasticsearch
+dynamodb s3 aws gcp azure ec2 alb elb cloudfront cloudflare vercel heroku netlify firebase supabase tailwind tailwindcss
+bootstrap jquery lodash axios websocket websockets socket.io tmux vim neovim vscode xcode homebrew brew apt apt-get yum
+dnf ubuntu debian alpine wsl bazel protoc gofmt golangci-lint rustfmt clippy black flake8 mypy ruff pylint tsc
+storybook zod joi moment.js date-fns luxon tokio serde slog logrus prometheus grafana datadog sentry opentelemetry
+nvm pyenv rbenv uvicorn gunicorn celery sidekiq pm2 jupyter ipython devtools node_modules
+`.split(/\s+/).filter(Boolean));
+
+/** The tools' and languages' names of CODE_NAMES that are one word, as terms ("node.js" is not "node"). */
+export const CODE_TERMS = new Set([...CODE_NAMES].filter((name) => /^[a-z][a-z0-9]*$/.test(name)).flatMap((name) => terms(name)));
+
+/** A file name with a source, configuration or data extension ("utils.py", "docker-compose.yml", ".proto", ".env"). */
+const FILE_NAME = /(?:^|[\s(`'"/])[\w.-]*\.(?:c|cc|cjs|cpp|cs|css|csv|dart|env|ex|exs|go|gradle|h|hpp|html|ini|ipynb|java|js|json|jsx|kt|lock|lua|mjs|php|proto|ps1|py|rb|rs|scala|scss|sh|sql|svelte|swift|tf|toml|ts|tsx|vue|xml|yaml|yml|zsh)\b|(?:^|\s)\.(?:env|gitignore|nvmrc|npmrc|dockerignore|bashrc|zshrc|eslintrc)\b/i;
+
+/** A flag on a command line ("--verbose", "-run", "rm -rf"). */
+const FLAG = /(?:^|\s)(?:--[a-z][\w-]*|-[a-z]{1,4})(?=[\s=]|$)/i;
+
+/**
+ * What a program prints when it fails, or the name it gives a fault
+ * ("TypeError", "EADDRINUSE", "ERR_OSSL_EVP_UNSUPPORTED", "npm ERR!",
+ * "fatal: refusing to merge", "panic:", "permission denied (publickey)").
+ */
+const ERROR_NAME = /\b[A-Z][a-zA-Z]*(?:Error|Exception)\b|\bE[A-Z]{4,}\b|\bERR(?:_[A-Z_]+|!)/;
+const ERROR_WORDS = /\b(?:error|fatal|panic|traceback|exception|segfault)\s*:|\bpermission denied\b|\bcommand not found\b|\bno such file or directory\b|\bconnection refused\b|\bsegmentation fault\b|\bstack ?trace\b|\bexit (?:code|status)\b|\bcrashloopbackoff\b/i;
+
+/**
+ * Code written into a sentence: a backquoted part, an identifier in
+ * camelCase or snake_case ("useEffect", "node_modules", "unit_price"), or a
+ * call or member of a package ("time.Now", "errors.Join", "sync.Map").
+ */
+const CODE_WORD = /`[^`\n]+`|\b[a-z]{2,}[A-Z][A-Za-z0-9]*\b|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[a-z]\w*\.(?:[A-Z]\w*|\w+\()/;
+
+/** Names people write in camelCase that are not code. */
+const NOT_CODE = /\b(?:macos|iphone|ipad|ipados|ios|tvos|watchos)\b/gi;
+
+/**
+ * Whether a text has code-shaped words: a language, tool or library's name
+ * (CODE_NAMES), a file name, a command line's flag, an error, or code
+ * written into a sentence. A prompt with one asks about code or a tool,
+ * whatever its first word ("how do i check if a port is free from a shell
+ * script").
+ * @param {string} text
+ */
+export function codeShaped(text) {
+    const plain = String(text ?? '').replace(NOT_CODE, ' ');
+    if (FILE_NAME.test(plain) || FLAG.test(plain) || ERROR_NAME.test(plain) || ERROR_WORDS.test(plain) || CODE_WORD.test(plain)) return true;
+    for (const raw of plain.toLowerCase().split(/[\s,;:!?()[\]{}"'`<>|=]+/)) {
+        const word = raw.replace(/^[./]+|[./]+$/g, '');
+        if (CODE_NAMES.has(word) || CODE_NAMES.has(word.replace(/\d+$/, ''))) return true;
+    }
+    return false;
+}
+
+/**
  * Whether a prompt is a coding request: one of its sentences starts with a
  * verb that asks for work on code (after "please", "can you" and the like),
  * it speaks of code in front of the person ("Why does my regex match too
- * much?", "How can I make this SQL query faster?"), or it pastes output that
+ * much?", "How can I make this SQL query faster?"), it pastes output that
  * says where in the code it was (a stack trace, a failing test, a
- * traceback: "writer.go:57"). A question about how the team works ("Can I
- * run a migration during the close?") is not one, nor is a request to be
- * told ("Run me through a release").
+ * traceback: "writer.go:57"), or it has code-shaped words, whatever its
+ * first word (codeShaped: a tool's name, a file name, a flag, an error). A
+ * question about how the team works ("Can I run a migration during the
+ * close?") is not one, nor is a request to be told ("Run me through a
+ * release").
  * @param {string} prompt
  */
 export function isCodingRequest(prompt) {
+    return asksForWork(prompt) || codeShaped(prompt);
+}
+
+/**
+ * Whether a prompt asks for work on code, as isCodingRequest says, leaving
+ * aside its code-shaped words: a sentence starts with a verb of work, it
+ * speaks of code in front of the person, it pastes where in the code
+ * something failed, or it asks for a thing to be made ("need a …").
+ * @param {string} prompt
+ */
+export function asksForWork(prompt) {
     const text = String(prompt ?? '');
-    if (speaksOfCode(text) || WHERE_IN_CODE.test(text)) return true;
+    if (speaksOfCode(text) || WHERE_IN_CODE.test(text) || ASKS_FOR_CODE.test(text)) return true;
     for (const sentence of text.split(/(?<=[.!?;:])\s+|\n+/)) {
         const head = sentence.trim().replace(LEAD_IN, '').match(HEAD);
         const first = head?.[1]?.toLowerCase();
@@ -296,6 +401,37 @@ export function isCodingRequest(prompt) {
     }
     return false;
 }
+
+/**
+ * A statement of a decision or a lesson, usually to be recorded ("we
+ * decided to keep v1 for a year, put that in the notes", "decision: …",
+ * "lesson learned: …"). Its words that say it was decided and should be
+ * recorded (RECORDING) say what to do with it, not what it is about.
+ */
+const DECIDED = /\b(?:we|i|team|they)(?:\s+(?:have|just|finally|all|now))?(?:'ve)?\s+(?:decided|agreed|chose|settled|picked|went with|landed on|switched)\b|^\s*(?:decision|lesson(?:s)? learned|lesson)\s*:|\blessons? learned\b|\b(?:we|i)(?:'ve| have)? learned\b/i;
+
+/**
+ * Whether a prompt states a decision or a lesson ("we decided …", "we
+ * agreed …", "decision: …", "lesson learned: …"), not asking about one.
+ * @param {string} prompt
+ */
+export function isDecision(prompt) {
+    const text = String(prompt ?? '').trim();
+    return DECIDED.test(text) && !text.endsWith('?');
+}
+
+/** The words of a decision statement that say it was decided and should be recorded, as terms. */
+export const RECORDING = new Set(`
+decide decided decision decisions agree agreed choose chose chosen settle settled pick picked lesson lessons learn
+learned record recorded remember going forward write down put save add document jot log
+`.split(/\s+/).filter(Boolean).flatMap((word) => terms(word)));
+
+/**
+ * A request for a thing to be made, written without a verb of work: "need a
+ * bash loop that…", "i need a regex for…", "looking for a script to…",
+ * "one-liner to find…", "example of a…".
+ */
+const ASKS_FOR_CODE = /^\s*(?:(?:i\s+)?(?:need|want)|(?:i'm\s+|im\s+)?looking\s+for|gimme|give\s+me)\s+(?:a|an|some)\b|^\s*(?:(?:a\s+)?one-liner|(?:an?\s+)?example\s+of)\b/i;
 
 /** Words that end what a work verb acts on ("a migration | that adds…", "a route | to tide-ledger"). */
 const OBJECT_ENDS = new Set(`

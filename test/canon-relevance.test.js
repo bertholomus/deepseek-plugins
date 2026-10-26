@@ -3,30 +3,32 @@
  * fixture vault (frozen: the sets' answers are its paths), with Canon's own
  * recall exactly as a turn runs it (test/helpers/canon-relevance.mjs).
  *
- * The dev set (dev.json, and dev-fresh.json by two fresh writers) is tuned
- * on and held to the figures it reached. The two
- * hold-outs are written by fresh writers who never saw Canon's code or the
- * dev set, measured and never tuned on: the first (no kinds) is held to the
- * four floors of OPEN-QUESTIONS #29, the second (with kinds) to those and
- * the everyday-coding floor of #33. A hold-out's test prints its figures
- * only, never its prompts. Measured once at 638044e, the second missed two of
- * its five floors (an answering note in the block 83.3%, floor 90%; no block
- * for 72.5% of everyday coding requests, floor 90%). It is not tuned on
- * (OPEN-QUESTIONS #38), so its shape is a plain test and its floors a `todo`
- * test that runs and prints the misses on every run without hiding a new
- * failure behind it (#40).
+ * The dev set (dev.json; dev-fresh.json by two fresh writers; the round-3
+ * judge's sets, dev-judge.json; and round 4's casually typed prompts and
+ * decisions, dev-casual.json) is tuned on and held to the figures it
+ * reached. The hold-outs are written by fresh writers who never saw Canon's
+ * code or the dev set: the first (no kinds) is held to the four floors of
+ * OPEN-QUESTIONS #29, the second and the third (with kinds) to those and the
+ * everyday-coding floor of #33. A hold-out's test prints its figures only,
+ * never its prompts. Measured once at 638044e, the second missed two of its
+ * five floors (an answering note in the block 83.3%, floor 90%; no block for
+ * 72.5% of everyday coding requests, floor 90%), so its shape is a plain test
+ * and its floors a `todo` test that runs and prints the misses on every run
+ * without hiding a new failure behind it (#40); it is tuned on from round 4
+ * (#41). The third is measured once when round 4's rules are frozen; its
+ * tests skip while it is not there.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { FLOORS, HOLDOUT, HOLDOUT2, belowFloors, loadDev, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
-import { isCodingRequest } from '../plugins/canon/lib/text.js';
+import { FLOORS, HOLDOUT, HOLDOUT2, HOLDOUT3, belowFloors, loadDev, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
+import { isCodingRequest, isDecision } from '../plugins/canon/lib/text.js';
 
 /**
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 540, inBlock: 554, extra: 207, noBlock: 367, coding: 274 });
+const DEV_REACHED = Object.freeze({ first: 592, inBlock: 606, extra: 214, noBlock: 533, coding: 432 });
 
 /** The fixture vault's projects: a folder named for one is that project's. */
 const PROJECTS = new Set(['harbor-gateway', 'lantern-api', 'lantern-web', 'quartz-cache', 'tide-ledger']);
@@ -96,6 +98,23 @@ test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and quest
     const fresh = set.filter((e) => /^h[ef]-\d+$/.test(e.id));
     assert.ok(fresh.filter((e) => e.kind === 'answers').length >= 24, 'the fresh writers\' prompts a note answers');
     assert.ok(fresh.filter((e) => e.kind === 'coding').length >= 40, 'and their everyday coding requests');
+    // The round-3 judge's sets (jc01, ja01, jd01, …; dev-judge.json): everyday coding requests, questions a note
+    // answers, and casually typed coding requests ("health check endpoint in fastapi"), less four prompts that repeat a
+    // dev prompt word for word in the same folder.
+    const judged = set.filter((e) => /^j[acd]\d+$/.test(e.id));
+    assert.equal(judged.length, 129, 'the round-3 judge\'s sets');
+    assert.ok(judged.filter((e) => /^jd\d+$/.test(e.id) && e.kind === 'coding').length >= 41, 'its casually typed coding requests');
+    // Round 4's own (dev-casual.json): casually typed coding requests (cc01, …): lower case, noun phrases, "how do i …",
+    // "need a …", commands and errors, tools' names, some in a project's folder; casually typed questions a note
+    // answers (ca01, …); and statements of a decision or a lesson to record, with a note in force on the same subject
+    // (dd01, …, kind answers) and without (dv01, …, kind vault).
+    const casual = set.filter((e) => /^cc\d+$/.test(e.id) && e.kind === 'coding');
+    assert.ok(casual.length >= 40 && casual.every((e) => e.prompt === e.prompt.toLowerCase() || /[A-Z]/.test(e.prompt.replace(/[A-Z][A-Za-z]*(?:Error|Off|Map|Now|Time)\b|ERR|ERESOLVE|FATAL|Result/g, '')) === false), `${casual.length} casually typed coding requests`);
+    assert.ok(casual.filter((e) => PROJECTS.has(last(e.folder))).length >= 10, 'some in a project\'s folder');
+    assert.ok(set.filter((e) => /^ca\d+$/.test(e.id) && e.kind === 'answers').length >= 20, 'casually typed questions a note answers');
+    const decided = set.filter((e) => /^d[dv]\d+$/.test(e.id));
+    assert.ok(decided.length >= 12 && decided.every((e) => isDecision(e.prompt)), `${decided.length} statements of a decision or a lesson`);
+    assert.ok(decided.filter((e) => e.kind === 'answers').length >= 6 && decided.filter((e) => e.kind === 'vault').length >= 6, 'half with a note on the same subject, half without');
     // No prompt twice in one folder.
     const keys = set.map((e) => `${e.folder}\n${said(e.prompt)}`);
     assert.equal(new Set(keys).size, keys.length, 'a prompt repeats in its folder');
@@ -161,9 +180,9 @@ test('second hold-out: well formed with kinds and apart from the dev set and the
     assert.ok(s.answerable.n > 0 && s.unanswerable.n > 0 && s.coding.n > 0, 'it has prompts a note answers, prompts none does, and everyday coding requests');
 });
 
-// Measured once at 638044e with the rules frozen, the second hold-out missed two floors. It is not tuned on, so the
-// misses stand: every floor still runs and the misses print, but as known misses they do not fail the run
-// (OPEN-QUESTIONS #40).
+// Measured once at 638044e with the rules frozen, the second hold-out missed two floors. The misses stand as
+// measured: every floor still runs and the misses print, but as known misses they do not fail the run
+// (OPEN-QUESTIONS #40). It is tuned on from round 4 (#41); the README gives its figures with round 4's rules.
 test('second hold-out: within all five floors (its figures only)', { todo: 'missed when measured once at 638044e: an answering note in the block 20 of 24 (83.3%, floor 90%); no block for 29 of 40 everyday coding requests (72.5%, floor 90%) (OPEN-QUESTIONS #40)' }, async (t) => {
     if (!existsSync(HOLDOUT2)) {
         t.skip('the second hold-out set is not there yet');
@@ -172,6 +191,33 @@ test('second hold-out: within all five floors (its figures only)', { todo: 'miss
     const m = await measure(loadSet(HOLDOUT2, { kinds: true }));
     assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
     t.diagnostic(figures('second hold-out', m));
+    const s = m.summary;
+    assert.ok(s.answerable.n > 0 && s.unanswerable.n > 0 && s.coding.n > 0, 'it has prompts a note answers, prompts none does, and everyday coding requests');
+    assert.deepEqual(belowFloors(m), [], `floors ${JSON.stringify(FLOORS)}`);
+});
+
+test('third hold-out: well formed with kinds, apart from the dev set and the first two hold-outs, with prompts a note answers and everyday coding requests', async (t) => {
+    if (!existsSync(HOLDOUT3)) {
+        t.skip('the third hold-out set is not there yet');
+        return;
+    }
+    const set = loadSet(HOLDOUT3, { kinds: true });
+    const earlier = new Set([...loadDev(), ...(existsSync(HOLDOUT) ? loadSet(HOLDOUT) : []), ...(existsSync(HOLDOUT2) ? loadSet(HOLDOUT2) : [])].map((e) => said(e.prompt)));
+    const repeats = set.filter((e) => earlier.has(said(e.prompt))).length;
+    assert.equal(repeats, 0, `${repeats} of its prompts repeat a dev, first or second hold-out prompt`);
+    const m = await measure(set);
+    assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
+    assert.ok(set.some((e) => e.kind === 'answers') && set.some((e) => e.kind === 'coding'), 'it has prompts of kinds answers and coding');
+});
+
+test('third hold-out: within all five floors (its figures only)', async (t) => {
+    if (!existsSync(HOLDOUT3)) {
+        t.skip('the third hold-out set is not there yet');
+        return;
+    }
+    const m = await measure(loadSet(HOLDOUT3, { kinds: true }));
+    assert.equal(m.problems.length, 0, `${m.problems.length} problems with the set`);
+    t.diagnostic(figures('third hold-out', m));
     const s = m.summary;
     assert.ok(s.answerable.n > 0 && s.unanswerable.n > 0 && s.coding.n > 0, 'it has prompts a note answers, prompts none does, and everyday coding requests');
     assert.deepEqual(belowFloors(m), [], `floors ${JSON.stringify(FLOORS)}`);

@@ -4,24 +4,28 @@
  * reports it (test/helpers/canon-relevance.mjs measures):
  *
  *     node scripts/canon-relevance.mjs                     # a table per set
- *     node scripts/canon-relevance.mjs --set dev           # one set only (dev, fresh, holdout or holdout2)
+ *     node scripts/canon-relevance.mjs --set dev           # one set only (dev, fresh, judge, casual, holdout, holdout2 or holdout3)
  *     node scripts/canon-relevance.mjs --set dev --misses  # and each prompt it got wrong
  *
- * The dev set is dev.json and dev-fresh.json; `fresh` is dev-fresh.json
- * alone. `--misses` lists a hold-out's misses only when that hold-out is
- * named with `--set`: its prompts are never tuned on, so they are not
- * shown by chance.
+ * The dev set is dev.json, dev-fresh.json, dev-judge.json and
+ * dev-casual.json; `fresh`, `judge` and `casual` are one of those files
+ * alone. The second hold-out is tuned on from round 4 (OPEN-QUESTIONS #41).
+ * `--misses` lists a hold-out's misses only when that hold-out is named
+ * with `--set`, so they are not shown by chance.
  */
 import { existsSync } from 'node:fs';
-import { DEV, DEV_FRESH, HOLDOUT, HOLDOUT2, belowFloors, groupText, groups, loadDev, loadSet, measure, missText, table } from '../test/helpers/canon-relevance.mjs';
+import { DEV, DEV_CASUAL, DEV_FRESH, DEV_JUDGE, HOLDOUT, HOLDOUT2, HOLDOUT3, belowFloors, groupText, groups, loadDev, loadSet, measure, missText, table } from '../test/helpers/canon-relevance.mjs';
 
 const SETS = [
-    ['dev', 'Dev set (tuned on: dev.json and dev-fresh.json)', DEV, loadDev],
+    ['dev', 'Dev set (tuned on: dev.json, dev-fresh.json, dev-judge.json and dev-casual.json)', DEV, loadDev],
     ['fresh', 'Fresh dev prompts (dev-fresh.json, part of the dev set)', DEV_FRESH, () => loadSet(DEV_FRESH)],
+    ['judge', 'The round-3 judge\'s sets (dev-judge.json, part of the dev set)', DEV_JUDGE, () => loadSet(DEV_JUDGE)],
+    ['casual', 'Casually typed prompts and decisions (dev-casual.json, part of the dev set)', DEV_CASUAL, () => loadSet(DEV_CASUAL)],
     ['holdout', 'First hold-out (never tuned on)', HOLDOUT, () => loadSet(HOLDOUT)],
-    ['holdout2', 'Second hold-out (never tuned on)', HOLDOUT2, () => loadSet(HOLDOUT2)],
+    ['holdout2', 'Second hold-out (tuned on from round 4)', HOLDOUT2, () => loadSet(HOLDOUT2)],
+    ['holdout3', 'Third hold-out (never tuned on; measured once, when round 4\'s rules were frozen)', HOLDOUT3, () => loadSet(HOLDOUT3, { kinds: true })],
 ];
-const DEV_KEYS = new Set(['dev', 'fresh']);
+const DEV_KEYS = new Set(['dev', 'fresh', 'judge', 'casual']);
 const args = process.argv.slice(2);
 const only = args.includes('--set') ? args[args.indexOf('--set') + 1] : '';
 if (only && !SETS.some(([key]) => key === only)) {
