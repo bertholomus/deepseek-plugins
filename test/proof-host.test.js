@@ -822,12 +822,14 @@ test('endpoints: an export is logged with its file; a copy is logged as a copy o
  * its session list (`items`), the logs `inspect` reads (`logs`), and its
  * model service (`llm`). Gives the endpoints and what DSH was asked.
  */
-async function hostHalf({ items, logs, llm, settings = {} }) {
+async function hostHalf({ items, logs, llm, settings = {}, open = {} }) {
     await dshStandIns();
     process.env.CANON_TEST_DSH_HOME = tempDir('proof-home');
     const { apply } = await import('../plugins/proof/lib/index.js');
     const asked = { inspected: [], created: [], selected: [], sent: [], appended: [] };
     const cleanups = [];
+    // Open sessions (`open`: id → its claims as they are now) and DSH's word that a session's claims changed.
+    const handlers = [];
     let remote;
     const agent = (id) => ({
         id,
@@ -838,7 +840,7 @@ async function hostHalf({ items, logs, llm, settings = {} }) {
     const ctx = {
         logger: { warn() {}, info() {} },
         inject(names, fn) { if (names[0] === 'typertGateway') fn({ provide: (_name, value) => { remote = value; } }); },
-        get: (name) => (name === 'llm' ? llm : name === 'sessions' ? { get: () => undefined, flush: async () => true } : undefined),
+        get: (name) => (name === 'llm' ? llm : name === 'sessions' ? { get: (id) => (id in open ? { id } : undefined), flush: async () => true } : undefined),
         sessionController: {
             list: async () => ({ items }),
             inspect: async (id) => {
@@ -852,7 +854,7 @@ async function hostHalf({ items, logs, llm, settings = {} }) {
             cancel: async () => {},
             agents: { selectForNextRequest: (_agent, selection) => asked.selected.push(selection) },
         },
-        sessionProjections: { register() {}, onChanged() {}, snapshot() {}, stateOf() {} },
+        sessionProjections: { register() {}, onChanged(fn) { handlers.push(fn); }, snapshot: (session) => ({ values: { [KEY]: open[session.id] } }), stateOf() {} },
         on() {},
         effect(fn) {
             const cleanup = fn();
@@ -860,7 +862,8 @@ async function hostHalf({ items, logs, llm, settings = {} }) {
         },
     };
     apply(ctx, { enabled: true, flags: true, verifier: 'ask', verifierProvider: 'owner-ascents', verifierModel: 'GLM-5.3-Flash-EXL3', verifierMinutes: 15, verifierPerHour: 12, ...settings });
-    return { remote, asked, stop: () => { for (const fn of cleanups.splice(0)) fn(); } };
+    const changed = (id) => { for (const fn of handlers) fn({ id }, KEY, open[id]); };
+    return { remote, asked, changed, stop: () => { for (const fn of cleanups.splice(0)) fn(); } };
 }
 
 /** Wait (in real time) until `fn` gives something, for at most `ms`. */
@@ -915,6 +918,26 @@ test('host half: a session saved while Proof was off is listed again, its claims
     assert.equal(proof.asked.inspected.length, 3);
     // The provider and model as DSH's model menu names them.
     assert.deepEqual([later.verifier.providerName, later.verifier.modelName], ['Owner Gateway (DSH Test)', 'GLM-5.3 Flash']);
+});
+
+test('host half: the page lists an open session\'s claims as they are now, and a new session at once', async (t) => {
+    const view = (events) => JSON.parse(JSON.stringify(viewOf(foldAll(events))));
+    const hello = turn(1, { prompt: 'Hello.', reply: 'Hi there.' });
+    const open = { busy: view(hello) };
+    // DSH's list holds each session's claims as of its last save.
+    const items = [{ sessionId: 'busy', updatedAt: 10, projections: { values: { title: 'Busy', [KEY]: view(hello) } } }];
+    const proof = await hostHalf({ items, logs: { busy: hello }, llm: LLM, open });
+    t.after(() => proof.stop());
+    assert.deepEqual((await proof.remote.state()).sessions.map((s) => s.sessionId), [], 'no claims yet');
+    open.busy = view([...hello, ...turn(2, { prompt: 'Deploy.', reply: 'Deployed to staging.' })]);
+    proof.changed('busy');
+    assert.deepEqual((await proof.remote.state()).sessions.map((s) => s.sessionId), ['busy'], 'listed at once, though DSH has not saved it since');
+    // A session the last list read did not have: the list is read again, so it is listed at once too.
+    items.push({ sessionId: 'fresh', updatedAt: 20, projections: { values: { title: 'Fresh' } } });
+    open.fresh = view(turn(1, { prompt: 'Ship it.', reply: 'Pushed to main.' }));
+    proof.changed('fresh');
+    assert.deepEqual((await proof.remote.state()).sessions.map((s) => s.sessionId).sort(), ['busy', 'fresh']);
+    assert.deepEqual(proof.asked.inspected, [], 'no log read for an open session');
 });
 
 test('host half: a check runs at the lowest effort its model offers (low), named as DSH names it', async (t) => {
