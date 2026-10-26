@@ -522,7 +522,7 @@ try {
             const moved = lower ? await waitFor(async () => {
                 const order = await orderOf();
                 return order.indexOf(lower) < order.indexOf(ids.off) ? order : null;
-            }, 'the list to change under the choice', 15000, 100).catch(() => null) : null;
+            }, 'the list to change under the choice', 45000, 100).catch(() => null) : null;
             await sleep(600);
             const stillShown = await askHint.isVisible();
             const onChoice = await focusedTab();

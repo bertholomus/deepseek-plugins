@@ -581,6 +581,38 @@ test('kit: the sidebar badge writes its count at 4.5:1 or more in light and dark
     assert.ok(contrast(rgb('#ffffff'), rgb(DSH.light.danger)) < 4.5, 'white on DSH\'s light error colour is just short too');
 });
 
+test('kit: a read that finishes after a newer one has landed is dropped, so a slow host never puts old data back on the page', async () => {
+    const { react, mount } = statefulReact();
+    const kit = kitWith({ react, document: { body: {}, activeElement: null, addEventListener() {}, removeEventListener() {} } });
+    const reads = [];
+    let live;
+    const view = mount(() => {
+        live = kit.useLive(() => new Promise((resolve, reject) => reads.push({ resolve, reject })), ['x'], { delayMs: 0 });
+        return null;
+    }, {});
+    assert.equal(reads.length, 1, 'the first read starts with the page');
+    const older = live.refresh();
+    const newer = live.refresh();
+    reads[2].resolve({ rule: 'auto' });
+    await newer;
+    assert.deepEqual(live.data, { rule: 'auto' });
+    reads[1].resolve({ rule: 'off' });
+    await older;
+    assert.deepEqual(live.data, { rule: 'auto' }, 'an older read that finishes later is dropped');
+    reads[0].reject(new Error('timed out'));
+    await settle();
+    assert.equal(live.error, undefined, 'and so is an older failure');
+    const failing = live.refresh();
+    reads[3].reject(new Error('Autopilot did not answer.'));
+    await failing;
+    assert.deepEqual([live.data, live.error], [{ rule: 'auto' }, 'Autopilot did not answer.'], 'a newer failure keeps the data and says so');
+    const next = live.refresh();
+    reads[4].resolve({ rule: 'ask' });
+    await next;
+    assert.deepEqual([live.data, live.error], [{ rule: 'ask' }, undefined]);
+    view.unmount();
+});
+
 test('kit: a choice commits on a click or on Enter, never on an arrow key; Escape and leaving go back; it is never disabled', async () => {
     const { react, mount } = statefulReact();
     const listeners = new Set();

@@ -357,7 +357,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     /**
      * Data from `read`, read again whenever the hub moves on one of `channels`
      * (gathered over `delayMs`). A failed read keeps the last good data and
-     * says so in `error`.
+     * says so in `error`. On a slow host reads can finish out of order: a read
+     * that finishes after a newer one has landed is old news and is dropped,
+     * so the page never goes back to what was true before.
      */
     function useLive(read, channels, { delayMs = 250 } = {}) {
         const [state, setState] = React.useState({ data: undefined, error: undefined, code: undefined, loading: true });
@@ -365,12 +367,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         readRef.current = read;
         const timer = React.useRef(undefined);
         const alive = React.useRef(true);
+        const asked = React.useRef(0);
+        const landed = React.useRef(0);
         const refresh = React.useCallback(async () => {
+            const n = ++asked.current;
+            const fresh = () => {
+                if (!alive.current || n < landed.current) return false;
+                landed.current = n;
+                return true;
+            };
             try {
                 const data = await readRef.current();
-                if (alive.current) setState({ data, error: undefined, code: undefined, loading: false });
+                if (fresh()) setState({ data, error: undefined, code: undefined, loading: false });
             } catch (error) {
-                if (alive.current) setState((s) => ({ data: s.data, error: String(error?.message ?? error), code: typeof error?.code === 'string' ? error.code : undefined, loading: false }));
+                if (fresh()) setState((s) => ({ data: s.data, error: String(error?.message ?? error), code: typeof error?.code === 'string' ? error.code : undefined, loading: false }));
             }
         }, []);
         const key = channels.join(',');
