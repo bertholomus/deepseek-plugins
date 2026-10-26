@@ -616,9 +616,11 @@ try {
     ids.cut = await run.newSession('E2E:slow', 'Long migration');
     ids.cutGoal = await run.newSession('E2E:goal Write the summary [r1=slow]', 'Summary goal');
     await waitFor(async () => (await run.session(ids.cut)).status === 'running', 'the long turn to run', 30000);
+    // The round has begun once its message is in the log (DSH opens the turn first, then writes the round's message).
     await waitFor(async () => {
         const s = await run.session(ids.cutGoal);
-        return s.status === 'running' && s.turns.started >= 2;
+        if (s.status !== 'running' || s.turns.started < 2) return false;
+        return (await run.events(ids.cutGoal)).some((e) => e.type === 'user/message' && e.source?.kind === 'goal');
     }, 'the goal round to run', 30000);
     const before = (await state()).log.length;
     const reportNotes = await count(ids.report, 'nudge');

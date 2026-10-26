@@ -17,7 +17,11 @@ export function openWork(state) {
     const todos = state?.todos;
     if (todos?.open > 0) parts.push(`${count(todos.open, 'open todo')}${todos.next ? ` (next: “${clip(todos.next, 80)}”)` : ''}`);
     const goal = state?.goal;
-    if (goal?.phase === 'active') parts.push(`the goal “${clip(goal.objective, 80)}”${goal.max ? ` (round ${goal.rounds} of ${goal.max})` : ''}`);
+    if (goal?.phase === 'active') {
+        // Before its first round a goal has no round to name: "round 0 of 6" would read as nonsense.
+        const rounds = goal.rounds > 0 ? (goal.max ? ` (round ${goal.rounds} of ${goal.max})` : '') : goal.max ? ` (no round begun yet, up to ${goal.max})` : ' (no round begun yet)';
+        parts.push(`the goal “${clip(goal.objective, 80)}”${rounds}`);
+    }
     return parts.join(' and ');
 }
 

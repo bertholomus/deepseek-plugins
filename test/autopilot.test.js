@@ -198,7 +198,7 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     const notes = notesIn(dsh, 'r');
     assert.equal(notes.length, 1);
     assert.match(notes[0], /^\[Autopilot\] DSH stopped while you were working: turn 1 was cut off \(its last step was at .+\)\./);
-    assert.match(notes[0], /Still open: 2 open todos \(next: “Write the parser”\) and the goal “Cut the release” \(round 0 of 20\)\./);
+    assert.match(notes[0], /Still open: 2 open todos \(next: “Write the parser”\) and the goal “Cut the release” \(no round begun yet, up to 20\)\./);
     const [resume] = entries(after.journal, 'resume');
     assert.equal(resume.state, 'delivered');
     assert.match(resume.why, /^Turn 1 was cut off: DSH stopped before it finished \(a quit, a restart or a crash\)\. Its last step was at .+, and nobody has written in the session since\.$/);
@@ -801,6 +801,10 @@ test('notes and questions in plain words, each signed [Autopilot]', () => {
     const state = { todos: { open: 1, next: 'Add tests' }, goal: { phase: 'active', objective: 'Ship', rounds: 2, max: 5 } };
     assert.equal(openWork(state), '1 open todo (next: “Add tests”) and the goal “Ship” (round 2 of 5)');
     assert.equal(openWork({}), '');
+    // A goal cut off before its first round: no "round 0".
+    assert.equal(openWork({ goal: { phase: 'active', objective: 'Ship', rounds: 0, max: 5 } }), 'the goal “Ship” (no round begun yet, up to 5)');
+    assert.equal(openWork({ goal: { phase: 'active', objective: 'Ship', rounds: 0 } }), 'the goal “Ship” (no round begun yet)');
+    assert.equal(openWork({ goal: { phase: 'active', objective: 'Ship', rounds: 3 } }), 'the goal “Ship”');
     for (const note of [carryOnNote({ turn: 3, at: now - 60000 }, state, now), nudgeNote(state), errorNote({ turn: 3, error: 'boom' }, state), answerNote('yes')]) {
         assert.match(note, /^\[Autopilot\] /);
     }
