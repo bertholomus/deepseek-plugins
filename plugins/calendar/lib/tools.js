@@ -19,6 +19,7 @@
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { CLEARABLE, changeInput, given, instantArg, refusalText, scopeArg } from './args.js';
+import { plainFailure } from './config.js';
 import { CalendarError, peopleWords } from './manager.js';
 import { dayIn, toLocal } from './zones.js';
 
@@ -54,7 +55,7 @@ async function guarded(run) {
     try {
         return await run();
     } catch (error) {
-        failed = error instanceof CalendarError ? refusalText(error) : `Failed: ${String(error?.message ?? error).slice(0, 400)}`;
+        failed = error instanceof CalendarError ? refusalText(error) : `Failed: ${plainFailure(error, 400)}`;
     }
     throw new Error(failed);
 }

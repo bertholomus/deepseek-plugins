@@ -12,6 +12,7 @@
  */
 import { Remote, RemoteError, bindTypertRemote } from '@deepseek-ai/dsh-typert-protocol';
 import { WindowChanges } from './asked.js';
+import { plainFailure } from './config.js';
 import { CalendarError } from './manager.js';
 import { PRESETS } from './sources/caldav.js';
 
@@ -52,8 +53,9 @@ function failure(error) {
         };
         return new RemoteError(WINDOW_CODES.has(error.code) ? `calendar/${error.code}` : 'calendar/refused', error.message, details);
     }
-    return new RemoteError('calendar/failed', String(error?.message ?? error).slice(0, 300), {});
+    return new RemoteError('calendar/failed', plainFailure(error), {});
 }
+
 
 const text = (value) => (typeof value === 'string' ? value : '');
 const list = (value) => (Array.isArray(value) ? value.filter((v) => typeof v === 'string') : undefined);
@@ -87,7 +89,8 @@ export class CalendarRemote {
      * dialog offers: {version, zone, accounts, calendars, defaultCalendar,
      * prefs, syncing, storeIssue?, presets (CalDAV), signIn: {google: {ready,
      * clientId?}, microsoft: {ready, clientId?}}, askBeforeEmails}.
-     * defaultCalendar is null when no calendar is the default: a new event
+     * settingsProblems [{key, text}]: the plugin's settings that are wrong, in words (config.js), each with what
+     * the plugin does until it's fixed. defaultCalendar is null when no calendar is the default: a new event
      * then names its calendar ('calendar/choose-calendar'). askBeforeEmails:
      * false when the user's settings let chats' emailing changes go without
      * asking them. `version` changes whenever
@@ -102,6 +105,7 @@ export class CalendarRemote {
         return this.run(async () => ({
             ...this.manager.state(), presets: PRESETS, signIn: await this.setup.signInReady(),
             askBeforeEmails: this.setup.askBeforeEmails?.() !== false,
+            settingsProblems: this.setup.settingsProblems?.() ?? [],
         }));
     }
 

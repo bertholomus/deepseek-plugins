@@ -5219,6 +5219,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const remote = accounts.some((a) => a.kind !== 'local');
             const [, setClosed] = React.useState(0);
             const issues = storeIssues(state).filter((i) => !closedIssues.has(i.key));
+            const wrongSettings = (Array.isArray(state?.settingsProblems) ? state.settingsProblems : EMPTY).filter((p) => isObject(p) && typeof p.text === 'string' && typeof p.key === 'string');
             // What a change did in part, and what is left to do (a move that stopped halfway): until the user closes it.
             const kept = store.notices();
             const shownDays = React.useMemo(() => new Set(range.days), [range.first, range.last, range.days.length]);
@@ -5568,7 +5569,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     icon('IconWarningOutlineRegular'),
                     h('span', null, `Couldn't refresh: ${stale}`),
                     h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
-                issues.length || kept.length ? h('div', { className: 'dshcal-notes' },
+                issues.length || kept.length || wrongSettings.length ? h('div', { className: 'dshcal-notes' },
+                    // A setting in the profile that is wrong: what it must be, what the plugin does meanwhile, and where to change it.
+                    wrongSettings.map((p) => h('div', { key: `setting:${p.key}`, className: 'dshcal-notice', role: 'status', 'data-tone': 'warn', 'data-calendar-setting-problem': p.key },
+                        icon('IconWarningOutlineRegular'),
+                        h('span', null, `A setting of the calendar plugin is wrong: ${p.text} Change it in the calendar's entry (id: calendar) in this profile's cordis.patch.yml.`))),
                     kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-notice', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
                         icon('IconWarningOutlineRegular'),
                         h('span', null, n.text),

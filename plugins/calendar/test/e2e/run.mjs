@@ -25,7 +25,13 @@
  *   refused before anyone is asked;
  * - with the CalDAV server, a delete decided on an event that changed on
  *   the server meanwhile stops and says so;
- * - a restart keeps the calendars and their events.
+ * - a restart keeps the calendars and their events;
+ * - wrong values in the profile (a number in quotes, "yes" for a switch, an
+ *   unknown time zone or agentChanges) leave the plugin running, each named
+ *   in words for the window and in the log, with the safe choice meanwhile:
+ *   no calendar tools for chats, every chat's change asking first;
+ * - its files are in the DSH's own home (DSH_HOME), never in the home's own
+ *   DSH folder.
  *
  *   DSH_BIN=/path/to/node_modules/@deepseek-ai/dsh/lib/bin.js node plugins/calendar/test/e2e/run.mjs
  *
@@ -36,7 +42,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createServer, request } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { zstdDecompressSync } from 'node:zlib';
@@ -603,6 +609,35 @@ try {
     r = await webApi(web2, 'dsh-plugin-calendar/state', {});
     check('with the subscription', r.ok && r.value?.accounts?.some((a) => a.id === feedAccount?.id), JSON.stringify(r.value?.accounts));
     check('no event text in the log', !/Dentist|Standup|Haircut|Main Street|Plumber|Team offsite|Party|ann@example/.test(readText(logFile)), readText(logFile).slice(-800));
+    await stopDsh(child);
+
+    // 5. Wrong values in the profile never stop the plugin: each is named in words, and the safe choice holds meanwhile.
+    writeProfile(model.port, { syncMinutes: '30', tools: 'yes', timeZone: 'Mars/Phobos' });
+    child = await boot(dsh, 'danger-full-access', 'wrong settings');
+    const web3 = await signInWeb();
+    r = await waitFor(async () => { const s = await webApi(web3, 'dsh-plugin-calendar/state', {}); return s.ok ? s : null; }, 'the calendar with wrong settings', 30000).catch((e) => ({ ok: false, error: String(e) }));
+    const wrongKeys = (r.value?.settingsProblems ?? []).map((p) => p.key).sort();
+    const toolsWords = r.value?.settingsProblems?.find((p) => p.key === 'tools')?.text ?? '';
+    check('a number in quotes, "yes" for a switch and an unknown time zone leave the plugin running, each named in words for the window',
+        r.ok && wrongKeys.join() === 'syncMinutes,timeZone,tools' && /tools must be true or false \(it is "yes"\); chats get no calendar tools until it's fixed/.test(toolsWords)
+        && r.value.calendars?.some((c) => c.id === personal.id) && r.value.zone !== 'Mars/Phobos', JSON.stringify(r.value?.settingsProblems ?? r));
+    r = await webApi(web3, 'dsh-plugin-calendar/events', { from, to });
+    check('and the calendar still shows its events', r.ok && r.value?.occurrences?.length === 5, JSON.stringify(r).slice(0, 300));
+    call = await agentCall('calendar_events', { from: '2026-10-12', to: '2026-10-18' });
+    check('while tools is wrong, chats get no calendar tools (the safe choice)', call.offered.length > 0 && !call.offered.some((t) => t.startsWith('calendar_')), call.offered.join(', '));
+    check('each wrong setting is in the log, by name only', /setting wrong tools/.test(readText(logFile)) && /setting wrong syncMinutes/.test(readText(logFile)) && !readText(logFile).includes('Mars/Phobos'),
+        readText(logFile).slice(-400));
+    await stopDsh(child);
+    writeProfile(model.port, { agentChanges: 'sometimes' });
+    child = await boot(dsh, 'danger-full-access', 'unknown agentChanges');
+    call = await agentCall('calendar_create_event', { title: 'Unasked', start: '2026-10-17T10:00' });
+    const unasked = (await webApi(await signInWeb(), 'dsh-plugin-calendar/search', { query: 'unasked' })).value?.occurrences ?? [];
+    check('an unknown agentChanges asks before every change: on Full access, which can\'t ask, a change is refused, saying why', /can't ask \(its approval prompts are off\)/.test(call.result)
+        && unasked.length === 0 && /policy calendar_create_event access=danger-full-access deny/.test(readText(logFile)), call.result);
+    // The store followed this DSH's home: nothing of this run is in the home's own DSH folder (the feed's calendar id is this run's own).
+    const runOwn = feedCalendar?.id ?? 'missing';
+    check('the plugin keeps its files in this DSH\'s home (DSH_HOME), not in the home\'s own DSH folder', existsSync(join(calendarDir, 'events', `${runOwn}.json`))
+        && !existsSync(join(homedir(), '.dsh', 'calendar', 'events', `${runOwn}.json`)), runOwn);
 } catch (error) {
     failed += 1;
     console.log(`not ok - the run stopped: ${redact(error?.stack ?? error)}`);

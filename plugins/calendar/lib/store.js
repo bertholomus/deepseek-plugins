@@ -37,25 +37,10 @@
  * @module dsh-plugin-calendar/store
  */
 import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { dataPath } from './config.js';
 
-/** Resolve a '~'-prefixed path. */
-export function expand(p) {
-    return p.startsWith('~/') || p === '~' ? `${homedir()}${p.slice(1)}` : p;
-}
-
-/** DSH's own data folder: `$DSH_HOME`, else ~/.dsh, as DSH resolves it. */
-export function dshHome() {
-    const env = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : '';
-    return env === '' ? join(homedir(), '.dsh') : resolve(expand(env));
-}
-
-/** A data path: one under ~/.dsh follows DSH_HOME, so a test copy of DSH keeps its own calendars. */
-export function dataPath(p) {
-    if (p === '~/.dsh' || p.startsWith('~/.dsh/')) return `${dshHome()}${p.slice('~/.dsh'.length)}`;
-    return expand(p);
-}
+export { dataPath };
 
 /** A folder (and missing parents) as mode 700, whatever the umask. */
 export function ensurePrivateDir(dir) {

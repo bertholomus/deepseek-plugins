@@ -22,7 +22,8 @@ import { request, safeHost } from './http.js';
 import { editIcs, newUid, readIcs } from './ical.js';
 import { addressKey, cleanRecord, instantOf, isEmailAddress, sameTime } from './model.js';
 import { describeRule, expandWall, parseRule, ruleText, WEEKDAYS } from './recur.js';
-import { CalendarStore, dataPath, ensurePrivateDir } from './store.js';
+import { dataPath } from './config.js';
+import { CalendarStore, ensurePrivateDir } from './store.js';
 import { SourceError, problemOf, sourceModule } from './sources/index.js';
 import { addDays, dayIn, daysBetween, isDay, isZone, localZone, normalLocal, toInstant, toLocal, wallMs, wallOf } from './zones.js';
 import { dirname } from 'node:path';
@@ -138,7 +139,8 @@ export class CalendarManager {
         // Once Personal is known: leftover temporary files go, other calendars' events files stay.
         this.store.sweep();
         this.saveState();
-        const minutes = Math.max(5, Number(this.config.syncMinutes) || 15);
+        // 5 minutes to a day: a longer interval than a timer can hold would fire at once, again and again.
+        const minutes = Math.min(1440, Math.max(5, Number(this.config.syncMinutes) || 15));
         this.later(() => this.syncAll(), 3000);
         const every = setInterval(() => { void this.syncAll(); }, minutes * MINUTE);
         every.unref?.();
