@@ -441,6 +441,77 @@ test('kit: one hub request per window serves every plugin, and moves only the vi
     assert.ok(heard.a >= 3);
 });
 
+test('kit: while Session Watch is off, the window asks DSH\'s plugin list, never its endpoint; pages read once, and all again when it is back', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const shared = {};
+    const kit = kitWith({ window: shared });
+    let on = true;
+    let epoch = 'e1';
+    let hanging;
+    const calls = [];
+    kit.setConnection({ rpc: { call: async (_path, method, payload) => {
+        calls.push(method);
+        if (method === 'pluginManager/listPlugins') {
+            return { ok: true, value: [{ moduleName: 'dsh-plugin-autopilot', enabled: true, fiberPhase: 'active' }, { moduleName: 'dsh-plugin-session-watch', enabled: on, fiberPhase: on ? 'active' : 'pending' }] };
+        }
+        if (method !== 'dsh-plugin-session-watch/wait') throw new Error(`unexpected ${method}`);
+        if (!on) throw new Error('transport failure for /api/dsh-plugin-session-watch/wait: HTTP 404');
+        // The first answer at once (a new window is behind); then the request stays open until something moves.
+        if (payload.args.since?.epoch === epoch) return new Promise((resolve, reject) => { hanging = { resolve, reject }; });
+        return { ok: true, value: { epoch, versions: { decisions: 1 } } };
+    } } });
+    kit.hub.attach();
+    let reads = 0;
+    kit.hub.subscribe(['decisions'], () => { reads += 1; });
+    await settle(10);
+    assert.equal(reads, 1, 'the first answer: every page reads');
+    assert.deepEqual(calls, ['dsh-plugin-session-watch/wait', 'dsh-plugin-session-watch/wait']);
+    // Session Watch is switched off: its open request fails, pages read once (each says what it needs) ...
+    on = false;
+    hanging.reject(new Error('transport failure for /api/dsh-plugin-session-watch/wait: HTTP 404'));
+    await settle(10);
+    assert.equal(reads, 2, 'pages read once when it stops');
+    assert.equal(shared['dsh-plugin-session-watch/hub/v1'].watch, 'off');
+    // ... then for a minute the window asks only DSH's plugin list, every 4 seconds, and no page reads again.
+    calls.length = 0;
+    for (let i = 0; i < 15; i += 1) {
+        t.mock.timers.tick(4000);
+        await settle(10);
+    }
+    assert.ok(calls.length >= 14 && calls.every((m) => m === 'pluginManager/listPlugins'), calls.join(', '));
+    assert.equal(reads, 2, 'no page reads while it is off');
+    // On again (a new start, so a new epoch): within one look at the list the hub asks it again, and every page reads.
+    on = true;
+    epoch = 'e2';
+    calls.length = 0;
+    t.mock.timers.tick(4000);
+    await settle(10);
+    assert.deepEqual(calls.slice(0, 2), ['pluginManager/listPlugins', 'dsh-plugin-session-watch/wait']);
+    assert.equal(reads, 3, 'back on: every page reads again');
+    assert.equal(shared['dsh-plugin-session-watch/hub/v1'].watch, 'on');
+});
+
+test('kit: on a DSH with no plugin list, the window asks Session Watch\'s endpoint again every few seconds, and pages still read only once when it stops', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const kit = kitWith({ window: {} });
+    const calls = [];
+    kit.setConnection({ rpc: { call: async (_path, method) => {
+        calls.push(method);
+        throw new Error(`transport failure for /api/${method}: HTTP 404`);
+    } } });
+    kit.hub.attach();
+    let reads = 0;
+    kit.hub.subscribe(['decisions'], () => { reads += 1; });
+    await settle(10);
+    for (let i = 0; i < 6; i += 1) {
+        t.mock.timers.tick(10000);
+        await settle(10);
+    }
+    const waits = calls.filter((m) => m === 'dsh-plugin-session-watch/wait').length;
+    assert.ok(waits >= 4 && waits <= 8, `asked ${waits} times in a minute`);
+    assert.equal(reads, 0, 'a page that opened before any answer read already; nothing more until it answers');
+});
+
 test('kit: times, tones and the parts every page uses', () => {
     const kit = kitWith();
     assert.equal(kit.toneOf('delivered'), 'success');
@@ -682,12 +753,18 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
         { name: 'fine', kind: 'number', title: 'Fine', hint: '', default: 2, min: 1, max: 10 },
     ];
-    // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included.
+    // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included; text
+    // where a number, a list or a switch belongs keeps its quotes, so it never reads as a value that fits.
     assert.equal(kit.fieldSpec(fields[0]).format(2), '2');
-    assert.equal(kit.fieldSpec(fields[0]).format('soon'), 'soon');
-    assert.equal(kit.fieldSpec(fields[1]).format('120'), '120');
+    assert.equal(kit.fieldSpec(fields[0]).format('soon'), '"soon"');
+    assert.equal(kit.fieldSpec(fields[0]).format('600'), '"600"');
+    assert.equal(kit.fieldSpec(fields[1]).format('120'), '"120"');
+    assert.equal(kit.fieldSpec(fields[1]).format([120, 600]), '120, 600');
+    assert.equal(kit.fieldSpec(fields[1]).format(['120', 600]), '["120",600]');
     assert.equal(kit.fieldSpec(fields[2]).format(7), '7');
-    assert.equal(kit.fieldSpec(fields[3]).format('yes'), 'yes');
+    assert.equal(kit.fieldSpec(fields[2]).format('b'), 'b');
+    assert.equal(kit.fieldSpec(fields[3]).format('yes'), '"yes"');
+    assert.equal(kit.fieldSpec(fields[3]).format('on'), '"on"');
     assert.equal(kit.fieldSpec(fields[3]).format(undefined), '');
     const snap = {
         writable: true, saving: false,
@@ -714,6 +791,41 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(control.props.value, '');
     assert.equal(control.props.className, 'dshx-seg-none');
     assert.ok(kit.css.some((rule) => rule.includes('.dshx-seg-none>[aria-hidden="true"]{visibility:hidden}')), 'its pill is hidden');
+});
+
+test('kit: a number saved in quotes (#32) is flagged as the form opens, says the quotes are what is wrong, and the number typed without them saves', () => {
+    const kit = kitWith();
+    const fields = [
+        { name: 'wait', kind: 'number', title: 'Wait', hint: '', default: 600, min: 10, max: 86400 },
+        { name: 'waits', kind: 'numbers', title: 'Waits', hint: '', default: [120, 600], min: 0, max: 86400 },
+        { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
+    ];
+    const spec = kit.fieldSpec(fields[0]);
+    // The stored "600" shows as "600" with its quotes: it does not parse, so the form flags it at once.
+    const shown = spec.format('600');
+    assert.equal(spec.parse(shown), undefined);
+    // Typed back without the quotes, it is a change (the text differs from what is stored) and it parses to the number.
+    assert.notEqual('600', shown);
+    assert.deepEqual(spec.parse('600'), { kind: 'set', value: 600 });
+    assert.deepEqual(kit.fieldSpec(fields[1]).parse('120, 600'), { kind: 'set', value: [120, 600] });
+    const snap = {
+        writable: true, saving: false,
+        wait: { text: shown, overridden: true, invalid: false },
+        waits: { text: kit.fieldSpec(fields[1]).format('120, 600'), overridden: true, invalid: false },
+        resume: { text: kit.fieldSpec(fields[2]).format('yes'), overridden: true, invalid: false },
+    };
+    const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    const body = kit.SettingsBody({ form, name: 'X', fields });
+    const row = (name) => elementsOf(body).find((e) => e.props?.['data-suite-setting'] === name);
+    const field = (name) => elementsOf(row(name)).find((e) => e.type === 'SettingsValueField');
+    assert.equal(field('wait').props.invalid, true);
+    assert.equal(field('wait').props.text, '"600"');
+    assert.equal(field('wait').props.invalidLabel, 'It is saved as text, in quotes. Type a whole number from 10 to 86400, without the quotes, then save.');
+    assert.equal(row('wait').props['data-suite-invalid'], '');
+    assert.equal(field('waits').props.invalidLabel, 'It is saved as text, in quotes. Type up to 10 whole numbers from 0 to 86400, with commas between them, without the quotes, then save.');
+    assert.match(textIn(row('resume')), /The saved value is neither on nor off\. Switch it to the one you want, then save\./);
+    // A number out of range keeps its own words.
+    assert.equal(kit.invalidWords(fields[0], '3'), 'A whole number from 10 to 86400, or empty for the default (600).');
 });
 
 test('kit: a choice with no valid saved value can still be reached with Tab; once fixed, DSH\'s selection takes the focus again', () => {
