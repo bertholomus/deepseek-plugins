@@ -126,3 +126,5 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 2:27 PM PDT: Reasoning Pill round 2 handed over d24800a (tank; unit 27/27, real-DSH 70/70 on each of three builds); its round-2 judge (the last) started on g95-reasoning-pill-j2. Judge slots 6 -> 8 (memory 50% free).
 - 2026-10-26 2:31 PM PDT: Fleet handed over 3142189 (tank; code = b8c92dd; flip 4e24735, b399db0, b44d7f8 all ancestors, checked; npm test 21/21, real-DSH 93/93 on each of three builds); its round-1 judge started on g95-fleet-j1b, told never to press a machine action in DSH Test.
 - 2026-10-26 2:33 PM PDT: Focus judged 8.5 NOT YET at 3859b8d (round 1; U 8.5, R 9.5, UX 8.5, T 9, D 8.5): the end leaves no mark after its toast; a hidden window announces the end while hidden. Scorecard and 26 pictures committed.
+- 2026-10-26 2:36 PM PDT: Hermes Bridge judged 8.9 NOT YET at 717b595 (round 1; U 9, R 9, UX 8.5, T 9, D 9; all findings minor). Scorecard and 34 pictures committed.
+- 2026-10-26 2:36 PM PDT: Session Watch handed over 2741f21 and Categories 70977a1 (both pushed); their round-1 judges started (g95-session-watch-j1, g95-categories-j1; finish by 4:45 PM).
