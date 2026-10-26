@@ -648,6 +648,12 @@ test('window: a click brings the window up and opens the chat the news is about'
     Notification.made[1].onclick();
     assert.equal(focused, 2);
     assert.deepEqual(opened, ['session-7']);
+    // A summary of several opens the recent list on the plugin's page.
+    const pages = [];
+    showNotification({ id: 3, title: 'DSH: 3 more updates', page: true }, { Notification, win: undefined, wait: 10, openSession: () => (id) => opened.push(id), openPage: () => () => pages.push('page') });
+    Notification.made[2].onclick();
+    assert.deepEqual(pages, ['page']);
+    assert.deepEqual(opened, ['session-7']);
 });
 
 test('window: many at once show as the newest two and one summary of the rest', async () => {
@@ -656,7 +662,7 @@ test('window: many at once show as the newest two and one summary of the rest', 
     assert.equal(SHOW_SINGLE, 2);
     assert.deepEqual(planShows([1, 2, 3]), { single: [1, 2, 3], summarized: [] });
     assert.deepEqual(planShows([1, 2, 3, 4, 5]), { single: [4, 5], summarized: [1, 2, 3] });
-    assert.deepEqual(summaryOf([{ id: 1, title: 'A' }, { id: 2, title: 'B' }]), { id: 1, key: 'summary:1,2', title: 'DSH: 2 more updates', body: 'A · B' });
+    assert.deepEqual(summaryOf([{ id: 1, title: 'A' }, { id: 2, title: 'B' }]), { id: 1, key: 'summary:1,2', title: 'DSH: 2 more updates', body: 'A · B', page: true });
     const Notification = fakeNotificationClass();
     const items = [1, 2, 3, 4, 5].map((id) => ({ id, title: `T${id}`, body: '', at: now() }));
     const link = fakeLink(() => ({ desktop: false, epoch: 'e', items }));

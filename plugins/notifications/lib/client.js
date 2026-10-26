@@ -132,7 +132,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
         /** The services the parts share, set by their injects (each may be missing). */
-        const shared = { link: undefined, openSession: undefined };
+        const shared = { link: undefined, openSession: undefined, openPage: undefined };
 
         /** Web Notifications in this window: 'granted', 'denied', 'default', 'desktop' (the Desktop app), or 'none' where the API is missing. */
         function permissionState(scope = globalThis) {
@@ -409,7 +409,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * (its error event, or a constructor that threw), or 'unconfirmed'
          * when neither came within `wait` ms.
          */
-        function showNotification(item, { Notification = globalThis.Notification, win = globalThis.window, onResult = () => {}, wait = SHOW_WAIT_MS, openSession = () => shared.openSession } = {}) {
+        function showNotification(item, { Notification = globalThis.Notification, win = globalThis.window, onResult = () => {}, wait = SHOW_WAIT_MS, openSession = () => shared.openSession, openPage = () => shared.openPage } = {}) {
             let settled = false;
             const settle = (outcome, detail = '') => {
                 if (settled) return;
@@ -431,8 +431,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             notification.onclick = () => {
                 try { win?.focus?.(); } catch { /* the window may be gone */ }
                 const open = openSession();
+                const page = openPage();
                 if (item.sessionId && typeof open === 'function') {
                     try { open(item.sessionId); } catch { /* the chat may be gone */ }
+                } else if (item.page && typeof page === 'function') {
+                    // A summary of several: its click opens the recent list on the plugin's page.
+                    try { page(); } catch { /* DSH may have no Plugins page here */ }
                 }
                 try { notification.close(); } catch { /* already closed */ }
             };
@@ -454,6 +458,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 key: `summary:${items.map((item) => item.id).join(',')}`,
                 title: `DSH: ${items.length} more updates`,
                 body: body.length > 300 ? `${body.slice(0, 299)}…` : body,
+                page: true,
             };
         }
 
@@ -616,6 +621,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 };
                 shared.openSession = open;
                 return () => { if (shared.openSession === open) shared.openSession = undefined; };
+            });
+            // DSH's Plugins page: a click on a summary notification opens the recent list here.
+            ctx.inject(['pluginNavigation'], (scope) => {
+                const open = () => {
+                    try { scope.pluginNavigation.openBundle?.(BUNDLE); } catch (error) { console?.warn?.('dsh-plugin-notifications: could not open its page', error); }
+                };
+                shared.openPage = open;
+                return () => { if (shared.openPage === open) shared.openPage = undefined; };
             });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
                 try {
