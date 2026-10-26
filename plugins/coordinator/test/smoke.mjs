@@ -363,7 +363,9 @@ function fakeHost({ selection = false, hostListener = selection, gateway = false
             }),
             schemas: () => host.toolNames.map((name) => ({ name })),
         },
-        logger: { info() {}, warn() {} },
+        /** What the plugin tells DSH's logger at info level, as lines; `started` waits for its start's line. */
+        said: [],
+        logger: { info: (format, ...args) => { host.said.push(args.reduce((text, arg) => text.replace(/%[sd]/, String(arg)), format)); }, warn() {} },
         provide(name, value) { provided.set(name, value); },
         get: (name) => services[name],
         /** Like cordis: run the callback only when every named service is present. */
@@ -1288,7 +1290,8 @@ test('old session records: each coordinating chat and thread DSH lists without a
     const raw = { storeFile: join(dir, 'coordinator.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'coordinator.log') };
     plugin.apply(host, plugin.Config(raw));
     const log = () => { try { return readFileSync(raw.logFile, 'utf8'); } catch { return ''; } };
-    for (let i = 0; i < 50 && !/records refreshed/.test(log()); i += 1) await tick();
+    // By time, not a count of ticks, so a busy machine waits longer.
+    for (const end = Date.now() + 20000; !/records refreshed/.test(log()) && Date.now() < end;) await tick();
     // Read again: each one DSH lists without a value and hasn't loaded; not the loaded one, the current one, or one DSH no longer has.
     assert.deepEqual(reads, [['c1', 0, 1], ['c2', 0, 1], ['b1', 0, 1]]);
     assert.match(log(), /records refreshed=3/);
@@ -3575,17 +3578,21 @@ test('changes: the kept texts of threads gone from the store or from DSH, or unu
         mkdirSync(join(dir, 'net', id), { recursive: true });
         writeFileSync(join(dir, 'net', id, 'index.json'), JSON.stringify({ version: 1, bytes: 3, files: {}, used: Date.now() }));
     }
-    const { host } = setup({}, dir, { gateway: true });
-    // DSH has the chats of t1 and t3 (t3's archived, so not in its list, but still there for Restore project); t2's was deleted.
+    // DSH has the chats of t1 and t3 (t3's archived, so not in its list, but still there for Restore project); t2's was
+    // deleted. All of that holds before the plugin starts: its first sweep runs at once.
+    const host = fakeHost({ gateway: true });
     host.sessions.set('s-kept', { events: [], prompts: [], title: 'Kept' });
     host.sessions.set('s-archived', { events: [], prompts: [], title: 'Archived' });
     const list = host.sessionController.list;
     host.sessionController.list = async () => ({ items: (await list()).items.filter((item) => item.sessionId !== 's-archived') });
-    for (let i = 0; i < 100 && readdirSync(join(dir, 'net')).length > 2; i++) await tick();
+    plugin.apply(host, plugin.Config({ threadEffort: 'high', storeFile: join(dir, 'coordinator.json'), memoryDir: join(dir, 'memory'), logFile: join(dir, 'coordinator.log') }));
+    const log = () => { try { return readFileSync(join(dir, 'coordinator.log'), 'utf8'); } catch { return ''; } };
+    // Done when both are logged (a folder is gone from the disk a moment before its line is written), however busy
+    // the machine is: a count of ticks ran out once under a full real-DSH run beside it.
+    const swept = () => /net-prune s-gone gone/.test(log()) && /net-prune s-deleted gone/.test(log());
+    for (const end = Date.now() + 20000; !swept() && Date.now() < end;) await tick();
+    assert.ok(swept(), log());
     assert.deepEqual(readdirSync(join(dir, 'net')).sort(), ['s-archived', 's-kept']);
-    const log = () => readFileSync(join(dir, 'coordinator.log'), 'utf8');
-    assert.match(log(), /net-prune s-gone gone/);
-    assert.match(log(), /net-prune s-deleted gone/);
     // Unused for over 30 days: gone at the next sweep (every hour while the plugin runs).
     writeFileSync(join(dir, 'net', 's-archived', 'index.json'), JSON.stringify({ version: 1, bytes: 3, files: {}, used: Date.now() - 31 * 86400 * 1000 }));
     await host.provided.get('dshPluginCoordinatorRemote').manager.sweepNet();
@@ -3896,6 +3903,9 @@ test('projection: unrelated and malformed events keep the same state; parsing ne
 /** A coordinating chat with two threads, Alpha and Beta, and the window's endpoints. */
 async function chatWithThreads() {
     const made = setup({}, undefined, { gateway: true });
+    await started(made.host);
+    await made.host.coordinated;
+    // The chat comes up just after DSH logs the command's result.
     await tick();
     const coord = coordinatorOf(made.host);
     await coord.ctx.call('thread_start', { ask: 'Please do A.', title: 'Alpha', brief: 'Do A.' });
@@ -3904,6 +3914,15 @@ async function chatWithThreads() {
     return { ...made, coord, alpha, beta, registry: made.host.workspaceRegistry, remote: made.host.provided.get('dshPluginCoordinatorRemote') };
 }
 const settle = async () => { for (let i = 0; i < 5; i += 1) await tick(); };
+/**
+ * Wait for the plugin's start on this host to finish (it tells DSH's logger how many chats coordinate, or that it
+ * failed): by time, not a count of ticks, so a busy machine waits longer.
+ */
+async function started(host, ms = 20000) {
+    const done = () => host.said.some((line) => /^coordinator: (\d+ coordinating chat|startup failed)/.test(line));
+    for (const end = Date.now() + ms; !done() && Date.now() < end;) await tick();
+    assert.ok(done(), `the plugin's start finished: ${host.said.join(' | ')}`);
+}
 const storedIn = (dir) => JSON.parse(readFileSync(join(dir, 'coordinator.json'), 'utf8')).projects['dsh-plugins'];
 /** Switch the plugin off: its manager stops, and its store is read anew by the next one. */
 async function switchOff(host) {
@@ -3916,6 +3935,7 @@ async function startOver(old, config, archived) {
     for (const id of archived) await host.workspaceRegistry.archiveSession(id, { stopActivity: true });
     host.workspaceRegistry.archives.splice(0);
     plugin.apply(host, config);
+    await started(host);
     await settle();
     return host;
 }
