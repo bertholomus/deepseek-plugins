@@ -109,7 +109,7 @@ export function apply(ctx, config) {
             journal.add({ kind: 'settings', text: 'Started with a wrong setting; Recall waits until it is fixed', why, state: 'waiting on a setting' });
         }
     } else if (lastSettings?.state === 'waiting on a setting') {
-        journal.add({ kind: 'settings', text: 'Settings fixed: Recall is working again', why: 'Its settings were right when DSH started it again.', state: 'done' });
+        journal.add({ kind: 'settings', text: indexing(settings) ? 'Settings fixed: Recall is working again' : 'Settings fixed', why: 'Its settings were right when DSH started it again.', state: 'done' });
     }
 
     let lastStatus;

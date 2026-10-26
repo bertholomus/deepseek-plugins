@@ -206,6 +206,15 @@ test('plugin: switched off in the profile, then on again, is said once each in W
     recall.apply(dsh.ctx, configOf({ enabled: false }));
     assert.equal((await dsh.remote().state()).history.filter((e) => e.kind === 'switch').length, 1);
     dsh.stop();
+    // A wrong setting while off, fixed while still off: "Settings fixed", not "working again".
+    dsh = standInDsh();
+    recall.apply(dsh.ctx, configOf({ enabled: false, tool: 'yes' }));
+    assert.equal((await dsh.remote().state()).history[0].text, 'Started with a wrong setting; Recall waits until it is fixed');
+    dsh.stop();
+    dsh = standInDsh();
+    recall.apply(dsh.ctx, configOf({ enabled: false }));
+    assert.deepEqual((await dsh.remote().state()).history.slice(0, 1).map((e) => [e.kind, e.text]), [['settings', 'Settings fixed']]);
+    dsh.stop();
     // On again, with Session Watch: said once, and the page hears at once that Recall started again.
     const bumps = [];
     dsh = standInDsh({ sessionWatch: { hub: { bump: (channel) => bumps.push(channel) } } });
