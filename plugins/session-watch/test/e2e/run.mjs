@@ -490,7 +490,15 @@ try {
             const kept = await focused();
             check('by keyboard, a chosen state whose last session leaves it stays at 0, says so, and keeps the focus',
                 listedRunning.startsWith('Slow view ') && left === true && kept === 'true:running 0', `${listedRunning} | ${left} | ${kept}`);
-            // The focus ring on the state at 0, and its line, light and dark.
+            // Away and back by keyboard: DSH's 2px ring shows on it (measured, then pictured light and dark).
+            await page.keyboard.press('Tab');
+            await page.keyboard.press('Shift+Tab');
+            const ring = await page.evaluate(() => {
+                const el = document.activeElement;
+                const style = el && el !== document.body ? getComputedStyle(el) : null;
+                return style ? { on: el.getAttribute('aria-expanded'), text: el.innerText.replace(/\s+/g, ' ').trim(), outline: `${style.outlineStyle} ${style.outlineWidth}` } : null;
+            });
+            check('by keyboard, the chosen state shows DSH\'s 2px focus ring', ring?.on === 'true' && ring.text === 'running 0' && ring.outline === 'solid 2px', JSON.stringify(ring));
             await shot(page, shots, 'watching-at-0-focus-light', watching);
             await setDark(page, true);
             await shot(page, shots, 'watching-at-0-focus-dark', watching);
