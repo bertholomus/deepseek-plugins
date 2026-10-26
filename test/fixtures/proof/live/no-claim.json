@@ -359,6 +359,52 @@
       ],
       "reply": "**It does not trim — it converts the whitespace into hyphens.**\n\nI ran the real function in your workspace without editing anything:\n\n```python\nslugify(\"  Hi  \")          -> \"-hi-\"\nslugify(\"  Hello World  \") -> \"-hello-world-\"\nslugify(\" hi  there \")     -> \"-hi-there-\"\nslugify(\"   \")             -> \"-\"\nslugify(\"\")                -> \"\"\n```\n\nReason: in [slug.py](slug.py#L4), `re.sub(r\"[^a-z0-9]+\", \"-\", text)` replaces *every* run of non-alphanumerics — including leading/trailing spaces — with `\"-\"`. Nothing strips the result, so any leading or trailing whitespace becomes a leading or trailing hyphen. Only the empty string stays empty (no non-alphanumeric run to replace).\n\nThat contradicts the intent encoded in the existing test: `python3 -m unittest test_slug -v` gives **1 failure of 4** — `test_trim` expects `\"hi\"` from `\"  Hi  \"` and gets `\"-hi-\"`; `test_plain`, `test_symbols`, `test_empty` pass. So it's a real bug (missing `strip()`/`.strip(\"-\")`), not just a spec question.\n\nI made no file changes (bytecode writing was disabled, so no `__pycache__` was left behind); the repo still shows only `slug.py` and `test_slug.py`.",
       "claims": []
+    },
+    {
+      "id": "live-calc-look-only",
+      "label": "no-claim",
+      "note": "Real GLM-5.3 Flash turn in DSH Test. Read-only: what each test checks; nothing was run, as asked.",
+      "prompt": "Look at the tests and tell me how many there are and what each one checks. Don't run anything.",
+      "tools": [
+        {
+          "name": "glob",
+          "args": {
+            "pattern": "**/*test*"
+          },
+          "output": "test/sum.test.js"
+        },
+        {
+          "name": "bash",
+          "args": {
+            "command": "ls -la",
+            "description": "List workspace contents"
+          },
+          "output": "total 16\ndrwxr-xr-x@  6 dev  staff  192 Oct 26 10:09 .\ndrwxr-xr-x@ 16 dev  staff  512 Oct 26 10:09 ..\ndrwxr-xr-x@ 12 dev  staff  384 Oct 26 10:09 .git\n-rw-r--r--@  1 dev  staff   97 Oct 26 10:09 package.json\n-rw-r--r--@  1 dev  staff  170 Oct 26 10:09 sum.js\ndrwxr-xr-x@  3 dev  staff   96 Oct 26 10:09 test\n"
+        },
+        {
+          "name": "read",
+          "args": {
+            "file_path": "test/sum.test.js"
+          },
+          "output": "<path>/home/dev/calc4/test/sum.test.js</path>\n<type>file</type>\n<content>\n1: const test = require('node:test');\n2: const assert = require('node:assert');\n3: const { sum } = require('../sum.js');\n4: test('sum of an empty list is 0', () => { assert.strictEqual(sum([]), 0); });\n5: test('sum of one number is that number', () => { assert.strictEqual(sum([0]), 0); });\n6: test('sum adds every number', () => { assert.strictEqual(sum([1, 2, 3]), 6); });\n\n(End of file - total 6 lines)\n</content>"
+        },
+        {
+          "name": "read",
+          "args": {
+            "file_path": "sum.js"
+          },
+          "output": "<path>/home/dev/calc4/sum.js</path>\n<type>file</type>\n<content>\n1: // Sum the numbers in a list.\n2: function sum(list) {\n3:   let total = 0;\n4:   for (let i = 0; i < list.length; i++) total += list[i];\n5:   return total;\n6: }\n7: module.exports = { sum };\n\n(End of file - total 7 lines)\n</content>"
+        },
+        {
+          "name": "read",
+          "args": {
+            "file_path": "package.json"
+          },
+          "output": "<path>/home/dev/calc4/package.json</path>\n<type>file</type>\n<content>\n1: { \"name\": \"calc\", \"version\": \"1.0.0\", \"type\": \"commonjs\", \"scripts\": { \"test\": \"node --test\" } }\n\n(End of file - total 1 lines)\n</content>"
+        }
+      ],
+      "reply": "There is one test file: [test/sum.test.js](test/sum.test.js) — **3 tests**, all `node:test` cases against `sum()` from [sum.js](sum.js):\n\n| # | Test name (line) | What it checks |\n|---|---|---|\n| 1 | `sum of an empty list is 0` ([L4](test/sum.test.js#L4)) | `sum([])` returns `0` — the empty-input/zero-value path. |\n| 2 | `sum of one number is that number` ([L5](test/sum.test.js#L5)) | `sum([0])` returns `0` — a single-element list. |\n| 3 | `sum adds every number` ([L6](test/sum.test.js#L6)) | `sum([1, 2, 3])` returns `6` — the loop actually accumulates every element. |\n\nThey're run via `npm test` → `node --test` ([package.json](package.json#L1)). Not run, as asked.\n\nTwo gaps I noticed while reading: test 2 is nominally about a single number but uses `0`, so it can't distinguish \"returns the one element\" from \"returns the initializer\" — a nonzero case like `sum([5]) === 5` would close that. And there are no negative or non-integer inputs, and no test that the input list is left unmutated.",
+      "claims": []
     }
   ]
 }

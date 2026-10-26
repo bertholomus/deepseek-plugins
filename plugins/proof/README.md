@@ -140,8 +140,8 @@ everyday turns of the judge's shapes with their honest twins.
 | Ninth hold-out, measured once before tuning | 60 | 7 (11.7%) | 50 | 41 (82.0%) | 16 of 25 |
 | Tenth hold-out, measured once before tuning | 60 | 9 (15.0%) | 50 | 43 (86.0%) | 22 of 25 |
 | Eleventh hold-out, measured once, never tuned on | 60 | 5 (8.3%) | 50 | 45 (90.0%) | 20 of 25 |
-| Real model turns in DSH Test, with round 3's rules (341ff4e) | 33 | 11 (33.3%) | 3 | 3 (100.0%) | 1 of 1 |
-| Real model turns in DSH Test, tuned on since | 33 | 0 (0.0%) | 3 | 3 (100.0%) | 1 of 1 |
+| Real model turns in DSH Test, with round 3's rules (341ff4e) | 45 | 13 (28.9%) | 3 | 3 (100.0%) | 1 of 1 |
+| Real model turns in DSH Test, tuned on since | 45 | 0 (0.0%) | 3 | 3 (100.0%) | 1 of 1 |
 | Probes written apart from the code, with round 3's rules (341ff4e) | 80 | 9 (11.3%) | 43 | 37 (86.0%) | 17 of 22 |
 | Probes written apart from the code, tuned on since | 80 | 0 (0.0%) | 43 | 43 (100.0%) | 22 of 22 |
 
@@ -156,7 +156,7 @@ Where the false flags fall, first recorded for the fifth hold-out:
 | Ninth hold-out, measured once before tuning | 40 | 4 (10.0%) | 1 | 20 | 3 (15.0%) |
 | Tenth hold-out, measured once before tuning | 40 | 4 (10.0%) | 1 | 20 | 5 (25.0%) |
 | Eleventh hold-out, measured once, never tuned on | 40 | 3 (7.5%) | 1 | 20 | 2 (10.0%) |
-| Real model turns in DSH Test, with round 3's rules (341ff4e) | 24 | 8 (33.3%) | 3 | 9 | 3 (33.3%) |
+| Real model turns in DSH Test, with round 3's rules (341ff4e) | 35 | 10 (28.6%) | 5 | 10 | 3 (30.0%) |
 | Probes written apart from the code, with round 3's rules (341ff4e) | 54 | 7 (13.0%) | 5 | 26 | 2 (7.7%) |
 
 Per claim, first recorded for the ninth hold-out: a bad turn is *caught
@@ -178,7 +178,7 @@ clause contains the listed text, the listed text contains it, or at least
 | Tenth hold-out, measured once before tuning | 50 | 43 (86.0%) | 7 (14.0%) | 8 |
 | Tenth hold-out, tuned on since | 50 | 50 (100.0%) | 0 (0.0%) | 0 |
 | Eleventh hold-out, measured once, never tuned on | 50 | 45 (90.0%) | 1 (2.0%) | 2 |
-| Real model turns in DSH Test, with round 3's rules (341ff4e) | 3 | 3 (100.0%) | 0 (0.0%) | 4 |
+| Real model turns in DSH Test, with round 3's rules (341ff4e) | 3 | 3 (100.0%) | 0 (0.0%) | 8 |
 | Real model turns in DSH Test, tuned on since | 3 | 3 (100.0%) | 0 (0.0%) | 0 |
 | Probes written apart from the code, with round 3's rules (341ff4e) | 43 | 36 (83.7%) | 1 (2.3%) | 6 |
 | Probes written apart from the code, tuned on since | 43 | 43 (100.0%) | 0 (0.0%) | 0 |
@@ -284,11 +284,16 @@ stays as measured (`test/fixtures/proof/holdout11/`): `npm test` checks
 its shape and runs its seven floors as a known miss, which prints the miss
 and does not fail the run.
 
-Round 4 looked at the real model. In 30 sessions of GLM-5.3 Flash in a DSH
-Test instance (36 turns: fixes, commits and pushes, lint, builds,
-benchmarks, read-only checks, and three replies the person dictated),
-round 3's rules flagged 11 of the 33 quiet turns, 8 of them honest turns
-that claim something and 3 of those called contradicted. The model writes
+Round 4 looked at the real model. In 44 sessions of GLM-5.3 Flash in a DSH
+Test instance (48 finished turns: fixes, commits and pushes, lint, builds,
+benchmarks, coverage, repeated runs, read-only checks, and three replies
+the person dictated; two of the sessions were cut by a busy gateway before
+a turn ended), round 3's rules flagged 13 of the 45 quiet turns, 10 of them
+honest turns that claim something and 5 of those called contradicted. The
+last 12 turns came in after the first fixes and were measured once with
+the rules of that time (66fbac0): they flagged one, an accurate failure
+report whose three true claims ("`sum of an empty list is 0` — pass")
+were called contradicted. The model writes
 Markdown: headings over lists ("**Passing tests:**"), ✅ and ❌, bold labels
 ("**Fixed** —"), "No files were changed.", `git -C app commit`, an echoed
 `[exit 1]`, and accurate failure reports that say why the other tests

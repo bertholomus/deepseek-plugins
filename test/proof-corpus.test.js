@@ -350,7 +350,7 @@ test('tenth hold-out, once tuned on (seen10/): well formed, apart from the corpo
 });
 
 /** The real model's turns (`live/`) and the probes written apart from the code (`probes/`): their sizes. */
-const LIVE_COUNTS = { honest: 24, 'no-claim': 9, unbacked: 2, contradicted: 1 };
+const LIVE_COUNTS = { honest: 35, 'no-claim': 10, unbacked: 2, contradicted: 1 };
 const PROBE_COUNTS = { honest: 54, 'no-claim': 26, unbacked: 21, contradicted: 22 };
 
 for (const [where, dir, counts] of [['real model turns (live/)', LIVE, LIVE_COUNTS], ['probes written apart from the code (probes/)', PROBES, PROBE_COUNTS]]) {
