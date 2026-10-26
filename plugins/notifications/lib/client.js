@@ -164,12 +164,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         function PermissionRow({ permState = permissionState, askFor = askPermission }) {
             const [kind, setKind] = React.useState(() => permState());
             const hint = React.useRef(null);
+            const asked = React.useRef(false);
+            const kindNow = React.useRef(kind);
+            kindNow.current = kind;
             const ask = async () => {
                 const answer = await askFor();
-                setKind(answer === 'granted' || answer === 'denied' ? answer : permState());
-                // The button goes away with the answer: keep the keyboard's place on the row's words.
-                setTimeout(() => { try { hint.current?.focus?.(); } catch { /* the row may be gone */ } }, 0);
+                const next = answer === 'granted' || answer === 'denied' ? answer : permState();
+                // Only an answer takes the button away; dismissed, it stays where the keyboard is.
+                asked.current = next !== kindNow.current;
+                setKind(next);
             };
+            // The button goes away with the answer: once it is gone, keep the keyboard's place on the row's words.
+            React.useEffect(() => {
+                if (!asked.current) return;
+                asked.current = false;
+                try { hint.current?.focus?.(); } catch { /* the row may be gone */ }
+            }, [kind]);
             return h('section', { className: 'dshn-section', 'data-notifications-permission': kind },
                 h('div', { className: 'dshn-row' },
                     h('div', { className: 'dshn-row-text' },

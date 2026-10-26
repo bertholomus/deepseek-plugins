@@ -303,6 +303,8 @@ try {
             const form = await openSettings(page);
             const switches = await form.getByRole('switch').count();
             check('DSH\'s own form with the master switch and one per kind', switches === 7 && (await form.getByRole('switch', { name: 'Fleet findings' }).count()) === 1, String(switches));
+            // The page reads where they go from the plugin once it opens (the row says "Reading…" until then).
+            await waitFor(async () => (await page.locator('[data-notifications-where]').getAttribute('data-notifications-where')) !== 'loading', 'the page to read where they go', 15000, 200);
             const where = await page.locator('[data-notifications-where]').innerText();
             const whereExpected = desktopApp ? /This DSH window shows them, with DSH's icon, while it is hidden, minimised or behind other windows/ : /A DSH window in your browser shows them while you are not looking at it/;
             check('where they go now, in words', whereExpected.test(where), where);
@@ -320,7 +322,11 @@ try {
             await shot(page, shots, 'settings-light');
             await setDark(page, true);
             await shot(page, shots, 'settings-dark');
+            // Further down: where they go, this window, the test, and the recent list.
+            await page.locator('[data-notifications-recent]').scrollIntoViewIfNeeded();
+            await shot(page, shots, 'settings-recent-dark');
             await setDark(page, false);
+            await shot(page, shots, 'settings-recent-light');
             await open.click();
             await page.getByText('Notifications e2e: the chat a notification opens.', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
             check('Open chat opens it', true);
