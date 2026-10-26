@@ -1276,7 +1276,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function Waited({ at, now }) {
             if (!Number.isFinite(at) || at <= 0) return null;
             const seconds = Math.max(0, ((now ?? Date.now()) - at) / 1000);
-            return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString() }, seconds < 60 ? 'waiting less than a minute' : `waiting ${kit.spanText(seconds)}`);
+            // Rounded as it is shown: 59 minutes 40 seconds reads "1 hour", never "60 minutes".
+            const shown = seconds >= 3570 && seconds < 3600 ? 3600 : seconds;
+            return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString() }, seconds < 60 ? 'waiting less than a minute' : `waiting ${kit.spanText(shown)}`);
         }
 
         /** Where a card comes from, in words, beside its session. */

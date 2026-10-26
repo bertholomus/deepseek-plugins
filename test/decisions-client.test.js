@@ -285,6 +285,10 @@ test('browser half: each card has the controls its kind takes, and sends what th
     // A card seen a moment ago: one form for "just now".
     assert.match(textIn(draw({ ...CARDS.decision, at: Date.now() - 50000 })), /waiting less than a minute/);
     assert.doesNotMatch(textIn(draw({ ...CARDS.decision, at: Date.now() - 10000 })), /just now/);
+    // Just under an hour reads as the hour it rounds to, as the next card's does.
+    assert.match(textIn(draw({ ...CARDS.decision, at: Date.now() - 3590000 })), /waiting 1 hour/);
+    assert.match(textIn(draw({ ...CARDS.decision, at: Date.now() - 3605000 })), /waiting 1 hour/);
+    assert.match(textIn(draw({ ...CARDS.decision, at: Date.now() - 3500000 })), /waiting 58 minutes/);
 
     // One only the session can answer: the way there.
     const open = draw(CARDS.open);
