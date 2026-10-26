@@ -1501,8 +1501,9 @@ try {
         readText(logFile).split('\n').filter((l) => /archive|restore/.test(l)).join('\n'));
 
     // 31. Wrong settings never stop the plugin. Saved while DSH runs, DSH starts the plugin again with them: each
-    // falls back to its default, DSH's log and the plugin's name them, its page lists them in words, and the chat
-    // still coordinates. Put right, the page has nothing to fix again.
+    // falls back to its default, its page lists them in words, its log names them, and the chat still coordinates.
+    // (DSH keeps what a plugin's logger says in memory and prints none of it, so its own output is not read here.)
+    // Put right, the page has nothing to fix again.
     const startsBad = starts();
     writePatch(model.port, { threadEffort: 'high', maxHandbacksPerHour: 0, autoHandback: 'sometimes', trustedHosts: { nas: true } });
     await waitFor(() => starts() > startsBad && /config-problem autoHandback\n/.test(readText(logFile)), 'the plugin to start again with the wrong settings', 30000);
@@ -1511,12 +1512,15 @@ try {
         return got.ok && (got.value.problems ?? []).length === 3 ? got : null;
     }, 'the page to name the wrong settings', 30000).catch(() => null);
     const badWords = answer?.value.problems ?? [];
+    const named = {
+        'the page: maxHandbacksPerHour': badWords.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.'),
+        'the page: autoHandback': badWords.includes('autoHandback must be "idle" or "off" (it is "sometimes"), so the plugin uses "idle" until you fix it.'),
+        'the page: trustedHosts': badWords.includes('trustedHosts must be a list of host names or addresses (it is {"nas":true}), so the plugin trusts no machine (every send asks) until you fix it.'),
+        'the plugin\'s log': /config-problem maxHandbacksPerHour\n/.test(readText(logFile)) && /config-problem autoHandback\n/.test(readText(logFile)),
+    };
+    const unnamed = Object.keys(named).filter((where) => !named[where]);
     check('wrong settings don\'t stop the plugin: its page names each one, what it must be and what the plugin uses meanwhile',
-        badWords.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.')
-        && badWords.includes('autoHandback must be "idle" or "off" (it is "sometimes"), so the plugin uses "idle" until you fix it.')
-        && badWords.some((line) => line.startsWith('trustedHosts must be a list of host names or addresses'))
-        && /config-problem maxHandbacksPerHour\n[^]*config-problem autoHandback\n/.test(readText(logFile))
-        && /coordinator: maxHandbacksPerHour must be a whole number/.test(readText(dshLog)), JSON.stringify(answer).slice(0, 600));
+        unnamed.length === 0, `not named in ${unnamed.join(', ')}; the page says ${JSON.stringify(badWords).slice(0, 900)}; the log says ${readText(logFile).split('\n').filter((line) => / config-problem /.test(line)).join(' | ').slice(0, 300)}`);
     mark = model.requests.length;
     await say(coord, 'Are threads still on?');
     check('with wrong settings the chat still coordinates and has its thread tools', since(mark, 'coordinator').length > 0
@@ -1572,7 +1576,8 @@ try {
 }
 
 // The window: what DSH draws for the plugin, looked at in a Chromium (window.mjs), on the same DSH build. Its own
-// summary line is relayed as a comment, so the line below stays the one that counts.
+// summary line is relayed in other words ("# window: 32 ok, 0 not ok"), so the last line below, with both counts in
+// it, stays the only one that scripts/e2e.mjs reads.
 if (process.env.WINDOW !== '0') {
     const windowRun = spawn(process.execPath, [join(here, 'window.mjs')], { stdio: ['ignore', 'pipe', 'inherit'], env: process.env });
     let rest = '';
@@ -1580,7 +1585,7 @@ if (process.env.WINDOW !== '0') {
     const relay = (line) => {
         const summary = /^(\d+) passed, (\d+) failed$/.exec(line);
         if (summary) counts = summary;
-        console.log(summary ? `# window: ${line}` : line);
+        console.log(summary ? `# window: ${summary[1]} ok, ${summary[2]} not ok` : line);
     };
     windowRun.stdout.setEncoding('utf8');
     windowRun.stdout.on('data', (chunk) => {

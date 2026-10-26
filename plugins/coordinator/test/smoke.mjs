@@ -4727,7 +4727,7 @@ test('config: wrong values never stop the plugin; each falls back to its default
     const coord = coordinatorOf(host);
     assert.ok(coord.ctx.registered.has('thread_start'), 'the chat has its thread tools');
     const keys = ['enabled', 'autoHandback', 'maxHandbacksPerHour', 'maxThreadsPerHour', 'approvalNoticeSeconds', 'maxMemoryBytes'];
-    for (const key of keys) assert.ok(warned.some((line) => line.startsWith(`coordinator: ${key} must be`)), `DSH's log names ${key}: ${warned.join(' | ')}`);
+    for (const key of keys) assert.ok(warned.some((line) => line.startsWith(`coordinator: ${key} must be`)), `DSH's logger hears ${key}: ${warned.join(' | ')}`);
     const log = readFileSync(join(dir, 'coordinator.log'), 'utf8');
     for (const key of keys) assert.match(log, new RegExp(` config-problem ${key}\\n`));
     // The page lists them in words, the live ones (guardedTools, trustedHosts) too, with what the plugin uses meanwhile.
@@ -4735,7 +4735,7 @@ test('config: wrong values never stop the plugin; each falls back to its default
     assert.equal(problems.length, 8, problems.join('\n'));
     assert.ok(problems.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.'), problems.join('\n'));
     assert.ok(problems.includes('autoHandback must be "idle" or "off" (it is "sometimes"), so the plugin uses "idle" until you fix it.'));
-    assert.ok(problems.includes('trustedHosts must be a list of host names or addresses (it is {"nas":true}), so the plugin uses none, so every send asks until you fix it.'));
+    assert.ok(problems.includes('trustedHosts must be a list of host names or addresses (it is {"nas":true}), so the plugin trusts no machine (every send asks) until you fix it.'));
     assert.ok(problems.some((line) => line.startsWith('guardedTools must be a list of names')));
     // The defaults stand in: 30 handbacks an hour.
     await coord.ctx.call('thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a workflow.' });
@@ -4772,6 +4772,15 @@ test('config: enabled: false switches the plugin off; no chat coordinates, the w
     assert.deepEqual(remoteMethods(remote).map((m) => m.method), [
         'describe', 'list', 'sessions', 'news', 'seeNews', 'update', 'continueThread', 'changes', 'coordinate', 'archive', 'restore',
     ]);
+    // The gateway reads each method's parameter names from its source, as here, and refuses a call whose arguments
+    // it does not name before the method runs; so each switched-off method names them as the running plugin's does.
+    const { ProjectsRemote } = await import('../lib/remote.js');
+    const named = (Class, method) => {
+        const source = Function.prototype.toString.call(Class.prototype[method]);
+        return source.slice(source.indexOf('(') + 1, source.indexOf(')')).split(',').map((name) => name.trim()).filter(Boolean);
+    };
+    for (const { method } of remoteMethods(remote)) assert.deepEqual(named(remote.constructor, method), named(ProjectsRemote, method), method);
+    assert.deepEqual(named(remote.constructor, 'coordinate'), ['target', 'on']);
     assert.deepEqual(await remote.sessions(), { sessions: {}, off: true });
     const listed = await remote.list();
     assert.deepEqual([listed.off, listed.projects, listed.problems.length], [true, [], 1]);

@@ -253,25 +253,29 @@ export class OffRemote {
         return { news: [] };
     }
 
-    async seeNews() {
+    // Each method names its parameters as ProjectsRemote does: DSH's gateway reads the names from the
+    // method's source and refuses a call whose arguments it does not name, before any words could reach the window.
+    async seeNews(target, seq) {
+        void target, seq;
         return { news: [] };
     }
 
-    async describe() { throw off(); }
+    async describe(target) { throw off(target); }
 
-    async update() { throw off(); }
+    async update(target, changes) { throw off(target, changes); }
 
-    async continueThread() { throw off(); }
+    async continueThread(target, thread) { throw off(target, thread); }
 
-    async changes() { throw off(); }
+    async changes(target, thread) { throw off(target, thread); }
 
-    async coordinate() { throw off(); }
+    async coordinate(target, on) { throw off(target, on); }
 
-    async archive() { throw off(); }
+    async archive(project) { throw off(project); }
 
-    async restore() { throw off(); }
+    async restore(project) { throw off(project); }
 }
 
+/** The refusal while switched off. A method passes its arguments only so that it names them for the gateway; none is read. */
 const off = () => new RemoteError('coordinator/refused', OFF_TEXT, {});
 
 /** Mark methods the way the `@Remote` decorator does in DSH's TypeScript. */
