@@ -306,10 +306,13 @@ export class Pilot {
      * still marked "asked you" are set aside as a stop does, so a question
      * that still applies is asked again under its own entry and time. Its
      * notes still "sending" or "in the queue" are looked up in the session's
-     * log: read into a turn ("delivered", with the turn), else "not proven".
-     * Its goal starts still waiting are looked up the same way: a round of
-     * that start's revision ("started"), else "not started", and the trigger
-     * is freed so the goal can be started again.
+     * log: read into a turn ("delivered", with the turn); still in DSH's
+     * queue, which DSH keeps in the log ("not proven": the session may still
+     * read it, so it is not sent again); else "not delivered", and the
+     * trigger is freed so this run can act on it. Its goal starts still
+     * waiting are looked up the same way: a round of that start's revision
+     * ("started"), else "not started", and the trigger is freed so the goal
+     * can be started again.
      */
     async settleLeft() {
         const live = new Set((this.watch.asks?.() ?? []).map((ask) => ask.id));
@@ -358,12 +361,16 @@ export class Pilot {
         };
         const settledAt = this.now();
         if (typeof entry.note === 'string') {
-            const read = after.find((e) => e?.type === 'user/message' && (entry.messageId ? e.data?.id === entry.messageId : messageText(e.data) === entry.note));
+            const ours = (message) => (entry.messageId ? message?.id === entry.messageId : messageText(message) === entry.note);
+            const read = after.find((e) => e?.type === 'user/message' && ours(e.data));
             if (read) {
                 const turn = turnOf(read);
                 this.journal.set(entry.id, { state: 'delivered', settledAt, ...(turn !== undefined ? { turn } : {}), ...(Number.isFinite(read.time) ? { deliveredAt: read.time } : {}), reason: '' });
+            } else if (after.some((e) => e?.type === 'agent/inbox/spliced' && Array.isArray(e.data?.inserted) && e.data.inserted.some(ours))) {
+                // DSH keeps its queue in the session's log, so the session may still read it: it is never sent twice.
+                this.journal.set(entry.id, { state: 'not proven', settledAt, reason: 'DSH stopped with it in the session\'s queue (a crash or a forced quit); the session may still read it when it next runs' });
             } else {
-                this.journal.set(entry.id, { state: 'not delivered', settledAt, reason: 'DSH stopped before the session read it (a crash or a forced quit)' });
+                this.journal.set(entry.id, { state: 'not delivered', settledAt, reason: 'DSH stopped before it reached the session (a crash or a forced quit)' });
                 free();
             }
             return;

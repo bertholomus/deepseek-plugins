@@ -342,10 +342,14 @@ test('after a crash or a forced quit: what the killed run left open is settled f
     // Notes wait in the queue until the test lets a session read them.
     const dsh = fakeDsh({ now: clock.now, autoRead: false });
     const first = setup({ dir, clock, dsh, config: { defaultRule: 'ask' } });
-    for (const id of ['n', 'm', 'g1', 'g2']) first.pilot.setRule(id, 'auto');
+    for (const id of ['n', 'm', 'p', 'g1', 'g2']) first.pilot.setRule(id, 'auto');
     idleWithTodos(dsh, 'q', { title: 'Parser' });
     idleWithTodos(dsh, 'n', { title: 'Queued' });
     idleWithTodos(dsh, 'm', { title: 'Read unseen' });
+    idleWithTodos(dsh, 'p', { title: 'Never sent' });
+    // p's note never reaches DSH: the kill comes while it is still on its way.
+    const deliver = first.watch.deliver.bind(first.watch);
+    first.watch.deliver = (sessionId, ...rest) => (sessionId === 'p' ? new Promise(() => {}) : deliver(sessionId, ...rest));
     for (const id of ['g1', 'g2']) {
         dsh.add(id, { title: `Goal ${id}` });
         dsh.write(id, 'Go');
@@ -364,7 +368,7 @@ test('after a crash or a forced quit: what the killed run left open is settled f
     const askedAt = first.watch.asks().find((ask) => ask.sessionId === 'q').at;
     assert.equal(first.notified.length, 1);
     const open = Object.fromEntries(entries(first.journal).filter((e) => e.kind !== 'rule').map((e) => [e.sessionId, e.state]));
-    assert.deepEqual(open, { q: 'asked you', n: 'in the queue', m: 'in the queue', g1: 'waiting for a round', g2: 'waiting for a round' });
+    assert.deepEqual(open, { q: 'asked you', n: 'in the queue', m: 'in the queue', p: 'sending', g1: 'waiting for a round', g2: 'waiting for a round' });
     // Two things happen that the run never hears of: m reads its note, and g1's round begins.
     const msg = dsh.agents.get('m').inbox.shift();
     dsh.commit('m', 'turn/start', { turn: 2 }, { quiet: true });
@@ -389,15 +393,18 @@ test('after a crash or a forced quit: what the killed run left open is settled f
     assert.equal(byId('q').state, 'withdrawn');
     assert.equal(byId('q').stopped, true);
     assert.equal(byId('q').reason, 'withdrawn: DSH stopped before it was answered (a crash or a forced quit); it asks again when it runs, if this still applies');
-    assert.equal(byId('n').state, 'not delivered');
-    assert.equal(byId('n').reason, 'DSH stopped before the session read it (a crash or a forced quit)');
+    // n's note is still in DSH's queue, which DSH keeps in the session's log: the session may still read it.
+    assert.equal(byId('n').state, 'not proven');
+    assert.equal(byId('n').reason, 'DSH stopped with it in the session\'s queue (a crash or a forced quit); the session may still read it when it next runs');
+    assert.equal(byId('p').state, 'not delivered');
+    assert.equal(byId('p').reason, 'DSH stopped before it reached the session (a crash or a forced quit)');
     assert.equal(byId('m').state, 'delivered');
     assert.equal(byId('m').turn, 2);
     assert.equal(byId('g1').state, 'started');
     assert.equal(byId('g1').reason, 'round 1 of 20 began');
     assert.equal(byId('g2').state, 'not started');
     assert.equal(byId('g2').reason, 'DSH stopped before a round began (a crash or a forced quit)');
-    for (const id of ['q', 'n', 'm', 'g1', 'g2']) assert.equal(byId(id).settledAt, clock.now(), id);
+    for (const id of ['q', 'n', 'm', 'p', 'g1', 'g2']) assert.equal(byId(id).settledAt, clock.now(), id);
     // The first look: the question comes back under its entry and first time, without a second notification;
     // the note that never arrived and the goal that never started get their turn; nothing is done twice.
     await clock.advance(MIN);
@@ -407,7 +414,8 @@ test('after a crash or a forced quit: what the killed run left open is settled f
     assert.equal(entries(second.journal, 'ask').length, 1);
     assert.equal(entries(second.journal, 'ask')[0].state, 'asked you');
     assert.equal(second.notified.length, 0);
-    assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'n').length, 2, 'n gets its note again');
+    assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'p').length, 2, 'p gets its note again');
+    assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'n').length, 1, 'n\'s note may still be read: not sent twice');
     assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'm').length, 1, 'm read its note: not again');
     const starts = entries(second.journal, 'rearm').filter((e) => e.sessionId === 'g2');
     assert.equal(starts.length, 2);

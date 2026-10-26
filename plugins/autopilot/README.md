@@ -83,10 +83,12 @@ note, or read it on Autopilot's page under *What it sent*.
   session); if it still applies, it is asked again under the same entry,
   with the time it was first asked, and with no second notification. At
   that start it also checks what a crash left open against each session's
-  log: a note the session read is *delivered*, one it never read is *not
-  delivered* (and sent again if it still applies); a goal start whose round
-  began is *started*, one whose round never began is *not started*. Times
-  such as *4 min ago* keep up while the page is open.
+  log: a note the session read is *delivered*; one still in the session's
+  queue, which DSH keeps in that log, is *not proven* and never sent again
+  (the session may still read it); one that never reached the session is
+  *not delivered* (and sent again if it still applies). A goal start whose
+  round began is *started*, one whose round never began is *not started*.
+  Times such as *4 min ago* keep up while the page is open.
 
 When Autopilot cannot work, the page says why and what to do, with a button
 to the place to do it: *Autopilot needs Session Watch, which is not
@@ -212,15 +214,15 @@ and from the installed app's own DSH (run as Node by the app's binary, as a
 separate process), each in a throwaway home, with a scripted model playing
 the agent and a stand-in window that gets DSH's own prompts. It lets
 sessions go quiet with work open (a nudge, back-off, progress, Ask first,
-Off, a question left alone), fails a goal round, stops and kills DSH under
-running turns (one of them waiting for approval and one with a question in
-the question box), and drives the page in a browser (`npm i --prefix
-.e2e/tools playwright-core`, with Playwright's Chrome), light and dark,
-wide and narrow: the buttons, the rule keys, where the cursor goes after
-an answer and after Try again, a refusal in its row, the contrast of every
-state word on the page, the cards' small text at Wallpaper's tint .2 over a
-mid picture, a question open across a quit, a rule choice kept while the
-list redraws, numbers in quotes for Autopilot and for Session Watch in the
+Off, a question left alone), stops and kills DSH under running turns (one
+of them waiting for approval and one with a question in the question box),
+and drives the page in a browser (`npm i --prefix .e2e/tools
+playwright-core`, with Playwright's Chrome), light and dark, wide and
+narrow: the buttons, the rule keys, where the cursor goes after an answer
+and after Try again, a refusal in its row, the contrast of every state word
+on the page, the cards' small text at Wallpaper's tint .2 over a mid
+picture, a question open across a quit, a rule choice kept while the list
+redraws, numbers in quotes for Autopilot and for Session Watch in the
 profile (both named on the page with the value, and Autopilot's fixed
 through the form, which shows it in quotes and flagged), a wrong setting
 fixed through DSH's form in Plugins with the cursor in it, and Session
@@ -228,7 +230,8 @@ Watch switched off and on in Plugins with no error from DSH. It fails a
 goal round (a carry-on note first, then the goal's next round), runs an
 outage where every try fails (no goal round spent, then *gave up*), and
 kills DSH under an open question and a goal start waiting for its round
-(both settled from the logs at the next start). It also runs with Session Watch off in the profile and with
-`enabled: false`, and checks the file modes. Every claim is checked in the
-session's own log. It reads the running DSH's fingerprint before and after
-and fails if it moved; pictures go to `.e2e/shots/autopilot/<version>/`.
+(both settled from the logs at the next start). It also runs with Session
+Watch off in the profile and with `enabled: false`, and checks the file
+modes. Every claim is checked in the session's own log. It reads the
+running DSH's fingerprint before and after and fails if it moved; pictures
+go to `.e2e/shots/autopilot/<version>/`.
