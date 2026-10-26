@@ -6,7 +6,8 @@
  * The dev set (dev.json; dev-fresh.json by two fresh writers; the round-3
  * judge's sets, dev-judge.json; and round 4's casually typed prompts and
  * decisions, dev-casual.json) is tuned on and held to the figures it
- * reached. The hold-outs are written by fresh writers who never saw Canon's
+ * reached, and so are round 5's probe sets (probes.json, by two more fresh
+ * writers), apart from it. The hold-outs are written by fresh writers who never saw Canon's
  * code or the dev set: the first (no kinds) is held to the four floors of
  * OPEN-QUESTIONS #29, the second and the third (with kinds) to those and the
  * everyday-coding floor of #33. A hold-out's test prints its figures only,
@@ -23,7 +24,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { FLOORS, HOLDOUT, HOLDOUT2, HOLDOUT3, belowFloors, loadDev, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
+import { FLOORS, HOLDOUT, HOLDOUT2, HOLDOUT3, PROBES, belowFloors, loadDev, loadSet, measure, missText } from './helpers/canon-relevance.mjs';
 import { asksForWork, isDecision } from '../plugins/canon/lib/text.js';
 
 /**
@@ -31,6 +32,9 @@ import { asksForWork, isDecision } from '../plugins/canon/lib/text.js';
  * held so a change that makes them worse fails here.
  */
 const DEV_REACHED = Object.freeze({ first: 595, inBlock: 610, extra: 159, noBlock: 533, coding: 432 });
+
+/** Round 5's probe sets' figures as reached (probes.json, tuned on): held like the dev set's. */
+const PROBES_REACHED = Object.freeze({ first: 71, inBlock: 76, extra: 30, noBlock: 113, coding: 101 });
 
 /**
  * The first hold-out's figures as measured with round 4's rules (53646c8,
@@ -148,6 +152,24 @@ test('dev set: the figures reached are held (first note, an answering note in th
     assert.ok(u.noBlock >= DEV_REACHED.noBlock, `no block for ${u.noBlock} of ${u.n}\n${misses}`);
     assert.ok(c.noBlock >= DEV_REACHED.coding, `no block for ${c.noBlock} of ${c.n} everyday coding requests\n${misses}`);
     assert.deepEqual(belowFloors(m), []);
+});
+
+test('probe sets: well formed, apart from the dev set and the hold-outs, and held to the figures reached', async () => {
+    const set = loadSet(PROBES, { kinds: true });
+    assert.ok(set.filter((e) => e.kind === 'coding').length >= 100 && set.filter((e) => e.kind === 'answers').length >= 90, 'everyday coding requests and prompts a note answers');
+    const earlier = new Set([...loadDev(), ...(existsSync(HOLDOUT) ? loadSet(HOLDOUT) : []), ...(existsSync(HOLDOUT2) ? loadSet(HOLDOUT2) : [])].map((e) => said(e.prompt)));
+    assert.equal(set.filter((e) => earlier.has(said(e.prompt))).length, 0, 'a probe repeats a dev or hold-out prompt');
+    const m = await measure(set);
+    assert.deepEqual(m.problems, []);
+    const a = m.summary.answerable;
+    const u = m.summary.unanswerable;
+    const c = m.summary.coding;
+    const misses = m.misses.map(missText).join('\n');
+    assert.ok(a.first >= PROBES_REACHED.first, `first note answers ${a.first} of ${a.n}\n${misses}`);
+    assert.ok(a.inBlock >= PROBES_REACHED.inBlock, `an answering note in the block ${a.inBlock} of ${a.n}\n${misses}`);
+    assert.ok(a.extra <= PROBES_REACHED.extra, `${a.extra} notes that do not answer in ${a.blocks} blocks\n${misses}`);
+    assert.ok(u.noBlock >= PROBES_REACHED.noBlock, `no block for ${u.noBlock} of ${u.n}\n${misses}`);
+    assert.ok(c.noBlock >= PROBES_REACHED.coding, `no block for ${c.noBlock} of ${c.n} everyday coding requests\n${misses}`);
 });
 
 test('the measure gives Canon only the prompt and the session\'s folder: the same blocks with every label taken away', async () => {

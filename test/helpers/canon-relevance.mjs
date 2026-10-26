@@ -68,6 +68,15 @@ export const DEV_JUDGE = join(SETS, 'dev-judge.json');
 export const DEV_CASUAL = join(SETS, 'dev-casual.json');
 /** The dev set's files: the dev measure reads them as one set. */
 export const DEV_FILES = Object.freeze([DEV, DEV_FRESH, DEV_JUDGE, DEV_CASUAL]);
+/**
+ * Round 5's probe sets (tuned on, apart from the dev set): two fresh writers
+ * who read only the frozen vault and never saw Canon, one typing casually
+ * (w1-…: "postgres: total of entries per account per month") and one with
+ * care (w3-…): 110 everyday coding requests, 96 prompts a note answers and
+ * 14 others. Measured once at 53646c8 and at 341ff4e before any rule
+ * changed for them.
+ */
+export const PROBES = join(SETS, 'probes.json');
 /** Written by fresh writers who never saw Canon's code or the dev set; measured once. */
 export const HOLDOUT = join(SETS, 'holdout.json');
 /** The second hold-out (OPEN-QUESTIONS #33), with everyday coding requests, from two more fresh writers. */
