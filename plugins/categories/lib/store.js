@@ -8,10 +8,14 @@
  *   categoryOf: { [DSH workspace id]: categoryId }: the category each workspace is in, one at most,
  *   imports: { projects?: { at, file, categories, workspaces, backup? }: the categories moved over from the projects
  *       plugin's store, once (move.js),
- *     fleetShell?: { at, file, categories, joined, workspaces, skipped }: the all-in-one mod's old sidebar, imported once } }
+ *     fleetShell?: { at, file, categories, joined, workspaces, skipped }: the all-in-one mod's old sidebar, imported once,
+ *     unusable?: { at }: the store was there but couldn't be used at a start, so neither one-time move runs after it } }
  *
  * The file is written at the plugin's first start, so `exists` says
- * whether that start (and its one-time move) has happened.
+ * whether that start (and its one-time move) has happened. A file that is
+ * there but can't be used (not JSON, another version, unreadable) counts as
+ * there: the categories start empty, the log says so, and the file as it
+ * was is kept beside the store before a change writes a new one.
  *
  * @module dsh-plugin-categories/store
  */
@@ -74,6 +78,8 @@ export function writePrivate(file, text) {
 }
 
 const plain = (value) => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {});
+/** Why a file call failed, in a few words: its code (EACCES, ENOSPC, …), else its message. */
+const reason = (error) => String(error?.code ?? error?.message ?? error).slice(0, 200);
 
 /**
  * Each start of the plugin reads the file as it is then: a store is never
@@ -81,9 +87,16 @@ const plain = (value) => (value !== null && typeof value === 'object' && !Array.
  * file while the plugin was off is what the next start sees and keeps.
  */
 export class CategoryStore {
-    /** @param {string} file - store path. */
-    constructor(file) {
+    /**
+     * @param {string} file - store path.
+     * @param {{ warn?: (text: string) => void }} [options] - warn: the plugin's log, told when the file is there
+     *   but can't be used, or can't be written.
+     */
+    constructor(file, { warn = () => {} } = {}) {
         this.file = dataPath(file);
+        this.warn = warn;
+        /** A file that was there but couldn't be used: {text} as read (undefined when it couldn't be read), else null. */
+        this.unusable = null;
         /** @type {Record<string, object>} category id → its definition */
         this.categories = {};
         /** @type {Record<string, string>} workspace id → category id */
@@ -99,26 +112,58 @@ export class CategoryStore {
         this.categories = {};
         this.categoryOf = {};
         this.imports = {};
+        this.unusable = null;
         this.exists = existsSync(this.file);
+        if (!this.exists) return;
+        let text;
+        let parsed;
         try {
-            const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
-            if (parsed?.version !== 1) return;
-            this.categories = cleanCategories(parsed.categories);
-            this.categoryOf = cleanPlacements(parsed.categoryOf);
-            this.imports = plain(parsed.imports);
-        } catch {
-            // Missing or corrupt: start clean, never crash. A corrupt file still counts as there,
-            // so the one-time move doesn't run over categories the user has made since.
+            text = readFileSync(this.file, 'utf8');
+            parsed = JSON.parse(text);
+        } catch (error) {
+            this.unusableFile(text === undefined ? `can't be read (${reason(error)})` : 'is not JSON', text);
+            return;
         }
+        if (parsed?.version !== 1) {
+            this.unusableFile(`is not a categories store of version 1 (its version is ${JSON.stringify(parsed?.version ?? null)})`, text);
+            return;
+        }
+        this.categories = cleanCategories(parsed.categories);
+        this.categoryOf = cleanPlacements(parsed.categoryOf);
+        this.imports = plain(parsed.imports);
     }
 
-    /** Persist atomically; the store must survive crashes mid-write. */
+    /**
+     * A store file that is there but can't be used. The plugin never stops for it: the categories start empty, and
+     * the log says so. It still counts as there, so neither one-time move runs over categories the user made; and
+     * before a change writes a new store over it, the file as it was is kept beside it (save).
+     */
+    unusableFile(what, text) {
+        this.unusable = { text };
+        this.imports = { unusable: { at: new Date().toISOString() } };
+        this.warn(`the store ${this.file} ${what}: the categories start empty${text === undefined ? ', and a change writes a new store over it' : ', and the file as it was is kept beside it before a change writes a new one'}`);
+    }
+
+    /**
+     * Persist atomically; the store must survive crashes mid-write. A file that couldn't be used is first kept beside
+     * the store as it was (`<store>.unreadable-<time>`); if that copy can't be made, the store isn't written over it.
+     * A write that fails is logged; the change holds in memory and the next change tries again.
+     * @returns whether the store was written.
+     */
     save() {
         try {
+            if (this.unusable?.text !== undefined) {
+                const copy = `${this.file}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+                writePrivate(copy, this.unusable.text);
+                this.warn(`the store that couldn't be used is kept in ${copy}`);
+            }
+            this.unusable = null;
             writePrivate(this.file, `${JSON.stringify({ version: 1, categories: this.categories, categoryOf: this.categoryOf, imports: this.imports }, null, 2)}\n`);
             this.exists = true;
-        } catch {
-            // Best-effort for availability; the next change retries.
+            return true;
+        } catch (error) {
+            this.warn(`could not save the categories in ${this.file} (${reason(error)}): the change holds until DSH restarts, and the next change tries again`);
+            return false;
         }
     }
 

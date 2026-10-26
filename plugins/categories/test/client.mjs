@@ -534,7 +534,7 @@ test('browser half: switched off in its settings, the page says so and how to sw
     let page = draw();
     const offState = byHook(page, 'data-categories-off');
     assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'h2')), 'Categories are switched off');
-    assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'p')), 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and they come back as they were.');
+    assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'p')), 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and restart DSH, and they come back as they were.');
     // Nothing to make while off, no tree, and no error.
     assert.equal(byHook(page, 'data-categories-new'), undefined);
     assert.equal(elementsOf(page).some((e) => e.props?.role === 'tree'), false);
@@ -548,7 +548,7 @@ test('browser half: switched off in its settings, the page says so and how to sw
     page = draw();
     const note = byHook(page, 'data-categories-problems');
     assert.equal(note.props.role, 'alert');
-    assert.equal(textIn(note), 'A setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it. Change it in the categories row of the profile\'s cordis.patch.yml; the plugin restarts with it.');
+    assert.equal(textIn(note), 'A setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it. Change it in the categories row of the profile\'s cordis.patch.yml, then restart DSH.');
     assert.equal(byHook(page, 'data-categories-off'), undefined);
 });
 

@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -207,6 +207,69 @@ test('endpoints: a failure that is not a refusal is answered in words and logged
     assert.equal(listed?.message, 'Categories could not do that: broken store');
     assert.deepEqual(warnings.at(-1), 'categories: a call failed: broken store');
     assert.match(readFileSync(join(dir, 'categories', 'categories.log'), 'utf8'), /Z warn a call failed: broken store\n$/, 'and its own log says so');
+});
+
+test('store: a file that can\'t be used never stops the plugin; the log says so, no one-time move runs over it, and it is kept before a change writes a new one', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-home-'));
+    await withDshHome(home, async () => {
+        // The old sidebar's file is there: its import never runs over a store that was there.
+        mkdirSync(join(home, 'fleet-shell'));
+        writeFileSync(join(home, 'fleet-shell', 'state.json'), JSON.stringify({ projects: [{ id: 'p1', name: 'Old' }], projectOf: { 'ws:/work/a': 'p1' } }));
+        const dir = mkdtempSync(join(tmpdir(), 'categories-'));
+        const storeFile = join(dir, 'categories', 'categories.json');
+        const logFile = join(dir, 'categories', 'categories.log');
+        mkdirSync(join(dir, 'categories'));
+        const broken = '{"version": 1, "categories": {"shop": {"name": "Sh';
+        writeFileSync(storeFile, broken);
+        const warnings = [];
+        const host = fakeHost({ workspaces: ['/work/a'] });
+        host.logger = { info() {}, warn: (...parts) => { warnings.push(parts.slice(1).join(' ')); } };
+        const raw = { storeFile, logFile, projectsStoreFile: '' };
+        plugin.apply(host, plugin.Config(raw));
+        const remote = host.provided.get('dshPluginCategoriesRemote');
+        await tick();
+        const said = `the store ${storeFile} is not JSON: the categories start empty, and the file as it was is kept beside it before a change writes a new one`;
+        assert.deepEqual(warnings, [`categories: ${said}`]);
+        assert.match(logOf(logFile), new RegExp(`Z warn ${said.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}\n$`), 'in its own log too');
+        assert.deepEqual(plain(await remote.list()).categories, [], 'it starts with none, and no import ran');
+        assert.equal(readFileSync(storeFile, 'utf8'), broken, 'nothing is written over it yet');
+        // The first change keeps the file as it was beside the store, then writes the new one.
+        assert.equal((await remote.createCategory('Lab')).category, 'lab');
+        const kept = readdirSync(join(dir, 'categories')).filter((name) => name.startsWith('categories.json.unreadable-'));
+        assert.equal(kept.length, 1);
+        assert.equal(readFileSync(join(dir, 'categories', kept[0]), 'utf8'), broken);
+        assert.equal(mode(join(dir, 'categories', kept[0])), 0o600);
+        assert.equal(warnings.at(-1), `categories: the store that couldn't be used is kept in ${join(dir, 'categories', kept[0])}`);
+        const stored = JSON.parse(readFileSync(storeFile, 'utf8'));
+        assert.equal(stored.categories.lab.name, 'Lab');
+        assert.ok(stored.imports.unusable?.at, 'and it says the moves are past');
+        // Started again: the new store reads, nothing is copied again, and the old sidebar still isn't imported.
+        const again = await restart(host, raw);
+        assert.deepEqual(tree(await again.list()), [['lab', 'Lab', []]]);
+        assert.equal(readdirSync(join(dir, 'categories')).filter((name) => name.includes('.unreadable-')).length, 1);
+        assert.doesNotMatch(logOf(logFile), /import fleet-shell/);
+        // Another version is no store of this plugin's either: said, kept, and left as it is until a change.
+        writeFileSync(storeFile, JSON.stringify({ version: 2, categories: {} }));
+        const third = await restart(host, raw);
+        assert.match(logOf(logFile), /warn the store .* is not a categories store of version 1 \(its version is 2\): the categories start empty/);
+        assert.deepEqual(plain(await third.list()).categories, []);
+    });
+});
+
+test('store: a save that fails is said in the log; the change holds, and the next change saves it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'categories-'));
+    const { remote, raw } = setup({}, dir);
+    await tick();
+    // The atomic write's temporary file can't be made (a folder in its place).
+    mkdirSync(`${raw.storeFile}.tmp`, { recursive: true });
+    assert.equal((await remote.createCategory('Lab')).category, 'lab');
+    assert.match(logOf(raw.logFile), new RegExp(`warn could not save the categories in .*categories\\.json \\(EISDIR\\): the change holds until DSH restarts, and the next change tries again\n`));
+    assert.deepEqual(tree(await remote.list()), [['lab', 'Lab', []]], 'the change holds');
+    assert.ok(!existsSync(raw.storeFile) || !readFileSync(raw.storeFile, 'utf8').includes('"lab"'), 'and is not on disk yet');
+    rmSync(`${raw.storeFile}.tmp`, { recursive: true });
+    await remote.createCategory('Shop');
+    const stored = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
+    assert.deepEqual(Object.keys(stored.categories).sort(), ['lab', 'shop'], 'the next change saves both');
 });
 
 test('categories: named sets of workspaces in their order, kept in step with DSH\'s own workspace order', async () => {

@@ -496,9 +496,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noCategories: 'No categories yet',
             newWithIt: 'New category with it…',
             offTitle: 'Categories are switched off',
-            offText: 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and they come back as they were.',
+            offText: 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and restart DSH, and they come back as they were.',
             problemsTitle: 'A setting is wrong',
-            problemsFix: 'Change it in the categories row of the profile\'s cordis.patch.yml; the plugin restarts with it.',
+            problemsFix: 'Change it in the categories row of the profile\'s cordis.patch.yml, then restart DSH.',
             imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
             dismiss: 'Dismiss',
         };

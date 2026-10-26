@@ -124,13 +124,15 @@ export class CategoryManager {
      * @param {object} options.ctx - the plugin's context: workspaceRegistry, logger.
      * @param {object} options.config - the plugin's config (index.js).
      */
-    constructor({ ctx, config }) {
+    constructor({ ctx, config, warn }) {
         this.ctx = ctx;
         this.config = config;
-        /** Read from the file now: a switch-off or config reload left nothing in memory. */
-        this.store = new CategoryStore(config.storeFile);
-        this.disposed = false;
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
+        /** A warning in words: DSH's logger and the plugin's own log (index.js), else its log alone. */
+        this.warn = typeof warn === 'function' ? warn : (text) => this.log(`warn ${text}`);
+        /** Read from the file now: a switch-off or config reload left nothing in memory. */
+        this.store = new CategoryStore(config.storeFile, { warn: (text) => this.warn(text) });
+        this.disposed = false;
     }
 
     /** One line in the action log (mode 600): ids and counts, and what went wrong, in words. */
@@ -244,7 +246,7 @@ export class CategoryManager {
      * the old file is not read at all.
      */
     importFleetShell() {
-        if (this.disposed || this.store.imports.fleetShell || this.store.imports.projects?.from === 'categories') return;
+        if (this.disposed || this.store.imports.fleetShell || this.store.imports.projects?.from === 'categories' || this.store.imports.unusable) return;
         const file = join(dshHome(), 'fleet-shell', 'state.json');
         let state;
         try {

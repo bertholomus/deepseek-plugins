@@ -67,7 +67,7 @@ export function apply(ctx, raw) {
         ctx.logger?.info?.('categories: switched off in its settings');
         return;
     }
-    const manager = new CategoryManager({ ctx, config });
+    const manager = new CategoryManager({ ctx, config, warn: (text) => warn(`categories: ${text}`) });
     // Switched off or reloaded: this manager stops, and the next start reads the store from its file.
     ctx.effect(() => () => manager.dispose(), 'categories.manager()');
 
