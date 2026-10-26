@@ -1527,6 +1527,33 @@ try {
         return got.ok && Array.isArray(got.value.problems) && got.value.problems.length === 0 ? got : null;
     }, 'the page with nothing to fix', 30000).catch(() => null);
     check('put right, the page has nothing to fix', answer !== null, JSON.stringify(answer).slice(0, 300));
+
+    // 32. enabled: false switches it off: the chat keeps its record but is offered no thread tools, the window hears
+    // the plugin is off (so it offers no Coordinate), and a click that comes anyway is answered in words. Set true
+    // again, the chat coordinates as before, with nothing lost.
+    // Switched off, the plugin writes nothing, so its log can't tell it restarted: its answer does.
+    writePatch(model.port, { threadEffort: 'high', enabled: false });
+    answer = await waitFor(async () => {
+        const got = await webApi(web, 'dsh-plugin-coordinator/sessions', {});
+        return got.ok && got.value?.off === true ? got : null;
+    }, 'the plugin to say it is switched off', 30000).catch(() => null);
+    check('enabled: false: the window hears the plugin is switched off, and knows no chat', answer?.value?.off === true && Object.keys(answer.value.sessions ?? {}).length === 0, JSON.stringify(answer).slice(0, 300));
+    const offClick = await webApi(web, 'dsh-plugin-coordinator/coordinate', { target: coord, on: true });
+    check('enabled: false: Coordinate is answered in words, and nothing changes', offClick.ok === false && offClick.error?.code === 'coordinator/refused'
+        && /^The coordinator is switched off: its row in your profile's cordis\.patch\.yml says enabled: false\./.test(offClick.error?.message ?? ''), JSON.stringify(offClick).slice(0, 300));
+    mark = model.requests.length;
+    await say(coord, 'Is the plugin off now?');
+    check('enabled: false: the chat is offered no thread tools', since(mark).length > 0 && since(mark).every((r) => !r.tools.includes('thread_start')), since(mark).map((r) => r.tools.join(',')).join(' | '));
+    const startsOn = starts();
+    writePatch(model.port, { threadEffort: 'high' });
+    await waitFor(async () => {
+        const got = await webApi(web, 'dsh-plugin-coordinator/sessions', {});
+        return starts() > startsOn && got.ok && got.value?.off !== true && got.value?.sessions?.[coord] ? got : null;
+    }, 'the plugin to run again', 30000).catch(() => null);
+    mark = model.requests.length;
+    await say(coord, 'And on again?');
+    check('set true again, the chat coordinates as before, its threads kept', since(mark, 'coordinator').length > 0 && since(mark, 'coordinator').every((r) => r.tools.includes('thread_start'))
+        && Object.keys(project().threads ?? {}).length > 0, describe(since(mark)));
     check('no errors in the coordinator log', !/ error /.test(readText(logFile)), readText(logFile).split('\n').filter((l) => / error /.test(l)).join('\n'));
 } catch (error) {
     failed += 1;
@@ -1542,6 +1569,34 @@ try {
     await model.close();
     if (process.env.KEEP) console.log(`kept ${root}`);
     else rmSync(root, { recursive: true, force: true });
+}
+
+// The window: what DSH draws for the plugin, looked at in a Chromium (window.mjs), on the same DSH build. Its own
+// summary line is relayed as a comment, so the line below stays the one that counts.
+if (process.env.WINDOW !== '0') {
+    const windowRun = spawn(process.execPath, [join(here, 'window.mjs')], { stdio: ['ignore', 'pipe', 'inherit'], env: process.env });
+    let rest = '';
+    let counts;
+    const relay = (line) => {
+        const summary = /^(\d+) passed, (\d+) failed$/.exec(line);
+        if (summary) counts = summary;
+        console.log(summary ? `# window: ${line}` : line);
+    };
+    windowRun.stdout.setEncoding('utf8');
+    windowRun.stdout.on('data', (chunk) => {
+        const lines = (rest + chunk).split('\n');
+        rest = lines.pop();
+        for (const line of lines) relay(line);
+    });
+    const exit = await new Promise((resolveExit) => windowRun.on('exit', resolveExit));
+    if (rest) relay(rest);
+    if (counts) {
+        passed += Number(counts[1]);
+        failed += Number(counts[2]);
+    } else {
+        failed += 1;
+        console.log(`not ok - the window test ran to its end (exit ${exit})`);
+    }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
