@@ -587,8 +587,8 @@ const dictated = (prompt, claim) => {
     const said = flatWords(claim?.text ?? claim?.part);
     return said.length >= 12 && flatWords(prompt).includes(said);
 };
-/** A command as a card shows it: a program run by its full path is named by its own name (`node --test a.test.mjs`, not `/opt/tools/node-v22/bin/node --te…`), so a long path does not hide what ran. */
-const shownCommand = (command) => oneLine(command).replace(/(^|&&|\|\||[;|(])(\s*)\/(?:[^\s/'"]+\/)+([^\s/'"]+)(?=\s|$)/g, '$1$2$3');
+/** A command as a card shows it: a program run by its full path is named by its own name (`node --test a.test.mjs`, not `/opt/tools/node-v22/bin/node --te…`), so a long path does not hide what ran. A program starts the line, follows `&&`, `||`, `;`, `|` or `(`, or follows a word that runs the next one (a loop's `do`, `then`, `sudo`, …); a path that is only an argument stays whole. */
+const shownCommand = (command) => oneLine(command).replace(/(^|&&|\|\||[;|(]|(?<![^\s;&|(])(?:do|then|else|elif|if|while|until|exec|env|nohup|sudo|xargs|!|\{)(?=\s))(\s*)\/(?:[^\s/'"]+\/)+([^\s/'"]+)(?=\s|$)/g, '$1$2$3');
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 /** The command a shell call ran, from its arguments (an object, or JSON text). */

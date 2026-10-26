@@ -160,6 +160,13 @@ test('evidence: each tool result becomes one item of the right kind', () => {
     assert.equal(long.text, '`node --test broken.test.mjs` exited 1: 1 passed, 1 failed');
     assert.match(long.cmd, /^\/Users\/dev\/tools\//);
     assert.equal(bash('cd /home/dev/app && /home/dev/.venv/bin/pytest -q | /usr/bin/tee /tmp/t.log', '3 passed in 0.02s').text, '`cd /home/dev/app && pytest -q | tee /tmp/t.log` exited 0: 3 passed, 0 failed');
+    // So is one a loop's `do`, an `if`'s `then`, `sudo` or a `{` group runs; a path that is only an argument stays whole.
+    assert.equal(bash('for i in 1 2 3; do /Users/dev/tools/node-v22.23.4-darwin-arm64/bin/node --test coupon.test.mjs; done', '# tests 1\n# pass 1\n# fail 0').text, '`for i in 1 2 3; do node --test coupon.test.mjs; done` exited 0: 1 passed, 0 failed');
+    assert.equal(bash('if /usr/bin/test -f a; then /bin/cat /etc/hosts; fi', 'x').text, '`if test -f a; then cat /etc/hosts; fi` exited 0');
+    assert.equal(bash('sudo /usr/local/bin/brew services restart api', 'ok').text, '`sudo brew services restart api` exited 0');
+    assert.equal(bash('{ /usr/bin/make test; } 2>&1', 'ok').text, '`{ make test; } 2>&1` exited 0');
+    assert.equal(bash('echo undo /etc/hosts', 'undo /etc/hosts').text, '`echo undo /etc/hosts` exited 0');
+    assert.equal(bash('echo hi! /etc/hosts', 'hi! /etc/hosts').text, '`echo hi! /etc/hosts` exited 0');
 });
 
 // ── Judging ────────────────────────────────────────────────────────

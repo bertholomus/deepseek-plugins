@@ -368,7 +368,8 @@ each flagged claim it shows:
 - the claim's own clause, quoted (its whole sentence shows on hover), and
   why it was flagged ("No test ran in this turn.", "The last push in this
   turn did not go through: … rejected …"), with commands drawn as code (a
-  program run by its full path is named by its own name, so
+  program run by its full path is named by its own name wherever it starts
+  a command, after `&&`, `|` or a loop's `do` too, so
   `/opt/tools/node-v22/bin/node --test a.test.mjs` shows as
   `node --test a.test.mjs`); for a claim the check verified, the check's
   reason instead;
@@ -631,7 +632,7 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (138 checks, three to six minutes a build)
+The real-DSH test (139 checks, three to six minutes a build)
 starts DSH from each `.e2e/dsh-<version>` install and from the installed
 app's own DSH, each in a throwaway home, with Session Watch and Proof and
 a scripted model (`test/e2e/fake-model.mjs`) that plays both the agent and
@@ -672,8 +673,9 @@ tests:**" headings with ✅ and ❌ and "No files were changed." stays quiet,
 and so do a bold "**Fixed** —" label, a list of passing tests and a typo
 fixed in the README after the fix and a passing run; "Fixed the flaky
 coupon test; it passes reliably now." after a loop of three runs in which
-the second failed is called contradicted, saying a round failed, and it is
-the only card in that chat; Proof's page, open all the while, lists that
+the second failed is called contradicted, saying a round failed and
+naming the program the loop ran by its own name, and it is the only card
+in that chat; Proof's page, open all the while, lists that
 new session by itself once its claims come. The sessions list puts the one
 flagged last first, timed by that flag, and the ledger lists the newest
 turn first and a reply's claims in order. It drives the page and Proof's

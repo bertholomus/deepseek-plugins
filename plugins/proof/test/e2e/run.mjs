@@ -1278,6 +1278,7 @@ test('applies the coupon once', () => assert.ok(round !== 2));
         await page.waitForTimeout(800);
         const texts = await cards.evaluateAll((els) => els.map((el) => ({ flag: el.getAttribute('data-proof-flag'), claims: [...el.querySelectorAll('[data-proof-claim]')].map((c) => c.getAttribute('data-proof-claim')), text: el.innerText.replace(/\n+/g, ' ') })));
         check('in the window: one card, under the flake fix only, contradicted', texts.length === 1 && texts[0].flag === 'contradicted' && texts[0].claims.every((id) => id.startsWith('3:')), json(texts));
+        check('the card names the program the loop ran by its own name, not by its full path', /do node --test coupon\.test\.mjs/.test(texts[0]?.text ?? ''), json(texts));
         await shot(page, shots, 'shapes-light');
         await setDark(page, true);
         await shot(page, shots, 'shapes-dark');
