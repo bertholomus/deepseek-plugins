@@ -93,7 +93,7 @@ test('config: What happened gives a switch\'s, a number\'s and a choice\'s new v
     const settings = { ...DEFAULTS, vault: '/srv/Canon', recall: false, maxNotes: 5, access: 'drafts' };
     const check = new SettingsCheck({ settings, check: (s) => checkConfig(s, { home: HOME }), liveKeys: LIVE_SETTINGS, label: 'canon' });
     check.run();
-    assert.deepEqual(savedEntry(check, [['recall'], ['maxNotes'], ['access'], ['vault']]), { kind: 'settings', text: 'Settings changed: “Add notes to turns” off, “Notes a turn, at most” 5, “What Canon may write” “Drafts”, “Vault folder”', why: 'They apply now.', state: 'done' });
+    assert.deepEqual(savedEntry(check, [['recall'], ['maxNotes'], ['access'], ['vault']]), { kind: 'settings', text: 'Settings changed: “Add notes to turns” off, “Notes a turn, at most” to 5, “What Canon may write” to “Drafts”, “Vault folder”', why: 'They apply now.', state: 'done' });
     settings.recall = true;
     assert.equal(savedEntry(check, [['recall']]).text, 'Settings changed: “Add notes to turns” on');
     // Three wrong at once: the first, then the others, in the check's order and words.
@@ -165,7 +165,7 @@ test('config: drafts and promoted folders stay inside the vault and apart; numbe
     const settings = { ...DEFAULTS, vault: '~/Canon' };
     const check = new SettingsCheck({ settings, check: (s) => checkConfig(s, { home: HOME }), liveKeys: LIVE_SETTINGS, label: 'canon' });
     check.run();
-    assert.deepEqual(savedEntry(check, [['access']]), { kind: 'settings', text: 'Settings changed: “What Canon may write” “Read only”', why: 'They apply now.', state: 'done' });
+    assert.deepEqual(savedEntry(check, [['access']]), { kind: 'settings', text: 'Settings changed: “What Canon may write” to “Read only”', why: 'They apply now.', state: 'done' });
     settings.maxNotes = 50;
     const entry = savedEntry(check, [['maxNotes']]);
     assert.equal(entry.state, 'waiting on a setting');
@@ -1471,7 +1471,7 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     let history = (await remote.state()).history;
     assert.equal(history[0].kind, 'capture');
     assert.equal(history[0].text, 'Draft saved: “Gateway health check port”');
-    assert.equal(history[1].text, 'Settings changed: “What Canon may write” “Drafts”');
+    assert.equal(history[1].text, 'Settings changed: “What Canon may write” to “Drafts”');
     // A Read Only session saves nothing.
     dsh.states.set('s-ro\0sandboxMode', 'read-only');
     const ro = await tool.execute({ title: 'Anything', body: 'Body.', kind: 'fact' }, { agent: { session: { id: 's-ro', header: { cwd: '/work' } } } });

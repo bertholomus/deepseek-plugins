@@ -436,8 +436,8 @@ Canon has its own entry in the sidebar. Its page shows:
   whether Promote does anything now.
 - **What happened**: drafts saved and refused, drafts promoted and
   refused, sessions switched off and on, setting changes (with a switch's,
-  a number's or a choice's new value: *“Add notes to turns” off*) and vault
-  problems, newest first.
+  a number's or a choice's new value: *“Add notes to turns” off*, *“Notes a
+  turn, at most” to 5*) and vault problems, newest first.
 
 While a setting is wrong, the page names every wrong setting, what each
 must be and where to change it, and shows What happened. A number or
@@ -517,7 +517,7 @@ did not ask for.
 Plugins → Canon shows the settings you can change while it runs, in DSH's
 own settings form: change a value, then **Save**. They apply at once, the
 focus goes to the line that says it was saved, and What happened notes each
-save (*Settings changed: “What Canon may write” Drafts*). **Use the
+save (*Settings changed: “What Canon may write” to “Drafts”*). **Use the
 default** clears one. The form will not save a value out of range, the
 whole disk or your home folder as the vault, or a promote folder inside the
 drafts folder, and says what fits instead.

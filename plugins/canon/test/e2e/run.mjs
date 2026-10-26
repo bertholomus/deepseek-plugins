@@ -39,7 +39,7 @@
  *   style go (a turn gets nothing) and come back.
  * - After a restart: a session switched off stays off. Without Session
  *   Watch, the page follows a new recall by itself. A session on Read Only
- *   gets notes but saves no draft.
+ *   gets its notes but is never offered `canon_capture`, so it saves no draft.
  * - Two wrong settings (numbers in quotes in the profile): Canon starts,
  *   adds and writes nothing, its page names both and says the values are
  *   text. "Save it as 3" saves the first and the focus goes to the line that
@@ -685,13 +685,18 @@ try {
     await window?.browser?.close().catch(() => {});
     window = undefined;
     await start('readOnly', gatewayWs, P.readOnly, 'Read Only work');
-    await step('a session on Read Only gets notes but saves no draft', async () => {
+    await step('a session on Read Only gets its notes but is never offered canon_capture, so it saves no draft', async () => {
         const asked = requestsOf(P.readOnly);
-        const result = asked.at(-1)?.results?.[0] ?? '';
+        const cites = citesOf(freshOf(P.readOnly)[0]);
+        check('its prompt gets its block', cites.includes('Projects/harbor-gateway/Gateway ports.md'), json(cites));
+        const s = await pageState();
+        // Canon may still write drafts (access: drafts): it is the session's mode that keeps the tool away.
+        check('while Canon may write drafts, the Read Only session is not offered canon_capture: the agent cannot call it',
+            s.settings.access === 'drafts' && asked.length >= 1 && asked.every((r) => !r.tools.includes('canon_capture')) && asked[0].action?.text === 'MISSING TOOL canon_capture',
+            json({ access: s.settings.access, asked: asked.map((r) => [r.tools.includes('canon_capture'), r.action]) }));
         const drafts = filesOf(inVault('Drafts'));
-        check('the tool says why it saved nothing', result.includes('Not saved: this session is Read Only, so Canon saves nothing from it.'), result.slice(0, 300));
         check('no file was written', !drafts.some((f) => /admin/i.test(f)), json(drafts));
-        check('What happened notes it', await historyHas(/^Draft not saved “Gateway admin port”: This session is Read Only/));
+        check('What happened has nothing from it', !s.history.some((e) => e.sessionId === ids.readOnly && e.kind === 'capture'), json(s.history.filter((e) => e.sessionId === ids.readOnly)));
     });
 
     // ── A wrong setting, fixed in Plugins ──────────────────────────────
@@ -719,7 +724,7 @@ try {
         const also = (await page.locator('[data-canon-also]').innerText()).replace(/\n+/g, ' ');
         check('and names the other wrong one after it', also === `Also wrong: ${charsText}.`, also);
         const named = (await page.locator('[data-canon-history]').innerText()).replace(/\n+/g, ' ');
-        check('What happened still names each session as DSH does', named.includes('Read Only work · Draft not saved') && named.includes('Gateway work · Draft saved: “Gateway keepalive”'), named.slice(0, 500));
+        check('What happened still names each session as DSH does', named.includes('Ledger work · Notes turned off for a session') && named.includes('Gateway work · Draft saved: “Gateway keepalive”'), named.slice(0, 1200));
         await shot(page, shots, 'setting-light');
         await setDark(page, true);
         await shot(page, shots, 'setting-dark');

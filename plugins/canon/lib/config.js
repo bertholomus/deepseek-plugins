@@ -235,7 +235,7 @@ export function savedEntry(check, paths) {
         return also.length ? { ...entry, why: `${entry.why} ${also.length === 1 ? 'Also wrong:' : `${also.length} more are wrong:`} ${also.map((p) => `${p.text}.`).join(' ')}` } : entry;
     }
     if (entry?.state !== 'done' || !entry.text.startsWith('Settings changed: ')) return entry;
-    // A switch, a number or a choice is said with its new value: “Add notes to turns” off.
+    // A switch, a number or a choice is said with its new value: “Add notes to turns” off, “What Canon may write” to “Drafts”.
     const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
     const words = keys.map((key) => {
         const value = valueWords(key, check.settings?.[key]);
@@ -247,8 +247,8 @@ export function savedEntry(check, paths) {
 /** A setting's value in What happened's words: a switch on or off, a number, a choice's name; undefined for others. */
 function valueWords(key, value) {
     if (SWITCHES.includes(key) && typeof value === 'boolean') return value ? 'on' : 'off';
-    if (Object.hasOwn(RANGES, key) && Number.isInteger(value)) return value.toLocaleString('en-US');
-    if (key === 'access' && typeof value === 'string' && Object.hasOwn(ACCESS_CHOICES, value)) return `“${ACCESS_CHOICES[value]}”`;
+    if (Object.hasOwn(RANGES, key) && Number.isInteger(value)) return `to ${value.toLocaleString('en-US')}`;
+    if (key === 'access' && typeof value === 'string' && Object.hasOwn(ACCESS_CHOICES, value)) return `to “${ACCESS_CHOICES[value]}”`;
     return undefined;
 }
 
