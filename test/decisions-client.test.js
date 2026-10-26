@@ -69,7 +69,7 @@ const CARDS = {
 };
 
 test('browser half: the header says what waits, what it lists, and where else new cards go', () => {
-    const { client } = loadClient(CLIENT);
+    const { client, window } = loadClient(CLIENT);
     const { kit, HeaderCard, DecisionsPage, TEXT } = client.internals;
     const acts = [];
     const act = (method, args) => { acts.push(plain([method, args])); };
@@ -125,6 +125,17 @@ test('browser half: the header says what waits, what it lists, and where else ne
     elementsOf(noNotes).find((e) => e.type === 'Button' && textIn(e) === 'Open Notifications in Plugins').props.onClick();
     assert.equal(opened.at(-1), 'dsh-plugin-notifications');
     assert.equal(elementsOf(HeaderCard({ data: base, busy: false, act })).find((e) => e.type === 'Button' && textIn(e) === 'Open Notifications in Plugins'), undefined, 'not while they run');
+    // Session Watch's own wrong setting: named in the header, with a button that puts the cursor in it on Session Watch's page.
+    const watchWrong = HeaderCard({ data: { ...base, watchProblem: { text: 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is "600")', key: 'deliveryTimeoutSeconds', live: true } }, busy: false, act });
+    assert.match(textIn(watchWrong), /Session Watch uses its default for a wrong setting: .*\(it is "600"\)\. Change it in Session Watch's settings in Plugins\./);
+    elementsOf(watchWrong).find((e) => e.type === 'Button' && textIn(e) === 'Open Session Watch\'s settings').props.onClick();
+    assert.equal(opened.at(-1), 'dsh-plugin-session-watch');
+    // The suite's window-wide board of focus asks (the kit's openPlugin), read by Session Watch's own form.
+    assert.equal(window['dsh-plugin-suite/focus/v1']?.asks.get('dsh-plugin-session-watch')?.key, 'deliveryTimeoutSeconds', 'the cursor goes to the wrong setting');
+    // One that only the profile holds: where to change it, and no button.
+    const watchProfile = HeaderCard({ data: { ...base, watchProblem: { text: 'X (x) must be y (it is "z")', key: 'x', live: false } }, busy: false, act });
+    assert.match(textIn(watchProfile), /Change it in Session Watch's entry in DSH's profile \(cordis\.patch\.yml\)\. DSH applies the file when you save it\./);
+    assert.equal(elementsOf(watchProfile).find((e) => e.type === 'Button' && textIn(e) === 'Open Session Watch\'s settings'), undefined);
     kit.setNavigation(undefined);
     assert.equal(elementsOf(HeaderCard({ data: base, busy: false, act })).find((e) => e.type === 'Button'), undefined, 'no settings button on a DSH that cannot open it');
     assert.match(textIn(HeaderCard({ data: { ...base, mirror: { mode: 'command', place: 'notify', perHour: 30, lastHour: 0 } }, busy: false, act })), /New cards also go to notify: 0 of 30 this hour\./);
@@ -134,7 +145,7 @@ test('browser half: the header says what waits, what it lists, and where else ne
 test('browser half: with notifications not running, the header offers Notifications in Plugins only when it is installed', async () => {
     for (const [bundles, words, button] of [
         [[{ name: 'dsh-plugin-notifications', installed: true, enabled: false }], /not running: switch it on in Plugins to get them\./, true],
-        [[{ name: 'dsh-plugin-decisions', installed: true, enabled: true }], /not installed: add it in Plugins to get them\./, false],
+        [[{ name: 'dsh-plugin-decisions', installed: true, enabled: true }], /the Notifications plugin is not running: it is not installed\. Add it in Plugins to get them\./, false],
     ]) {
         const { react, mount } = statefulReact();
         const { client } = loadClient(CLIENT, { react });

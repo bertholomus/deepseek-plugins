@@ -71,7 +71,7 @@
  * the window checks.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
@@ -123,8 +123,10 @@ async function startSink() {
 }
 
 const json = (value) => JSON.stringify(value);
+/** The session ids in the bridge's list. */
+const sessionIdsOf = (list) => (Array.isArray(list) ? list : Array.isArray(list?.items) ? list.items : []).map((s) => s?.sessionId).filter(Boolean);
 /** The profile's rows: new sessions on Workspace Write (writing outside the workspace asks), the suite's plugins, Decisions' settings. */
-const rowsWith = ({ off = [], decisions = {} } = {}) => `- id: permission
+const rowsWith = ({ off = [], decisions = {}, watch = {} } = {}) => `- id: permission
   config:
     defaultPreset: workspace-write
     presets:
@@ -139,7 +141,7 @@ const rowsWith = ({ off = [], decisions = {} } = {}) => `- id: permission
         approval: never
 - id: session-watch
 ${off.includes('session-watch') ? '  disabled: true\n' : ''}  config:
-    deliveryTimeoutSeconds: 60
+${Object.entries({ deliveryTimeoutSeconds: 60, ...watch }).map(([key, value]) => `    ${key}: ${json(value)}`).join('\n')}
 - id: autopilot
   config:
     defaultRule: "off"
@@ -458,11 +460,57 @@ try {
         await idle(cards.thread.sessionId).catch(() => {});
     });
 
+    // A thread hands back while its chat is in a turn on something else, as live chats do: the chat takes it late.
+    await step('a thread\'s question and the handback its busy chat takes late are one card: one new line, one wait', async () => {
+        ids.lateChat = await run.newSession('E2E:say Ready to run threads.', 'Branch chat');
+        await idle(ids.lateChat);
+        const on = await run.api('commands/execute', { agentId: ids.lateChat, line: '/coordinate', submittedAttachments: [] });
+        check('/coordinate makes a second chat coordinate', on.ok === true, json(on).slice(0, 300));
+        const known = new Set(sessionIdsOf(await run.bridge('GET', '/sessions')));
+        // The thread's first turn is held open (its reply keeps going) until the test lets go of it.
+        await run.bridge('POST', `/sessions/${ids.lateChat}/prompt`, { text: call('thread_start', { ask: 'Name the release branch.', title: 'Branch pick', brief: 'Name the release branch, then report. E2E:slow #late-thread' }) });
+        const threadHeld = await waitFor(() => [...model.held].find((e) => e.record.fresh.includes('#late-thread')), 'the thread\'s turn, held open', 30000, 200);
+        await idle(ids.lateChat);
+        ids.lateThread = await waitFor(async () => sessionIdsOf(await run.bridge('GET', '/sessions')).find((id) => !known.has(id) && id !== ids.lateChat), 'the thread\'s session', 20000, 300);
+        // The chat goes into a long turn of its own.
+        await run.bridge('POST', `/sessions/${ids.lateChat}/prompt`, { text: 'Also read the changelog. E2E:slow #late-chat' });
+        const chatHeld = await waitFor(() => [...model.held].find((e) => e.record.fresh.includes('#late-chat')), 'the chat\'s own turn, held open', 30000, 200);
+        // The thread hands back needing a decision, then its reply asks the person; the chat is busy, so the handback waits for it.
+        await run.bridge('POST', `/sessions/${ids.lateThread}/prompt`, { text: `${call('thread_handback', { status: 'needs_decision', summary: 'Two names fit: release/v2 or rel-2. The deploy target is next.' })}\n#final=ask`, mode: 'steer' });
+        threadHeld.finish();
+        const first = await waitFor(async () => (await state()).waiting.find((c) => c.sessionId === ids.lateThread), 'the thread\'s own question as a card', 40000, 300);
+        const chatBusy = (await run.session(ids.lateChat)).status === 'running';
+        check('the thread\'s question is the thread\'s card from its first sight, named for its chat, while the chat is busy',
+            first.kind === 'thread' && new RegExp(`^thread:${pattern(ids.lateThread)}:\\d+$`).test(first.id) && first.via?.sessionId === ids.lateChat && first.question === 'Should I deploy it to staging or to production?' && chatBusy, json({ first, chatBusy }));
+        await sleep(1500);
+        // The chat's turn ends, and it takes the handback now.
+        chatHeld.finish();
+        const landed = await waitFor(async () => (await state()).waiting.find((c) => c.id === first.id && /^Two names fit/.test(c.question ?? '')), 'the handback to land on the same card', 40000, 300).catch(() => undefined);
+        await sleep(1500);
+        const s = await state();
+        const mine = s.waiting.filter((c) => c.sessionId === ids.lateThread || c.sessionId === ids.lateChat);
+        check('the handback the chat took late is the same card, in the handback\'s words: one card, the same id, the same wait', Boolean(landed) && mine.length === 1 && mine[0].id === first.id && mine[0].at === first.at, json(mine));
+        const told = s.history.filter((e) => e.kind === 'new' && (e.sessionId === ids.lateThread || e.sessionId === ids.lateChat));
+        check('it was announced once', told.length === 1 && told[0].cardId === first.id, json(told));
+        // Answered from Decisions: into the thread.
+        const r = await api('answer', { id: first.id, answer: { text: 'Use release/v2, and deploy to staging.' } });
+        check('the answer goes into the thread, saying it answers its handback', r.ok && await waitFor(() => readIntoTurn(ids.lateThread, '[Decisions] The person answered your handback (“Two names fit: release/v2 or rel-2.'), 'the answer in the thread\'s log', 30000, 300).catch(() => false), json(r));
+        await idle(ids.lateThread).catch(() => {});
+        await leaves(first.id).catch(() => {});
+    });
+
     // A plain question after a list: the card carries the list, so it can be answered in place.
     ids.names = await run.newSession('E2E:say Here are three names for the CLI:\\n1. **tidy** — short\\n2. **sweep** — says what it does\\n3. **pare** — rare\\n\\nWhich one do you prefer?', 'CLI names');
     await step('a plain question after a list carries the list', async () => {
         cards.names = await waitCard(ids.names, 'reply');
         check('the card keeps the reply\'s lines before its question, without Markdown marks', cards.names.question === 'Which one do you prefer?' && cards.names.context === 'Here are three names for the CLI:\n1. tidy — short\n2. sweep — says what it does\n3. pare — rare', json(cards.names));
+    });
+    // A decision line as GLM-5.3 Flash writes one, with the lines before it; it waits through the restart further on.
+    ids.report = await run.newSession('E2E:say The report has 14 pages.\\nThe second review is tomorrow.\\n\\nDECISION NEEDED: Send the report to the list now? — recommend sending it after the second review', 'Report send');
+    await step('a decision line\'s "— recommend X" without its colon splits off its pick; the card keeps the lines before it', async () => {
+        cards.report = await waitCard(ids.report, 'decision');
+        check('the question, the pick and the lines before it', cards.report.question === 'Send the report to the list now?' && cards.report.recommendation === 'sending it after the second review'
+            && cards.report.context === 'The report has 14 pages.\nThe second review is tomorrow.', json(cards.report));
     });
 
     // ── The page ───────────────────────────────────────────────────────
@@ -631,6 +679,21 @@ try {
             check('the page says the last new card was not sent, why and when; the older test line is gone', new RegExp(`^The last new card was not sent: ${pattern(hookHost)} answered 500 \\(.+\\)\\.$`).test(failedText)
                 && ((await page.locator('[data-decisions-test-said]').textContent()) ?? '') === '', failedText);
             await shot(page, shots, 'mirror-failed-light', page.locator('[data-decisions-header]'));
+            // A test that fails is said under its button, inside the header; the focus stays on the button.
+            const testButton = mirror.getByRole('button', { name: 'Send a test' });
+            await testButton.focus();
+            await testButton.press('Enter');
+            await waitFor(async () => (await said.getAttribute('data-decisions-test-said')) === 'failed', 'the failed test to be said', 15000, 200).catch(() => {});
+            const failedTest = {
+                text: await said.innerText(),
+                role: await said.getAttribute('role'),
+                inHeader: await page.locator('[data-decisions-header] [data-decisions-test-said="failed"]').count(),
+                pageLine: await page.locator('[data-decisions-failure]').count(),
+                focused: await testButton.evaluate((el) => el === el.ownerDocument.activeElement),
+            };
+            check('a failed test is said under its button inside the header, as an alert, and the focus stays on the button',
+                failedTest.text === `Not sent: ${hookHost} answered 500.` && failedTest.role === 'alert' && failedTest.inHeader === 1 && failedTest.pageLine === 0 && failedTest.focused, json(failedTest));
+            await shot(page, shots, 'mirror-test-failed-light', page.locator('[data-decisions-header]'));
             sink.answer(204);
             check('the webhook\'s secret part is in no log, no file of Decisions\', and not the profile', tokenFound().length === 0, tokenFound().join(', '));
             // The address removed again, from the form.
@@ -703,6 +766,10 @@ try {
             !after.waiting.some((c) => c.id === held.id) && stopped.text === 'The turn stopped before anyone answered' && stopped.sessionId === ids.cutOff && !existsSync(join(outside, 'cut-off.txt')), json(stopped));
         check('nothing is announced again', after.history.filter((e) => e.kind === 'new').length === newBefore, `${after.history.filter((e) => e.kind === 'new').length} vs ${newBefore}`);
         check('the settings saved in Plugins survive: replies stay off', after.sources.replies === false, json(after.sources));
+        // Its session is not loaded after the restart, and its saved state leaves the reply out: read from its log.
+        const report = await waitFor(async () => (await state()).waiting.find((c) => c.id === cards.report.id && c.context), 'the report card\'s lines after the restart', 20000, 300).catch(() => undefined);
+        check('a card keeps what it shows through a restart: its lines, its question and its pick, without opening its session',
+            report?.context === cards.report.context && report.question === cards.report.question && report.recommendation === cards.report.recommendation && !report.reading, json(report));
     });
 
     // ── A command instead of a webhook ──────────────────────────────────
@@ -728,6 +795,48 @@ try {
         check('"yes" for a switch does not stop Decisions from starting: its state names the setting and the value as the profile has it',
             s.problem?.text === 'A notification for each new card (notify) must be true or false (it is "yes")' && s.problem?.live === true && s.waiting.length === 0, json(s.problem));
     });
+
+    // ── A number in quotes (OPEN-QUESTIONS #32), fixed in the form ─────
+    await restartWith(rowsWith({ decisions: { windowHours: '72' } }), 'a number in quotes');
+    await waitFor(async () => (await api('state')).ok, 'Decisions\' endpoints with a number in quotes', 30000);
+    await step('a number in quotes: Decisions starts and names it; the form flags it, and one Save stores the number', async () => {
+        const s = await state();
+        check('"72" for a number does not stop Decisions from starting: its state names the setting and the value in quotes',
+            /^Keep a reply's question for \(windowHours\) must be a whole number of hours from 1 to 720 \(it is "72"\)$/.test(s.problem?.text ?? '') && s.problem?.live === true && s.waiting.length === 0, json(s.problem));
+        const logged = s.history.find((e) => e.kind === 'settings' && /^Settings changed in DSH's profile: .*“Keep a reply's question for”/.test(e.text));
+        check('the log says the profile changed it, and that Decisions waits for it', Boolean(logged) && logged.state === 'waiting on a setting', json(s.history.filter((e) => e.kind === 'settings').slice(0, 3)));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Decisions' });
+        const { page } = window;
+        await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+        await page.locator('[data-suite-trouble="setting"]').waitFor({ state: 'visible', timeout: 20000 });
+        await page.getByRole('button', { name: 'Open Decisions\' settings' }).click();
+        const form = page.locator('[data-suite-settings="dsh-plugin-decisions"]');
+        await form.waitFor({ state: 'visible', timeout: 20000 });
+        const field = page.getByLabel('Keep a reply\'s question for, in hours');
+        await sleep(500);
+        const row = page.locator('[data-suite-setting="windowHours"]');
+        const shown = { value: await field.inputValue(), words: await row.innerText(), focused: await field.evaluate((el) => el === el.ownerDocument.activeElement) };
+        check('the form shows it in its quotes, flagged with what to type, with the cursor in it',
+            shown.value === '"72"' && /It is saved as text, in quotes\. Type a whole number from 1 to 720, without the quotes, then save\./.test(shown.words) && shown.focused, json(shown));
+        await shot(page, shots, 'setting-quoted-light');
+        await field.fill('72');
+        const save = form.getByRole('button', { name: 'Save' });
+        check('the number typed without its quotes is a change Save takes', !(await save.isDisabled()));
+        await save.click();
+        const fixed = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && !r.value.problem ? r.value : null;
+        }, 'the number in quotes to be fixed', 20000).catch(() => undefined);
+        const entry = fixed?.history.find((e) => e.kind === 'settings');
+        const profile = readFileSync(join(run.home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8');
+        check('one Save stores the number: Settings fixed, and the profile holds 72 without quotes',
+            entry?.text === 'Settings fixed: Decisions is working again' && /\n\s+windowHours: 72\n/.test(profile) && !/windowHours: "72"/.test(profile), json({ entry, line: profile.split('\n').find((l) => /windowHours/.test(l)) }));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-quoted');
+    });
+    await window?.browser?.close().catch(() => {});
+    window = undefined;
 
     // ── A wrong setting, fixed in Plugins ──────────────────────────────
     await restartWith(rowsWith({ decisions: { windowHours: 0 } }), 'a wrong setting');
@@ -784,6 +893,51 @@ try {
         await window?.browser?.close().catch(() => {});
         window = undefined;
     }
+
+    // ── A number in quotes in Session Watch's row, fixed from Decisions' page ──
+    await restartWith(rowsWith({ watch: { deliveryTimeoutSeconds: '600' } }), 'Session Watch with a number in quotes');
+    await waitFor(async () => (await api('state')).ok, 'Decisions\' endpoints with Session Watch\'s number in quotes', 30000);
+    await step('Session Watch with a number in quotes: Decisions works on, its header names it, and its button leads to the field', async () => {
+        const s = await state();
+        check('Session Watch works on with its default: Decisions lists what waits, and its state names Session Watch\'s setting and the value in quotes',
+            !s.problem && s.waiting.length > 0 && /^How long a message may wait to be read \(deliveryTimeoutSeconds\) must be a whole number of seconds from 10 to 86400 \(it is "600"\)$/.test(s.watchProblem?.text ?? '') && s.watchProblem?.key === 'deliveryTimeoutSeconds',
+            json({ problem: s.problem, watchProblem: s.watchProblem, waiting: s.waiting.length }));
+        if (!pw) return;
+        window = await openWindow(run, pw, { entry: 'Decisions' });
+        const { page } = window;
+        await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+        const note = page.locator('[data-decisions-header] [data-decisions-watch-problem]');
+        await note.waitFor({ state: 'visible', timeout: 20000 });
+        const words = (await note.innerText()).replace(/\n+/g, ' ');
+        check('the header says Session Watch uses its default, which setting is wrong, and where to change it',
+            /^Session Watch uses its default for a wrong setting: How long a message may wait to be read \(deliveryTimeoutSeconds\) must be a whole number of seconds from 10 to 86400 \(it is "600"\)\. Change it in Session Watch's settings in Plugins\./.test(words), words);
+        await shot(page, shots, 'watch-setting-light');
+        await note.getByRole('button', { name: 'Open Session Watch\'s settings' }).click();
+        const form = page.locator('[data-suite-settings="dsh-plugin-session-watch"]');
+        await form.waitFor({ state: 'visible', timeout: 20000 });
+        const field = page.getByLabel('How long a message may wait to be read, in seconds');
+        await sleep(500);
+        const row = page.locator('[data-suite-setting="deliveryTimeoutSeconds"]');
+        const shown = { value: await field.inputValue(), words: await row.innerText(), focused: await field.evaluate((el) => el === el.ownerDocument.activeElement) };
+        check('Session Watch\'s form shows it in its quotes, flagged with what to type, with the cursor in it',
+            shown.value === '"600"' && /It is saved as text, in quotes\. Type a whole number from 10 to 86400, without the quotes, then save\./.test(shown.words) && shown.focused, json(shown));
+        await shot(page, shots, 'watch-setting-form-light');
+        await field.fill('600');
+        await form.getByRole('button', { name: 'Save' }).click();
+        const fixed = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && !r.value.watchProblem ? r.value : null;
+        }, 'Session Watch\'s number in quotes to be fixed', 20000).catch(() => undefined);
+        const profile = readFileSync(join(run.home, 'profiles', 'web', 'cordis.patch.yml'), 'utf8');
+        check('one Save fixes it: Decisions no longer names it, and the profile holds 600 without quotes',
+            Boolean(fixed) && /\n\s+deliveryTimeoutSeconds: 600\n/.test(profile) && !/deliveryTimeoutSeconds: "600"/.test(profile), json({ watchProblem: fixed?.watchProblem, line: profile.split('\n').find((l) => /deliveryTimeoutSeconds/.test(l)) }));
+        const ours = window.errors.filter((text) => /decisions|session-watch|suite-kit/i.test(text));
+        check('no errors from the suite in the window', ours.length === 0, ours.join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-watch-setting');
+    });
+    await window?.browser?.close().catch(() => {});
+    window = undefined;
 
     // ── Files ──────────────────────────────────────────────────────────
     await step('a private folder and files', async () => {
@@ -853,6 +1007,26 @@ try {
         await shot(page, shots, 'disabled-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');
+    });
+    // ── The profile edited while DSH runs ──────────────────────────────
+    await step('enabled set back to true in the profile while DSH runs: DSH applies the file, Decisions works again, and its log says what changed', async () => {
+        const pid = run.child?.pid;
+        const file = join(run.home, 'profiles', 'web', 'cordis.patch.yml');
+        const text = readFileSync(file, 'utf8');
+        check('the profile has Decisions switched off', /\n    enabled: false\n/.test(text));
+        writeFileSync(file, text.replace(/\n    enabled: false\n/, '\n    enabled: true\n'));
+        const back = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && r.value.enabled === true ? r.value : null;
+        }, 'Decisions to start again with the saved file', 45000, 500).catch(() => undefined);
+        const line = back?.history.find((e) => e.kind === 'settings');
+        check('DSH applies the saved file without a restart: Decisions works again', Boolean(back) && run.child?.pid === pid && back.waiting.length > 0, json({ enabled: back?.enabled, waiting: back?.waiting.length }));
+        check('its log says the profile changed “Decisions on”', line?.text === 'Settings changed in DSH\'s profile: “Decisions on”' && line.why === 'Decisions started again with them.', json(line));
+        if (window?.page) {
+            const { page } = window;
+            await page.locator('[data-decisions-header="on"]').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+            await shot(page, shots, 'profile-edited-light');
+        }
     });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);

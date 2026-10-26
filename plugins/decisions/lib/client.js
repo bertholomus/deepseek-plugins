@@ -1107,6 +1107,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const P = kit.P;
         /** The plugin that shows notifications, opened in Plugins when it is not running. */
         const NOTIFICATIONS_PACKAGE = 'dsh-plugin-notifications';
+        /** The watcher Decisions reads every session through; its settings are on its own page in Plugins. */
+        const WATCH_BUNDLE = 'dsh-plugin-session-watch';
         /** DSH's own list of plugins, as its Plugins page reads it. */
         const pluginList = kit.link('pluginManager', { name: 'DSH\'s plugin list' });
 
@@ -1379,7 +1381,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('span', null, `The last new card was not sent: ${String(data.mirror.last.reason ?? 'it failed').replace(/\.$/, '')} (`, h(kit.TimeText, { at: data.mirror.last.at }), ').')) : null,
                 // How the test went, under its button: sent, or why not (a failure is an alert, in the warning colour).
                 mirror ? h('div', { className: testSaid ? `${P}-line ${said.failed ? `${P}-warn` : `${P}-ok`}` : `${P}-sr`, role: testSaid && said.failed ? 'alert' : 'status', 'aria-live': testSaid && said.failed ? 'assertive' : 'polite', 'data-decisions-test-said': testSaid ? (said.failed ? 'failed' : 'sent') : '' }, testSaid ? said.text : '') : null) : null,
-            data.watchProblem ? h('p', { className: `${P}-note`, 'data-decisions-watch-problem': '' }, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. Change it in Session Watch's settings in Plugins.`) : null);
+            // Session Watch's own wrong setting: it works on with its default, and the button puts the cursor in it.
+            data.watchProblem ? h('div', { className: `${P}-lines`, 'data-decisions-watch-problem': '' },
+                h('div', { className: `${P}-line ${P}-warn` },
+                    h('span', null, `Session Watch uses its default for a wrong setting: ${String(data.watchProblem.text).replace(/\.$/, '')}. ${data.watchProblem.live === false
+                        ? 'Change it in Session Watch\'s entry in DSH\'s profile (cordis.patch.yml). DSH applies the file when you save it.'
+                        : 'Change it in Session Watch\'s settings in Plugins.'}`),
+                    canOpen && data.watchProblem.live !== false
+                        ? h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => kit.openPlugin(WATCH_BUNDLE, { focus: data.watchProblem.key }) }, 'Open Session Watch\'s settings') : null)) : null);
         }
 
         function ApprovalAnswer({ card, busy, answer }) {
