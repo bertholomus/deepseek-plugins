@@ -255,6 +255,21 @@ try {
     } else {
         const requests = [];
         const ours = (errors) => errors.filter((e) => /focus/i.test(e) && !/Failed to load resource/.test(e));
+        // A picture is evidence, not a check. On a loaded machine a screenshot can wait past the page's
+        // 15 s for a frame, so it is tried again with 45 s; one that still fails is said here and does
+        // not stop the step's checks.
+        const tryPicture = async (page, name, take) => {
+            try { await take(); return; } catch {}
+            page.setDefaultTimeout(45000);
+            try { await take(); } catch (e) { console.log(`# picture ${name} not taken: ${String(e?.message ?? e).split('\n')[0]}`); } finally { page.setDefaultTimeout(15000); }
+        };
+        const picture = (page, folder, name, locator) => tryPicture(page, name, () => shot(page, folder, name, locator));
+        // One failed step must not fail the next ones: a timer an earlier step left running is reset first.
+        const noTimerLeft = async () => {
+            if (!(await focus()).body.timer.running) return;
+            await op({ op: 'reset' });
+            console.log('# reset a timer an earlier step left running');
+        };
         // The footer button and what is around it, in DSH's sidebar footer.
         const footShot = async (page, name) => {
             const box = await page.locator('[data-focus-open]').boundingBox();
@@ -264,7 +279,7 @@ try {
             const size = page.viewportSize();
             const x = Math.max(0, box.x - 220);
             const y = Math.max(0, box.y - 70);
-            await page.screenshot({ path: join(shots, `${name}.png`), clip: { x, y, width: Math.min(size.width - x, 340), height: Math.min(size.height - y, 120) } });
+            await tryPicture(page, name, () => page.screenshot({ path: join(shots, `${name}.png`), clip: { x, y, width: Math.min(size.width - x, 340), height: Math.min(size.height - y, 120) } }));
         };
         const chimeStub = () => {
             window.__chimes = [];
@@ -322,9 +337,9 @@ try {
             const preset = dialog.getByRole('button', { name: 'Short break 5 min', exact: true });
             check('while it runs, the lengths are locked and the panel says why', (await preset.isDisabled()) && (await panel.getByText('Pause or reset to choose another length.').count()) === 1);
             check('the footer button says it runs, in minutes', /^Focus timer: Focus, (25|24) minutes left$/.test(await button.getAttribute('aria-label')), await button.getAttribute('aria-label'));
-            await shot(page, shots, 'panel-running-light');
+            await picture(page, shots, 'panel-running-light');
             await setDark(page, true);
-            await shot(page, shots, 'panel-running-dark');
+            await picture(page, shots, 'panel-running-dark');
             await setDark(page, false);
 
             // Motion: none under wp-still or the system's reduced motion.
@@ -363,7 +378,7 @@ try {
             const offered = await undo.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
             check('a Reset of a started timer: the panel says it, with Undo under its state line, and no toast covers the dialog',
                 offered && (await undoRow.textContent()).startsWith('Focus session reset.') && (await page.getByRole('alert').filter({ hasText: 'reset' }).count()) === 0, (await panel.textContent()).slice(0, 200));
-            await shot(page, shots, 'reset-undo-light');
+            await picture(page, shots, 'reset-undo-light');
             if (offered) await undo.click();
             await waitFor(async () => (await stateLine.getAttribute('data-focus-state')) === 'running', 'undone', 10000, 200).catch(() => {});
             const undone = (await focus()).body.timer;
@@ -415,7 +430,7 @@ try {
             await page.waitForTimeout(100);
             check('Escape closes it and the focus goes back to the footer button', await page.evaluate(() => document.activeElement?.hasAttribute('data-focus-open') === true), await page.evaluate(() => document.activeElement?.outerHTML?.slice(0, 120)));
         }, async () => {
-            if (window?.page) await shot(window.page, shots, 'failed-controls');
+            if (window?.page) await picture(window.page, shots, 'failed-controls');
         });
 
         await step('the end, said once: a toast with the next step and the chime in each window, one session counted for two windows; the mark until a panel shows it', async () => {
@@ -430,6 +445,7 @@ try {
             await second.keyboard.press('Escape');
             await page.bringToFront();
             if (await page.locator('[data-focus-panel]').isVisible().catch(() => false)) await page.keyboard.press('Escape');
+            await noTimerLeft();
             await page.evaluate(() => { window.__chimes = []; });
             const before = (await focus()).body.sessions.focus;
             const mark = read(logFile).length;
@@ -449,7 +465,7 @@ try {
                 (await page.getByRole('alert').allTextContents()).join(' | '));
             check('the chime sounded in each window, two notes', json(await page.evaluate(() => window.__chimes)) === '[659.25,987.77]' && json(await second.evaluate(() => window.__chimes)) === '[659.25,987.77]',
                 json([await page.evaluate(() => window.__chimes), await second.evaluate(() => window.__chimes)]));
-            await shot(page, shots, 'done-toast-light');
+            await picture(page, shots, 'done-toast-light');
             const marks = [await markOf(page), await markOf(second)];
             const marked = (m) => m.mark === 'ended' && /^Focus timer: Focus session done at \d{1,2}:\d{2}\s?[AP]M$/.test(m.label ?? '');
             check('with no panel open, both footer buttons carry the done mark and say what ended', marks.every(marked) && (await focus()).body.timer.doneSeen === false, json(marks));
@@ -483,16 +499,21 @@ try {
             const face = [await page.locator('[data-focus-time]').textContent(), await page.locator('[data-focus-next]').textContent().catch(() => null)];
             const nextFace = fourth ? ['15:00', 'Long break next'] : ['5:00', 'Short break next'];
             check(`the done clock shows the next step and names it: ${nextFace.join(', ')}`, json(face) === json(nextFace), json(face));
-            await shot(page, shots, 'panel-done-light');
+            await picture(page, shots, 'panel-done-light');
             await second.close();
             second = undefined;
         }, async () => {
-            if (window?.page) await shot(window.page, shots, 'failed-end');
+            if (window?.page) await picture(window.page, shots, 'failed-end');
         });
 
         await step('live data: a change made elsewhere shows within a poll; an end with the panel open is said in the panel; a read that fails is said, and Try again', async () => {
             const { page } = window;
             const stateLine = page.locator('[data-focus-state]');
+            await noTimerLeft();
+            if (!(await page.locator('[data-focus-panel]').isVisible().catch(() => false))) {
+                await page.locator('[data-focus-open]').click();
+                await page.locator('[data-focus-panel]').waitFor({ state: 'visible' });
+            }
             // An end while the panel is open: the panel says it and the chime sounds; no toast covers the dialog.
             await page.evaluate(() => { window.__chimes = []; });
             await op({ op: 'start', kind: 'custom', durationMs: 10000 });
@@ -522,19 +543,20 @@ try {
             check('no state at all: the panel says Focus can\'t reach its timer, what to check, and Try again',
                 /^Focus can't reach its timer: a stand-in failure\. Check that the Focus plugin is on in Plugins, then try again\.$/.test(await error.textContent())
                 && (await page.getByRole('button', { name: 'Try again', exact: true }).count()) === 1, await error.textContent());
-            await shot(page, shots, 'panel-error-light');
+            await picture(page, shots, 'panel-error-light');
             await page.unroute('**/api/focus/state');
             await page.getByRole('button', { name: 'Try again', exact: true }).click();
             await page.locator('[data-focus-state]').waitFor({ state: 'visible', timeout: 10000 });
             check('Try again: the timer is back', (await page.locator('[data-focus-state]').textContent()) === 'Long break · ready, 15:00');
             await page.keyboard.press('Escape');
         }, async () => {
-            if (window?.page) { await window.page.unroute('**/api/focus/state').catch(() => {}); await shot(window.page, shots, 'failed-live'); }
+            if (window?.page) { await window.page.unroute('**/api/focus/state').catch(() => {}); await picture(window.page, shots, 'failed-live'); }
         });
 
         await step('a hidden window chimes at the end and says it when shown again, with its time; its toast starts the next step', async () => {
             const { page } = window;
             if (await page.locator('[data-focus-panel]').isVisible().catch(() => false)) await page.keyboard.press('Escape');
+            await noTimerLeft();
             await page.evaluate(() => { window.__chimes = []; });
             const started = await op({ op: 'start', kind: 'focus', durationMs: 12000 });
             await waitFor(async () => (await markOf(page)).mark === 'running', 'the window to know it runs', 12000, 200);
@@ -557,7 +579,7 @@ try {
             const said = await toast.first().waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
             check('shown again: the end is said, with the time it ended', said && (await focus()).body.timer.doneAt === started.body?.timer?.endAt, (await page.getByRole('alert').allTextContents()).join(' | '));
             check('shown again: no second chime', json(await page.evaluate(() => window.__chimes)) === '[659.25,987.77]', json(await page.evaluate(() => window.__chimes)));
-            await shot(page, shots, 'late-toast-light');
+            await picture(page, shots, 'late-toast-light');
             const fourth = (await focus()).body.sessions.focus % 4 === 0;
             const [label, kind, ms] = fourth ? ['Start long break', 'long', 900000] : ['Start short break', 'short', 300000];
             const next = toast.getByRole('button', { name: label, exact: true });
@@ -572,7 +594,7 @@ try {
         }, async () => {
             if (window?.page) {
                 await window.page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); }).catch(() => {});
-                await shot(window.page, shots, 'failed-hidden');
+                await picture(window.page, shots, 'failed-hidden');
             }
         });
 
@@ -609,7 +631,7 @@ try {
             const size = page.viewportSize();
             const x = Math.max(0, Math.floor(box.x - 24));
             const y = Math.max(0, Math.floor(box.y - 140));
-            await page.screenshot({ path: join(shots, `${name}.png`), clip: { x, y, width: Math.min(size.width - x, Math.ceil(box.w) + 260), height: Math.min(size.height - y, Math.ceil(box.h) + 170) } });
+            await tryPicture(page, name, () => page.screenshot({ path: join(shots, `${name}.png`), clip: { x, y, width: Math.min(size.width - x, Math.ceil(box.w) + 260), height: Math.min(size.height - y, Math.ceil(box.h) + 170) } }));
         };
 
         await step('DSH\'s 760 px rail: Focus gives its seat to Wallpaper\'s footer button and opens with the shortcut; alone it is in the rail and opens with a click', async () => {
@@ -650,7 +672,7 @@ try {
             const wide = await settles(async () => (await footerRow(page)).buttons.some((b) => b.focus));
             check('wide again: Focus\'s button is back beside its neighbour', wide, json(await footerRow(page)));
         }, async () => {
-            if (window?.page) { await shot(window.page, shots, 'failed-rail'); await window.page.setViewportSize({ width: 1280, height: 860 }).catch(() => {}); }
+            if (window?.page) { await picture(window.page, shots, 'failed-rail'); await window.page.setViewportSize({ width: 1280, height: 860 }).catch(() => {}); }
         });
 
         await step('pictures: light and dark, wide and 760 px, Wallpaper on and off; the panel fits at 760 px', async () => {
@@ -677,7 +699,7 @@ try {
                 await page.setViewportSize({ width: wide ? 1280 : 760, height: 860 });
                 await setDark(page, dark);
                 await open();
-                await shot(page, shots, name);
+                await picture(page, shots, name);
             };
             const label = withWallpaper ? 'wallpaper' : 'plain';
             await set(`panel-${label}-light`, true, false);
@@ -707,7 +729,7 @@ try {
             }
             await op({ op: 'reset' });
         }, async () => {
-            if (window?.page) await shot(window.page, shots, 'failed-pictures');
+            if (window?.page) await picture(window.page, shots, 'failed-pictures');
         });
 
         await step('Focus switched off in Plugins leaves nothing; on again repeats nothing and keeps the timer', async () => {
@@ -735,7 +757,7 @@ try {
             check('on again: the shortcut opens the panel (registered again, once)', opened);
             if (opened) await page.keyboard.press('Escape');
         }, async () => {
-            if (window?.page) await shot(window.page, shots, 'failed-plugins');
+            if (window?.page) await picture(window.page, shots, 'failed-plugins');
         });
 
         const origin = (await run.signIn()).base.origin;
