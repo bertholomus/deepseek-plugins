@@ -351,6 +351,14 @@ test('notes: one row per heading with its line; headings in code are text; front
     assert.ok(long.rows.length > 2);
     assert.ok(long.rows.every((r) => r.reply.length <= NOTE_LIMITS.part));
     assert.equal(long.rows[1].label, 'Big (continued)');
+    // A code block a cut falls inside is closed at the end of its part and opened again at the start of the next.
+    const code = Array.from({ length: 900 }, (_, i) => `step(${i});${i % 50 === 49 ? '\n' : ''}`).join('\n');
+    const coded = readNote(`# Run\n\nBefore the code.\n\n~~~js\n${code}\n~~~\n\nAfter the code.`).rows;
+    assert.ok(coded.length > 1, `${coded.length} parts`);
+    assert.match(coded[0].reply, /^Before the code\.\n\n~~~js\n[^]*\n~~~$/, 'the first part closes the block it ends inside');
+    assert.match(coded[1].reply, /^~~~\nstep\(/, 'the next opens it again');
+    assert.match(coded.at(-1).reply, /\n~~~\n\nAfter the code\.$/, 'the block closes where it closed');
+    assert.ok(coded.every((r) => r.reply.split('\n').filter((l) => /^~~~/.test(l)).length % 2 === 0), 'every part has whole blocks');
     assert.equal(isNote('HANDOFF.md'), true);
     assert.equal(isNote('notes.txt'), false);
 });

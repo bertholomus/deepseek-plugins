@@ -20,15 +20,33 @@ import { titleLine } from './turns.js';
 
 /**
  * The most of a note Recall reads, and how it cuts it: `fileBytes` read whole, else the first `headBytes` and the
- * last `fileBytes - headBytes`; a section's text in parts of at most `part` characters, one row each; at most
- * `rows` rows, else the first `headRows` and the last `rows - headRows`.
+ * last `fileBytes - headBytes`; a section's text in parts of at most `part` characters (and a code block's fences
+ * where a cut falls inside one), one row each; at most `rows` rows, else the first `headRows` and the last
+ * `rows - headRows`.
  */
 export const NOTE_LIMITS = Object.freeze({ fileBytes: 4 << 20, headBytes: 1 << 20, part: 8000, rows: 50000, headRows: 5000 });
 
 /** Whether a file name is a Markdown note. */
 export const isNote = (name) => /\.(?:md|markdown|mdown|mkd)$/i.test(name);
 
-/** Cut a section's text into parts of at most `max` characters, at paragraph breaks where it can. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+/** The fence of the code block a text ends inside, given the one it starts inside ('' for none). */
+function fenceAfter(text, open = '') {
+    let fence = open;
+    for (const line of text.split('\n')) {
+        const m = FENCE.exec(line);
+        if (!m) continue;
+        if (!fence) fence = m[1];
+        else if (m[1][0] === fence[0] && m[1].length >= fence.length && line.slice(m[0].length).trim() === '') fence = '';
+    }
+    return fence;
+}
+
+/**
+ * Cut a section's text into parts of about `max` characters, at paragraph breaks where it can. A code block a cut
+ * falls inside is closed at the end of its part and opened again at the start of the next, so each part reads (and
+ * draws) as code where it is code.
+ */
 function parts(text, max) {
     if (text.length <= max) return [text];
     const out = [];
@@ -41,7 +59,12 @@ function parts(text, max) {
         rest = rest.slice(cut).trim();
     }
     if (rest) out.push(rest);
-    return out;
+    let open = '';
+    return out.map((piece) => {
+        const from = open;
+        open = fenceAfter(piece, from);
+        return `${from ? `${from}\n` : ''}${piece}${open ? `\n${open}` : ''}`;
+    });
 }
 
 const linesOf = (text) => String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
