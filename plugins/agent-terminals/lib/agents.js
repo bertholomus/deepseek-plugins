@@ -106,7 +106,9 @@ export function parseData(value) {
         .map((r) => ({ program: r.program, args: strings(r.args), style: r.style, ...(text(r.data) ? { data: r.data } : {}) }));
     // The settings it last ran with (lib/config.js settingsSnapshot): what an edit of DSH's profile changed is said at the next start.
     const settings = isRecord(value?.settings) ? Object.fromEntries(Object.entries(value.settings).filter(([key]) => /^[A-Za-z]\w{0,39}$/.test(key)).slice(0, 32)) : undefined;
-    return { version: 1, agents, recent, ...(settings ? { settings } : {}) };
+    // The DSH process that last started Agent Terminals: a start in the same one is not a start with DSH.
+    const ranPid = Number.isInteger(value?.ranPid) ? { ranPid: value.ranPid } : {};
+    return { version: 1, agents, recent, ...(settings ? { settings } : {}), ...ranPid };
 }
 
 export const terminalIdOf = (key, launches) => `agent-${key}-${launches}`;
@@ -1083,17 +1085,22 @@ export class AgentTerminals {
         const live = this.liveOf(record);
         if (live.launching) return { status: 'starting', detail: 'Starting its terminal.' };
         if (record.wanted !== 'running' || live.exited) return { status: 'stopped', detail: record.ended?.text ?? record.problem ?? 'Not running.' };
-        // Agent Terminals is not running its agents (a wrong setting, or no terminals): the agent is not running either.
+        // Agent Terminals is not running its agents (switched off in the profile, a wrong setting, or no terminals): the agent is not running either.
         if (!this.started && !live.launchAt) {
-            // Its program may still run in its terminal (a setting went wrong while it ran): said so, not "stopped".
+            const off = this.config.enabled === false;
+            // Its program may still run in its terminal (switched off or a setting went wrong while it ran): said so, not "stopped".
             if (this.terminalInfo(record)?.state === 'running') {
-                return { status: 'running', unfollowed: true, detail: this.working()
-                    ? 'Running in its terminal. Agent Terminals picks it up where it is once DSH\'s terminals are there.'
-                    : 'Running in its terminal, not followed: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up where it is.' };
+                return { status: 'running', unfollowed: true, detail: off
+                    ? 'Running in its terminal, not followed: Agent Terminals is switched off in DSH\'s profile (enabled: false). Set enabled to true there and it picks it up where it is.'
+                    : this.working()
+                        ? 'Running in its terminal. Agent Terminals picks it up where it is once DSH\'s terminals are there.'
+                        : 'Running in its terminal, not followed: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up where it is.' };
             }
-            return { status: 'stopped', detail: this.working()
-                ? 'Not running: DSH\'s terminals are not there, so Agent Terminals cannot pick it up yet.'
-                : 'Not running: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up again.' };
+            return { status: 'stopped', detail: off
+                ? 'Not running: Agent Terminals is switched off in DSH\'s profile (enabled: false). Set enabled to true there and it picks it up again.'
+                : this.working()
+                    ? 'Not running: DSH\'s terminals are not there, so Agent Terminals cannot pick it up yet.'
+                    : 'Not running: Agent Terminals waits for a setting to be fixed (see the top of this page), then picks it up again.' };
         }
         if (!live.launchAt) return { status: 'starting', detail: 'Picking it up.' };
         const format = STYLES[record.style]?.format ?? 'none';

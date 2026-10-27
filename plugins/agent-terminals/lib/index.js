@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { AgentTerminals, parseData } from './agents.js';
-import { LIVE_SETTINGS, changedSince, checkConfig, profileEntry, savedEntry, settingsSnapshot } from './config.js';
+import { LIVE_SETTINGS, START_WHYS, STOP_WHYS, changedSince, checkConfig, profileEntry, savedEntry, settingsSnapshot, startCause, stopCause } from './config.js';
 import { detectAgents } from './detect.js';
 import { AgentTerminalsRemote, SERVICE } from './remote.js';
 import { Typist } from './typist.js';
@@ -78,8 +78,14 @@ export function apply(ctx, config) {
     // DSH tells only the plugin's own entry when its settings are saved in Plugins: the listener lives here.
     let onSaved;
     ctx.on('loader/volatile-update', guard(logger, 'agent-terminals: settings', (paths) => onSaved?.(paths)));
+    // When each part started, so the log says why it follows its agents (again): Session Watch back, or there late.
+    const appliedAt = Date.now();
+    let watchRuns = 0;
 
     ctx.inject(['sessionWatch'], (scope) => {
+        watchRuns += 1;
+        const watchAt = Date.now();
+        let terminalRuns = 0;
         const watch = scope.sessionWatch;
         const check = new SettingsCheck({ settings, check: checkConfig, liveKeys: LIVE_SETTINGS, label: 'agent-terminals', logger });
         check.run();
@@ -94,11 +100,16 @@ export function apply(ctx, config) {
         // is said here, once; a save in Plugins is said as it happens (`saved` below).
         const remember = () => {
             store.data.settings = settingsSnapshot(settings);
+            store.data.ranPid = process.pid;
             store.change();
         };
+        // An earlier start in this same DSH process, and whether the profile changed its settings since: why it follows its agents again.
+        const ranHere = store.data.ranPid === process.pid;
+        let edited = false;
         try {
-            const edited = profileEntry(check, changedSince(store.data.settings, settingsSnapshot(settings)), settings);
-            if (edited) journal.add(edited);
+            const entry = profileEntry(check, changedSince(store.data.settings, settingsSnapshot(settings)), settings);
+            if (entry) journal.add(entry);
+            edited = Boolean(entry);
             remember();
         } catch (error) {
             logger?.warn?.(`agent-terminals: could not compare its settings with its last start: ${errorText(error)}`);
@@ -153,34 +164,48 @@ export function apply(ctx, config) {
         });
 
         // Agent Terminals itself starting and stopping is in the log too: while stopped, nobody follows the agents.
-        const switched = (on, why) => {
+        const switched = (on, why, cause) => {
             try {
-                journal.add({ kind: 'switch', text: on ? 'Agent Terminals follows its agents' : 'Agent Terminals stopped following its agents', why, state: on ? 'done' : 'stopped', by: 'Agent Terminals' });
+                journal.add({ kind: 'switch', text: on ? 'Agent Terminals follows its agents' : 'Agent Terminals stopped following its agents', why, state: on ? 'done' : 'stopped', by: 'Agent Terminals', ...(cause ? { cause } : {}), pid: process.pid });
             } catch (error) {
                 logger?.warn?.(`agent-terminals: could not log: ${errorText(error)}`);
             }
         };
         const some = () => Object.keys(store.data.agents).length > 0;
-        // Whichever part of DSH lets go first (its terminals, or the plugin itself) stops the agents and says so, once.
-        const stopFollowing = (why) => {
+        // Whichever part of DSH lets go first (its terminals, Session Watch, or the plugin itself) stops the agents at
+        // once and says so, once, with the cause DSH's own state gives: DSH stops its parts one after another within a
+        // moment, so the cause is read once that moment has passed (DSH waits for it before it goes on).
+        const stopFollowing = async () => {
             const was = agents.started;
             agents.stop();
-            if (was && some()) switched(false, why);
+            if (!was || !some()) return;
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            const cause = stopCause({ own: ctx.fiber, watchScope: scope.fiber, config });
+            switched(false, STOP_WHYS[cause] ?? STOP_WHYS.unknown, cause);
         };
-        const OFF_WHY = 'Switched off in Plugins, or DSH is quitting. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are when it starts again.';
+        const followAgain = () => {
+            let last;
+            try {
+                last = journal.list({ limit: 400 }).find((e) => e.kind === 'switch');
+            } catch {}
+            const cause = startCause({ terminalRuns, watchRuns, lateSeconds: (watchAt - appliedAt) / 1000, last, pid: process.pid, ranHere, edited, uptimeSeconds: process.uptime() });
+            switched(true, START_WHYS[cause] ?? START_WHYS.again, cause);
+        };
 
         // The agents start once DSH's terminals are there (never before: an agent would look gone).
         scope.inject(['terminalController'], (inner) => {
+            terminalRuns += 1;
             services.terminals = inner.terminalController;
             if (working()) {
                 agents.start();
-                if (some()) switched(true, 'It started (with DSH, or switched on in Plugins): it picks up every agent where it is.');
+                if (some()) followAgain();
             }
             bump();
             return () => {
-                stopFollowing(OFF_WHY);
+                const said = stopFollowing();
                 services.terminals = undefined;
                 bump();
+                return said;
             };
         });
 
@@ -232,9 +257,10 @@ export function apply(ctx, config) {
 
         scope.effect(() => () => {
             if (onSaved === saved) onSaved = undefined;
-            stopFollowing(OFF_WHY);
+            const said = stopFollowing();
             typist.close();
             store.close();
+            return said;
         }, 'agent-terminals: agents');
     });
 }

@@ -288,6 +288,26 @@ test('an agent\'s card while Agent Terminals does not follow its agents: no butt
     assert.deepEqual(['Start again', 'Forget', 'Open its terminal'].map((label) => button(stopped, label)), [undefined, undefined, undefined]);
 });
 
+test('the page while Agent Terminals is switched off in the profile: the agents that still run show, not followed, with only Open its terminal; nothing to start', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { kit, AgentsPage } = client.internals;
+    const kept = { ...WORKING, status: 'running', followed: false, detail: 'Running in its terminal, not followed: Agent Terminals is switched off in DSH\'s profile (enabled: false). Set enabled to true there and it picks it up where it is.' };
+    kit.setConnection({ rpc: { call: async (_path, method) => (method.endsWith('/state') ? { ok: true, value: { ...STATE, enabled: false, agents: [kept, { ...STOPPED, followed: false }], history: [] } } : new Promise(() => {})) } });
+    const views = { opened: [], openSession: (id) => views.opened.push(id), openTerminal: (agent) => views.opened.push(`terminal:${agent.key}`) };
+    const page = mount(AgentsPage, { agents: views });
+    t.after(() => page.unmount());
+    await settle(5);
+    assert.match(textIn(withAttr(page.tree, 'data-agent-terminals-header')[0]), /switched off in DSH's profile/);
+    const cards = withAttr(page.tree, 'data-agent-terminals-agent');
+    assert.deepEqual(cards.map((c) => c.props['data-agent-terminals-agent']), [kept.key, STOPPED.key], 'its agents show while it is off');
+    assert.match(textIn(cards[0]), /Running in its terminal, not followed: Agent Terminals is switched off in DSH's profile \(enabled: false\)/);
+    for (const label of ['Stop', 'Start again', 'Start anew', 'Forget', 'Send']) assert.equal(button(cards[0], label), undefined, label);
+    button(cards[0], 'Open its terminal').props.onClick();
+    assert.deepEqual(views.opened, [`terminal:${kept.key}`]);
+    assert.equal(withAttr(page.tree, 'data-agent-terminals-start').length, 0, 'nothing to start while it is off');
+});
+
 test('the list\'s line follows a message you sent: typed in, delivered, or not proven', () => {
     const { client } = loadClient(CLIENT);
     const { saidLine } = client.internals;
@@ -818,6 +838,24 @@ test('terminal tabs: each agent\'s terminal opens once beside its session, swaps
     reveal.set({ sessionId: 's3', terminalId: 'agent-k3-1', at: Date.now() });
     await look();
     assert.equal(sidebar.tabs.s3.length, 1);
+
+    // Nobody follows the agents (switched off, a wrong setting): the marks say off and list none, so no tab opens by
+    // itself; Open its terminal on a card still brings the agent's tab, from what the card asked for.
+    sidebar.current = 's5';
+    sidebar.tabs.s5 = [];
+    marks.set({ off: true, openTabs: true, agents: [] });
+    await look();
+    assert.equal(sidebar.tabs.s5.length, 0, 'off: nothing opens by itself');
+    reveal.set({ key: 'k5', sessionId: 's5', terminalId: 'agent-k5-1', at: Date.now() });
+    await look();
+    assert.deepEqual(sidebar.tabs.s5.map((t) => t.params.terminalId), ['agent-k5-1'], 'asked for while off: its terminal opens');
+    assert.equal(reveal.get(), undefined, 'the ask is used up');
+    reveal.set({ key: 'k5', sessionId: 's5', terminalId: 'agent-k5-1', at: Date.now() });
+    await look();
+    assert.deepEqual(sidebar.calls.at(-1), ['focus', sidebar.tabs.s5[0].id], 'asked again: its open tab comes to the front');
+    reveal.set({ key: 'k6', sessionId: 's6', terminalId: 'agent-k6-1', at: Date.now() });
+    await look();
+    assert.equal(sidebar.tabs.s5.length, 1, 'an ask for another session waits for that session');
 
     // Stopped following: nothing moves any more.
     stop();

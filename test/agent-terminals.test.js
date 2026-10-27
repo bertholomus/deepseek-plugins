@@ -14,7 +14,7 @@ import {
 import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, proofs, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
 import { PASTE_END, PASTE_START, Typist, messageKeys, pasteSwitch } from '../plugins/agent-terminals/lib/typist.js';
 import { AgentTerminals, checkLaunch, exitWords, homeForm, listingNote, parseData, programForm, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
-import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedSince, changedWords, checkConfig, profileEntry, savedEntry, settingsSnapshot } from '../plugins/agent-terminals/lib/config.js';
+import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, START_WHYS, STOP_WHYS, changedSince, changedWords, checkConfig, profileEntry, savedEntry, settingsSnapshot, startCause, stopCause } from '../plugins/agent-terminals/lib/config.js';
 import { detectAgents, keepsProjects, keepsSessions } from '../plugins/agent-terminals/lib/detect.js';
 import { STYLE_CHOICES, pageState } from '../plugins/agent-terminals/lib/page.js';
 import { JsonStore } from '../plugins/agent-terminals/lib/shared/files.js';
@@ -1502,6 +1502,84 @@ test('engine: while a setting is wrong, a running agent reads running (not follo
         agents.stop();
         controller.restart();
     }
+});
+
+test('engine: switched off in DSH\'s profile (enabled: false) while it runs, its agent still shows on the page: running, not followed, and where to switch it on', async () => {
+    let on = true;
+    const { agents, controller, journal, settings, watch, dir } = engine({ working: () => on });
+    agents.start();
+    try {
+        const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Kept' });
+        const record = agents.records[agent.key];
+        await until(() => agents.view(record).ready, 'it to be ready');
+        on = false;
+        settings.enabled = false;
+        agents.stop();
+        const view = agents.view(record);
+        assert.deepEqual([view.status, view.followed], ['running', false]);
+        assert.equal(view.detail, 'Running in its terminal, not followed: Agent Terminals is switched off in DSH\'s profile (enabled: false). Set enabled to true there and it picks it up where it is.');
+        const page = await pageState({ agents, journal, config: settings, check: { ok: true }, watch, terminals: () => controller, detected: async () => [], workspaces: () => [] });
+        assert.equal(page.enabled, false);
+        assert.deepEqual(page.agents.map((a) => [a.key, a.status, a.followed]), [[agent.key, 'running', false]], 'the page lists the agent that still runs');
+        // Switched on again: the same terminal, not started again.
+        on = true;
+        settings.enabled = true;
+        agents.start();
+        await until(() => agents.view(record).status === 'idle', 'picked up idle');
+        assert.deepEqual([record.terminalId, record.launches, agents.view(record).followed], [agent.terminalId, 1, true]);
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
+test('switching: each stop of following its agents names its own cause, read from DSH\'s parts as they stop', () => {
+    const config = {};
+    const fiber = (over) => ({ uid: 7, state: 2, config, entry: { disabled: false, parent: { tree: { ctx: { fiber: { uid: 1, state: 2 } } } } }, ...over });
+    const active = { state: 2 };
+    // Its own part going: switched off (what the Plugins switch writes), new settings in the profile, the same ones, DSH quitting, its entry removed.
+    assert.equal(stopCause({ own: fiber({ state: 5, entry: { disabled: true } }), watchScope: active, config }), 'off');
+    assert.equal(stopCause({ own: fiber({ state: 5, config: { enabled: false } }), watchScope: active, config }), 'profile');
+    assert.equal(stopCause({ own: fiber({ state: 5 }), watchScope: active, config }), 'again');
+    const root = { uid: 0, state: 2 };
+    root.parent = { fiber: root };
+    const app = (over) => ({ uid: 3, state: 2, parent: { fiber: root }, ...over });
+    assert.equal(stopCause({ own: fiber({ state: 5, uid: null, parent: { fiber: app({ uid: null, state: 5 }) } }), watchScope: active, config }), 'quit', 'the parts above it go too: DSH quits');
+    assert.equal(stopCause({ own: fiber({ state: 5, uid: null, parent: { fiber: { uid: 9, state: 2, parent: { fiber: app({ state: 5 }) } } } }), watchScope: active, config }), 'quit', 'however far up');
+    assert.equal(stopCause({ own: fiber({ state: 5, uid: null, parent: { fiber: app() } }), watchScope: active, config }), 'removed', 'it alone goes: its entry left the profile');
+    // Its own part running: Session Watch went, else DSH's terminals.
+    assert.equal(stopCause({ own: fiber(), watchScope: { state: 5 }, config }), 'watch');
+    assert.equal(stopCause({ own: fiber(), watchScope: active, config }), 'terminals');
+    // DSH says nothing readable: plain words, never a wrong cause.
+    assert.equal(stopCause({}), 'unknown');
+    assert.equal(stopCause({ own: { get state() { throw new Error('gone'); } } }), 'unknown');
+    for (const [cause, why] of Object.entries(STOP_WHYS)) {
+        assert.doesNotMatch(why, /Switched off in Plugins, or DSH is quitting/, cause);
+        assert.ok(why.endsWith('.'), cause);
+    }
+    assert.match(STOP_WHYS.watch, /^Session Watch stopped/);
+    assert.match(STOP_WHYS.profile, /^Its settings changed in DSH's profile/);
+    assert.match(STOP_WHYS.off, /^It was switched off\./);
+    assert.match(STOP_WHYS.quit, /^DSH is quitting/);
+    // And why it follows them again: from what came before it in this DSH.
+    const stopped = (cause, pid = 42) => ({ kind: 'switch', state: 'stopped', cause, pid });
+    assert.equal(startCause({ terminalRuns: 2, pid: 42 }), 'terminals');
+    assert.equal(startCause({ watchRuns: 2, pid: 42 }), 'watch');
+    assert.equal(startCause({ lateSeconds: 60, pid: 42, uptimeSeconds: 600 }), 'watch', 'Session Watch came long after it');
+    assert.equal(startCause({ last: stopped('off'), pid: 42, uptimeSeconds: 600 }), 'on');
+    assert.equal(startCause({ last: stopped('profile'), pid: 42, uptimeSeconds: 600 }), 'profile');
+    assert.equal(startCause({ last: stopped('watch'), pid: 42, uptimeSeconds: 600 }), 'watch');
+    assert.equal(startCause({ last: stopped('again'), pid: 42, uptimeSeconds: 600 }), 'again');
+    assert.equal(startCause({ last: stopped('quit', 41), pid: 42, uptimeSeconds: 20 }), 'dsh', 'an earlier DSH stopped it: this one started it');
+    assert.equal(startCause({ last: stopped('off', 41), pid: 42, uptimeSeconds: 900 }), 'on', 'long after DSH started: switched on');
+    assert.equal(startCause({ last: { kind: 'switch', state: 'done', pid: 42 }, pid: 42, uptimeSeconds: 900 }), 'on');
+    // Started earlier in this same DSH with nothing logged in between (it followed no agent then): the profile's edit, or a switch.
+    assert.equal(startCause({ last: stopped('quit', 41), pid: 42, ranHere: true, edited: true, uptimeSeconds: 30 }), 'profile', 'enabled set back to true in the profile, soon after DSH started with it off');
+    assert.equal(startCause({ last: stopped('quit', 41), pid: 42, ranHere: true, uptimeSeconds: 30 }), 'on');
+    assert.equal(parseData({ ranPid: 42 }).ranPid, 42, 'the DSH process that last started it is kept');
+    assert.equal(parseData({ ranPid: 'x' }).ranPid, undefined);
+    assert.equal(START_WHYS.dsh, 'It started with DSH: it picks up every agent where it is.');
+    assert.equal(START_WHYS.profile, 'DSH started it again with the settings in its profile: it picks up every agent where it is.');
 });
 
 test('engine: an agent that exits, a program that is not there, and a program with no transcript', async () => {

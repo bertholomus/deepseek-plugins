@@ -113,3 +113,88 @@ export function profileEntry(check, keys, settings) {
     if (settings?.enabled === false) return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}`, why: 'Agent Terminals is switched off there (enabled: false): it starts, reads and types nothing.', state: 'done' };
     return { kind: 'settings', text: `Settings changed in DSH's profile: ${words}`, why: 'Agent Terminals started again with them.', state: 'done' };
 }
+
+// ── Following its agents, and why it stops or starts ────────────────────
+
+/** cordis's states of a plugin's part: running (FiberState.ACTIVE) and being stopped (FiberState.UNLOADING). */
+const ACTIVE = 2;
+const UNLOADING = 5;
+
+/**
+ * Why Agent Terminals stops following its agents, read from DSH's own state
+ * as it stops: `own` is its plugin's part in DSH (cordis's fiber, with the
+ * profile's entry for it), `watchScope` the part that runs while Session
+ * Watch does, and `config` the settings it was started with.
+ *
+ * - `off`: switched off (the Plugins switch writes `disabled: true` in the profile);
+ * - `profile`: its settings changed in DSH's profile, so DSH starts it again with them;
+ * - `quit`: DSH quits (the whole profile stops);
+ * - `removed`: its entry left DSH's profile;
+ * - `again`: DSH starts it again with the same settings;
+ * - `watch`: Session Watch stopped;
+ * - `terminals`: DSH's terminals stopped;
+ * - `unknown`: DSH does not say.
+ */
+export function stopCause({ own, watchScope, config } = {}) {
+    try {
+        const going = (fiber) => fiber.uid === null || fiber.state === UNLOADING;
+        if (own && typeof own.state === 'number' && own.state !== ACTIVE) {
+            if (own.entry?.disabled === true) return 'off';
+            if (own.uid !== null && own.uid !== undefined) return own.config !== config ? 'profile' : 'again';
+            // Its part is gone for good: with the parts above it (DSH quits), or alone (its entry left the profile).
+            for (let up = own.parent?.fiber, hops = 0; up && up !== own && hops < 64; up = up.parent?.fiber, hops += 1) {
+                if (going(up)) return 'quit';
+                if (up.uid === 0) break;
+            }
+            return 'removed';
+        }
+        if (own && watchScope && typeof watchScope.state === 'number') return watchScope.state !== ACTIVE ? 'watch' : 'terminals';
+    } catch {
+        // DSH's parts said nothing readable: the plain words below.
+    }
+    return 'unknown';
+}
+
+/** The why of "Agent Terminals stopped following its agents", by cause. */
+export const STOP_WHYS = Object.freeze({
+    off: 'It was switched off. While DSH runs, the agents keep running in their terminals; switched on again, Agent Terminals picks them up where they are.',
+    profile: 'Its settings changed in DSH\'s profile, so DSH starts it again with them. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are.',
+    quit: 'DSH is quitting: its terminals end with it, and so do the agents in them. At DSH\'s next start, Agent Terminals starts again the ones meant to run.',
+    removed: 'It was taken out of DSH\'s profile. While DSH runs, the agents keep running in their terminals.',
+    again: 'DSH starts it again. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are.',
+    watch: 'Session Watch stopped, and Agent Terminals needs it to follow its agents. While DSH runs, the agents keep running in their terminals; once Session Watch runs again, Agent Terminals picks them up where they are.',
+    terminals: 'DSH\'s terminals stopped. Once they run again, Agent Terminals picks its agents up where they are.',
+    unknown: 'DSH stopped it. While DSH runs, the agents keep running in their terminals; Agent Terminals picks them up where they are when it starts again.',
+});
+
+/**
+ * Why Agent Terminals follows its agents (again), from what came before it
+ * in this DSH: Session Watch or DSH's terminals there again, or later than
+ * Agent Terminals itself (`watchRuns`, `terminalRuns`: how often each part
+ * started; `lateSeconds`: how long after Agent Terminals Session Watch
+ * came); else the last "stopped following" entry this DSH process logged
+ * (`last`, with `pid`); else an earlier start in this DSH process
+ * (`ranHere`), with settings the profile changed since (`edited`); else a
+ * start with DSH (`uptimeSeconds`: how long DSH has run).
+ */
+export function startCause({ terminalRuns = 1, watchRuns = 1, lateSeconds = 0, last, pid, ranHere = false, edited = false, uptimeSeconds = 0 } = {}) {
+    if (terminalRuns > 1) return 'terminals';
+    if (watchRuns > 1 || lateSeconds > 15) return 'watch';
+    if (last && last.pid === pid && last.state === 'stopped') {
+        if (last.cause === 'off') return 'on';
+        if (last.cause === 'profile' || last.cause === 'watch') return last.cause;
+        return 'again';
+    }
+    if (ranHere) return edited ? 'profile' : 'on';
+    return uptimeSeconds < 120 ? 'dsh' : 'on';
+}
+
+/** The why of "Agent Terminals follows its agents", by cause. */
+export const START_WHYS = Object.freeze({
+    dsh: 'It started with DSH: it picks up every agent where it is.',
+    on: 'It was switched on: it picks up every agent where it is.',
+    profile: 'DSH started it again with the settings in its profile: it picks up every agent where it is.',
+    watch: 'Session Watch is running now: it picks up every agent where it is.',
+    terminals: 'DSH\'s terminals are running now: it picks up every agent where it is.',
+    again: 'It started again: it picks up every agent where it is.',
+});

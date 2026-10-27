@@ -1273,7 +1273,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const preset = makeStore(undefined);
         /** An agent to bring into view on the page: `{ key, n }`. */
         const spotlight = makeStore(undefined);
-        /** An agent's terminal tab to show once its session is on screen: `{ sessionId, terminalId, at }`. */
+        /** An agent's terminal tab to show once its session is on screen: `{ key, sessionId, terminalId, at }`. */
         const reveal = makeStore(undefined);
 
         const agentOfSession = (sessionId) => marks.get().agents.find((agent) => agent.sessionId === sessionId);
@@ -1390,11 +1390,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const want = reveal.get();
                 if (want && now - want.at > 10000) reveal.set(undefined);
                 const m = marks.get();
-                if (m.off) return;
+                // While nobody follows the agents (switched off, a wrong setting), no tab opens by itself; Open its terminal still brings the agent's.
+                if (m.off && !want) return;
                 let sessionId;
                 try { sessionId = sidebar.mounted?.getSnapshot?.(); } catch { sessionId = undefined; }
                 if (typeof sessionId !== 'string') return;
-                const agent = agentOfSession(sessionId);
+                const agent = m.off
+                    ? (want?.sessionId === sessionId ? { key: want.key, sessionId, terminalId: want.terminalId, running: true } : undefined)
+                    : agentOfSession(sessionId);
                 if (!agent) return;
                 const asked = want?.sessionId === sessionId && want.terminalId === agent.terminalId;
                 const tabs = terminalTabs(sessionId).map((tab) => ({ tab, id: boundTerminal(sidebar, sessionId, tab) }));
@@ -1444,7 +1447,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             try { offs.push(sidebar.openTabs?.subscribe?.(soon)); } catch { /* an older DSH */ }
             // A terminal DSH lists later than its tab looked, or a session whose surface was not ready: looked at again.
             const every = setInterval(() => {
-                if (doc?.visibilityState !== 'hidden' && marks.get().agents.length) soon();
+                if (doc?.visibilityState !== 'hidden' && (marks.get().agents.length || reveal.get())) soon();
             }, 2000);
             soon();
             return () => {
@@ -2027,7 +2030,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             : [
                                 h(HeaderCard, { key: 'head', data, onStart }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
-                                data.enabled ? h(AgentsCard, { key: 'agents', data, act, busyKey, said, onOpen, openTerminal, onStart }) : null,
+                                // Switched off, its agents still show: one that runs in its terminal says so, not followed, with only Open its terminal.
+                                data.enabled || data.agents.length ? h(AgentsCard, { key: 'agents', data, act, busyKey, said, onOpen, openTerminal, onStart }) : null,
                                 data.enabled ? h(StartCard, { key: 'start', data, onStarted, formRef }) : null,
                                 h(HistoryCard, { key: 'history', data, onOpen }),
                             ]);
@@ -2142,7 +2146,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 /** Open the agent's session with its terminal tab in front (opened if it is not there). */
                 openTerminal(agent) {
                     if (!agent?.sessionId || !agent.terminalId) return;
-                    reveal.set({ sessionId: agent.sessionId, terminalId: agent.terminalId, at: Date.now() });
+                    reveal.set({ key: agent.key, sessionId: agent.sessionId, terminalId: agent.terminalId, at: Date.now() });
                     views.openSession(agent.sessionId);
                 },
                 startHere(sessionId, title) {

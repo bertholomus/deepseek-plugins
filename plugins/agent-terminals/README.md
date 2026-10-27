@@ -171,10 +171,22 @@ message carries on: once, however many restarts follow before the next
 message.
 
 **While Agent Terminals is switched off or waits for a setting.** Nobody
-follows the agents then, but they keep running in their terminals. Each
-card says *running*, not followed, and why, and offers only **Open its
-terminal**; *What happened* notes when Agent Terminals stopped following
-its agents and when it picked them up again, where they were.
+follows the agents then, but they keep running in their terminals. With
+`enabled: false` in the profile or a wrong setting, its page still lists
+them: each card says *running*, not followed, and why (switched off in the
+profile, or which setting to fix), and offers only **Open its terminal**,
+which still opens its session with its terminal tab; nothing can be
+started, and their session rows show no mark (nothing follows them to say
+what they do). Switched off in Plugins, or with Session Watch off, it does
+nothing at all: its marks leave the rows, and the agents keep running.
+*What happened* says when it stopped following its agents and why, from
+DSH's own state as it stopped (it was switched off; its settings changed
+in DSH's profile; Session Watch stopped; DSH's terminals stopped; DSH is
+quitting, which ends the agents' terminals too), and when it followed them
+again and why (it started with DSH; it was switched on; DSH started it
+again with the profile's settings; Session Watch or DSH's terminals are
+running now), picking each up where it was: the same terminal and
+program, nothing typed twice.
 
 **Closing its tab ends it.** Closing an agent's terminal tab closes the
 terminal, which ends the program in it. Its card says so, and **Start
@@ -223,7 +235,8 @@ cause is gone.
 
 ## On a session's row
 
-- **A mark** in the row's leading seat: DSH's state dot while the agent
+- **A mark** in the row's leading seat (none while nobody follows the
+  agents): DSH's state dot while the agent
   works or waits on you, a terminal glyph when it is idle, only running
   (no transcript) or stopped, and
   its state in words for screen readers. When another plugin's mark comes
@@ -323,7 +336,8 @@ writes to them.
   running then keeps running in its terminal, untended; switched on again,
   Agent Terminals picks it up where it is. (`enabled: false` in the profile
   instead keeps its page, which says it is off and how to turn it back on,
-  and refuses its actions in words.)
+  lists the agents that still run, not followed, and refuses its actions in
+  words.)
 - **With Session Watch**: Plugins → Session Watch → off also stops Agent
   Terminals, with no error from DSH: its page says it needs Session Watch,
   and it starts again by itself when Session Watch does.
@@ -429,7 +443,13 @@ with a number in quotes in the profile (`proofSeconds: "8"`: named on the
 page with its value, the form flags it as it opens, and typed without its
 quotes one **Save** stores the number and brings the agents back),
 switches Session Watch off in the profile, checks `enabled: false` and the
-file modes, sets `enabled` back to true in the profile while DSH runs (DSH
+file modes; while DSH runs, it switches Session Watch off and on, then
+Agent Terminals itself (as the Plugins switch writes it, beside the
+neighbour, whose mark stays), then `enabled: false` and back: each time
+the agent keeps running (the same process), *What happened* names the
+cause both ways, the not-followed card still opens the terminal, and the
+agent is picked up in place with nothing typed twice; a DSH restart is
+logged as DSH quitting and starting it; sets `enabled` back to true in the profile while DSH runs (DSH
 applies it with no restart, *What happened* says what the edit changed,
 and the agents it ended start again, resumed),
 and ends every process it started. Every quit of DSH in the

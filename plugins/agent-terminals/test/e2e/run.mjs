@@ -134,7 +134,7 @@ ${off.includes('session-watch') ? '  disabled: true\n' : ''}  config:
   config:
     windowHours: 72
 - id: agent-terminals
-  config:
+${off.includes('agent-terminals') ? '  disabled: true\n' : ''}  config:
 ${Object.entries({ proofSeconds: 2, askAfterSeconds: 5, ...at }).map(([key, value]) => `    ${key}: ${json(value)}`).join('\n')}
 `;
 
@@ -264,6 +264,28 @@ function transcriptUsers(path) {
     return out;
 }
 const history = async (test) => (await state()).history.filter(test);
+/** Its log as its file holds it, newest first: read while its endpoints are gone (switched off, Session Watch off). */
+function readLog() {
+    const byId = new Map();
+    let text = '';
+    try { text = readFileSync(join(run.home, 'agent-terminals', 'events.jsonl'), 'utf8'); } catch { return []; }
+    for (const line of text.split('\n')) {
+        let row;
+        try { row = JSON.parse(line); } catch { continue; }
+        if (row?.add?.id) byId.set(row.add.id, { ...row.add });
+        else if (typeof row?.set === 'string' && byId.has(row.set)) Object.assign(byId.get(row.set), row.patch);
+    }
+    return [...byId.values()].reverse();
+}
+/** The processes whose command line holds this text (an agent's program, by its conversation id), in order. */
+function programPids(text) {
+    try {
+        return execFileSync('/usr/bin/pgrep', ['-f', text], { encoding: 'utf8' }).split('\n').map(Number).filter((pid) => pid > 1 && pid !== process.pid).sort((a, b) => a - b);
+    } catch {
+        return [];
+    }
+}
+const samePids = (a, b) => a.length > 0 && json(a) === json(b);
 const watchRow = async (sessionId) => {
     const r = await run.api('dsh-plugin-session-watch/sessions');
     return r.ok ? r.value.items.find((row) => row.sessionId === sessionId) : undefined;
@@ -999,6 +1021,97 @@ try {
         if (window?.page) await shot(window.page, shots, 'failed-not-followed');
     });
 
+    await step('switched off while DSH runs, as Plugins does it (Session Watch, then Agent Terminals itself, then enabled: false): the agents keep running, What happened names each cause, its cards say why and still open the terminal; on again, each picks them up in place, nothing typed twice', async () => {
+        const before = await idleAgent(agents.app, 'the app agent to be idle');
+        const pids = programPids(before.conversationId);
+        const typed = before.deliveries.length;
+        const since = Date.now();
+        const switches = (test) => readLog().filter((e) => e.kind === 'switch' && e.at >= since && test(e));
+        const nextSwitch = (state, after, what) => waitFor(async () => switches((e) => e.state === state && e.at > after)[0] ?? null, what, 45000, 300);
+        const pickedUp = async (what) => {
+            const back = await waitAgent(agents.app, (a) => a.status === 'idle' && a.followed === true, what, 40000);
+            return { ok: back.terminalId === before.terminalId && back.launches === before.launches && back.deliveries.length === typed && samePids(programPids(before.conversationId), pids), back };
+        };
+        check('its agent\'s program is found by its conversation id', pids.length === 1, json(pids));
+
+        // 1. Session Watch switched off (the Plugins switch writes disabled: true in the profile, and DSH applies the file).
+        run.rows = rowsWith({ off: ['session-watch'] });
+        run.writeProfile(model.port);
+        const watchOff = await nextSwitch('stopped', since - 1, 'Agent Terminals to stop following, with Session Watch off');
+        check('Session Watch switched off: What happened says Agent Terminals stopped following its agents because Session Watch stopped', watchOff.text === 'Agent Terminals stopped following its agents'
+            && watchOff.cause === 'watch' && watchOff.why.startsWith('Session Watch stopped, and Agent Terminals needs it to follow its agents.'), json(watchOff));
+        check('meanwhile its agent keeps running in its terminal: the same program', samePids(programPids(before.conversationId), pids), json({ pids, now: programPids(before.conversationId) }));
+        run.rows = rowsWith();
+        run.writeProfile(model.port);
+        const watchOn = await nextSwitch('done', watchOff.at, 'Agent Terminals to follow its agents again, with Session Watch back');
+        check('Session Watch on again: it follows its agents again, and says why', watchOn.cause === 'watch' && watchOn.why === 'Session Watch is running now: it picks up every agent where it is.', json(watchOn));
+        let back = await pickedUp('the agent picked up after Session Watch came back');
+        check('picked up in place: the same terminal and program, not started again, nothing typed twice', back.ok, json({ terminalId: back.back.terminalId, launches: back.back.launches, typed: back.back.deliveries.length }));
+
+        // 2. Agent Terminals itself switched off, as the Plugins switch does it, beside the neighbour.
+        run.rows = rowsWith({ off: ['agent-terminals'] });
+        run.writeProfile(model.port);
+        const selfOff = await nextSwitch('stopped', watchOn.at, 'Agent Terminals to stop following, switched off');
+        check('switched off: What happened says it was switched off, and that its agents keep running', selfOff.cause === 'off' && selfOff.why.startsWith('It was switched off. While DSH runs, the agents keep running in their terminals'), json(selfOff));
+        await waitFor(async () => ((await api('state')).ok ? null : true), 'its endpoints to go', 20000, 300);
+        check('its agent keeps running in its terminal while it is off', samePids(programPids(before.conversationId), pids), json({ pids, now: programPids(before.conversationId) }));
+        if (window) {
+            const page = window.page;
+            await rowOf(page, ids.app).waitFor({ state: 'visible', timeout: 20000 });
+            const gone = await waitFor(async () => ((await rowOf(page, ids.app).locator('[data-agent-terminals-mark]').count()) === 0 ? true : null), 'its mark to leave the row', 20000, 300).catch(() => false);
+            check('switched off: its mark leaves the row, and the neighbour\'s mark stays', gone === true && (await rowOf(page, ids.app).locator('[data-neighbour="mark"]').count()) === 1);
+        }
+        run.rows = rowsWith();
+        run.writeProfile(model.port);
+        const selfOn = await nextSwitch('done', selfOff.at, 'Agent Terminals to follow its agents again, switched on');
+        check('switched on again: it says so', selfOn.cause === 'on' && selfOn.why === 'It was switched on: it picks up every agent where it is.', json(selfOn));
+        back = await pickedUp('the agent picked up after Agent Terminals was switched on');
+        check('switched on: its agent is picked up in place, the same terminal and program, nothing typed twice', back.ok, json({ terminalId: back.back.terminalId, launches: back.back.launches, typed: back.back.deliveries.length }));
+        if (window) {
+            const page = window.page;
+            const mark = await waitFor(async () => ((await rowOf(page, ids.app).locator('[data-agent-terminals-mark]').count()) === 1 ? true : null), 'its mark to come back', 30000, 300).catch(() => false);
+            check('switched on: its mark is back on the row, beside the neighbour\'s, which kept its seat', mark === true && (await rowOf(page, ids.app).locator('[data-neighbour="mark"]').count()) === 1);
+        }
+
+        // 3. enabled: false in its entry while DSH runs: loaded, but following and typing nothing; its cards still show.
+        run.rows = rowsWith({ at: { enabled: false } });
+        run.writeProfile(model.port);
+        const profileOff = await nextSwitch('stopped', selfOn.at, 'Agent Terminals to stop following, with enabled: false');
+        check('enabled: false: What happened says its settings changed in DSH\'s profile', profileOff.cause === 'profile' && profileOff.why.startsWith('Its settings changed in DSH\'s profile, so DSH starts it again with them.'), json(profileOff));
+        const off = await waitFor(async () => {
+            const r = await api('state');
+            return r.ok && r.value.enabled === false ? r.value : null;
+        }, 'Agent Terminals with enabled: false', 30000, 300);
+        const kept = off.agents.find((a) => a.key === agents.app);
+        check('the page still lists its agent: running in its terminal, not followed, and where to switch Agent Terminals on', kept?.status === 'running' && kept.followed === false
+            && kept.detail === 'Running in its terminal, not followed: Agent Terminals is switched off in DSH\'s profile (enabled: false). Set enabled to true there and it picks it up where it is.', json(kept && { status: kept.status, followed: kept.followed, detail: kept.detail }));
+        if (window) {
+            const page = await openAgents();
+            await page.locator('[data-agent-terminals-header="off"]').waitFor({ state: 'visible', timeout: 20000 });
+            const card = cardOf(page, agents.app);
+            await card.waitFor({ state: 'visible', timeout: 20000 });
+            const names = (await card.getByRole('button').allInnerTexts()).map((n) => n.trim());
+            check('switched off, its card shows: running, not followed, with only Open its terminal', names.includes('Open its terminal') && !names.some((n) => /^(Stop|Start again|Start anew|Forget|Send)$/.test(n))
+                && /Running in its terminal, not followed: Agent Terminals is switched off in DSH's profile \(enabled: false\)/.test(await card.innerText()), json(names));
+            check('and nothing to start while it is off', (await page.locator('[data-agent-terminals-start]').count()) === 0);
+            await shot(page, shots, 'enabled-false-running-light');
+            await card.getByRole('button', { name: 'Open its terminal' }).click();
+            const tab = terminalTab(page, 'App agent');
+            await tab.first().waitFor({ state: 'visible', timeout: 20000 });
+            check('Open its terminal still opens its session with its terminal tab while it is off', (await tab.count()) === 1 && (await page.locator('.xterm-rows:visible').count()) >= 1, String(await tab.count()));
+            await shot(page, shots, 'enabled-false-open-terminal-light');
+        }
+        run.rows = rowsWith();
+        run.writeProfile(model.port);
+        const profileOn = await nextSwitch('done', profileOff.at, 'Agent Terminals to follow its agents again, with enabled: true');
+        check('enabled back to true: DSH started it again with the settings in its profile, and it says so', profileOn.cause === 'profile' && profileOn.why === 'DSH started it again with the settings in its profile: it picks up every agent where it is.', json(profileOn));
+        back = await pickedUp('the agent picked up after enabled: true');
+        check('enabled back to true: its agent is picked up in place, the same terminal and program, nothing typed twice', back.ok, json({ terminalId: back.back.terminalId, launches: back.back.launches, typed: back.back.deliveries.length }));
+        check('DSH reports no failure for Agent Terminals through all of it', !/agent-terminals[^\n]*(fail|error)/i.test(run.logText()), run.logText().split('\n').filter((l) => /agent-terminals/.test(l)).slice(-5).join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-switched-off');
+    });
+
     await step('a DSH restart: running agents start again under the same terminal id and resume; one that cannot resume says why', async () => {
         const before = await agentOf(agents.app);
         const plainBefore = await agentOf(agents.plain);
@@ -1014,6 +1127,9 @@ try {
         await run.boot('a restart');
         await waitFor(async () => (await api('state')).ok, 'Agent Terminals after the restart', 30000);
         const back = await waitAgent(agents.app, (a) => a.status === 'idle' && a.ready, 'the agent to be back', 40000);
+        const turns = (await history((e) => e.kind === 'switch' && e.at >= restartedAt)).reverse();
+        check('What happened says it stopped following its agents as DSH quit, and followed them again when it started with DSH', turns[0]?.cause === 'quit' && turns[0].why.startsWith('DSH is quitting')
+            && turns[1]?.cause === 'dsh' && turns[1].why === 'It started with DSH: it picks up every agent where it is.', json(turns.map((e) => [e.text, e.cause, e.why])));
         const lines = await screen(agents.app);
         check('it starts again in a terminal with the same id, resuming its conversation', back.terminalId === before.terminalId && back.conversationId === before.conversationId
             && shows(lines, `exec standin --resume ${before.conversationId}`) && shows(lines, `Resumed conversation ${before.conversationId}`), lines);
