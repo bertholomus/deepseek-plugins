@@ -198,7 +198,7 @@ test('after a restart: a cut-off session gets a carry-on note, and its goal star
     const notes = notesIn(dsh, 'r');
     assert.equal(notes.length, 1);
     assert.match(notes[0], /^\[Autopilot\] DSH stopped while you were working: turn 1 was cut off \(its last step was at .+\)\./);
-    assert.match(notes[0], /Still open: 2 open todos \(next: “Write the parser”\) and the goal “Cut the release” \(no round begun yet, up to 20\)\./);
+    assert.match(notes[0], /Still open: 2 todos \(next: “Write the parser”\) and the goal “Cut the release” \(no round begun yet, up to 20\)\./);
     const [resume] = entries(after.journal, 'resume');
     assert.equal(resume.state, 'delivered');
     assert.match(resume.why, /^Turn 1 was cut off: DSH stopped before it finished \(a quit, a restart or a crash\)\. Its last step was at .+, and nobody has written in the session since\.$/);
@@ -250,7 +250,7 @@ test('after a restart: a turn cut off while a tool waited for approval, or a que
     await clock.advance(20000);
     const [ap] = notesIn(dsh, 'ap');
     assert.match(ap, /When DSH stopped, your bash call was waiting for approval, so it did not run: make it again if you still need it, and DSH asks for approval again\./);
-    assert.match(ap, /Still open: 2 open todos/);
+    assert.match(ap, /Still open: 2 todos \(next: “Write the parser”\)\./);
     const [qb] = notesIn(dsh, 'qb');
     assert.match(qb, /When DSH stopped, your question in DSH's question box \(“Which branch should I use\?”\) had no answer yet: ask it again if you still need the answer\./);
     const why = Object.fromEntries(entries(after.journal, 'resume').map((entry) => [entry.sessionId, entry.why]));
@@ -300,6 +300,8 @@ test('Ask first across stops: an open question is set aside in the log when Auto
     const asked = first.watch.asks();
     assert.equal(asked.length, 2);
     const askedAt = asked.find((ask) => ask.sessionId === 'q').at;
+    const firstWhy = asked.find((ask) => ask.sessionId === 'q').why;
+    assert.match(firstWhy, /idle for 10 minutes/);
     assert.equal(first.notified.length, 2);
     // Autopilot stops (DSH quits, or Autopilot or Session Watch is switched off): the questions leave the cards, and the log says why, at once.
     first.watch.running.flush();
@@ -321,10 +323,12 @@ test('Ask first across stops: an open question is set aside in the log when Auto
     const back = second.watch.asks();
     assert.deepEqual(back.map((ask) => ask.sessionId), ['q'], 'only the question that still applies comes back');
     assert.equal(back[0].at, askedAt, 'it keeps the time it was first asked, so its wait counts from then');
+    assert.equal(back[0].why, firstWhy, 'and the Why it was first asked with, which its log entry shows, not one worked out 6 minutes later');
     const forQ = entries(second.journal, 'ask').filter((entry) => entry.sessionId === 'q');
     assert.equal(forQ.length, 1, 'one entry for one question, across the stop');
     assert.equal(forQ[0].state, 'asked you');
     assert.equal(forQ[0].reason, '', 'the stop no longer shows on it');
+    assert.equal(forQ[0].why, `${firstWhy} Its rule is Ask first.`);
     assert.equal(lastWords(forQ[0]), 'asked you');
     assert.equal(second.notified.length, 0, 'no second notification for the same question');
     const forGone = entries(second.journal, 'ask').filter((entry) => entry.sessionId === 'gone');
@@ -395,7 +399,8 @@ test('after a crash or a forced quit: what the killed run left open is settled f
     assert.equal(byId('q').reason, 'withdrawn: DSH stopped before it was answered (a crash or a forced quit); it asks again when it runs, if this still applies');
     // n's note is still in DSH's queue, which DSH keeps in the session's log: the session may still read it.
     assert.equal(byId('n').state, 'not proven');
-    assert.equal(byId('n').reason, 'DSH stopped with it in the session\'s queue (a crash or a forced quit); the session may still read it when it next runs');
+    assert.equal(byId('n').reason, 'DSH stopped with it in the session\'s queue (a crash or a forced quit); the session may still read it when it next runs, and this entry says so when it does');
+    assert.equal(byId('n').queued, true);
     assert.equal(byId('p').state, 'not delivered');
     assert.equal(byId('p').reason, 'DSH stopped before it reached the session (a crash or a forced quit)');
     assert.equal(byId('m').state, 'delivered');
@@ -424,7 +429,27 @@ test('after a crash or a forced quit: what the killed run left open is settled f
     assert.equal(entries(second.journal, 'rearm').filter((e) => e.sessionId === 'g1').length, 1, 'g1\'s round began: not started twice');
     // m's and g1's turns were cut off by the kill: each gets one carry-on note.
     assert.equal(entries(second.journal, 'resume').map((e) => e.sessionId).sort().join(), 'g1,m');
+    // Later, n's session opens and reads the note DSH kept in its queue: its entry says delivered, with that turn.
+    const nAgent = dsh.load('n');
+    const kept = dsh.sessions.get('n').events.filter((e) => e.type === 'agent/inbox/spliced').at(-1).data.inserted[0];
+    nAgent.inbox.push(kept);
+    dsh.read('n');
+    await clock.advance(1000);
+    assert.equal(byId('n').state, 'not proven', 'read a moment after the session moves');
+    await clock.advance(1000);
+    await settle();
+    assert.equal(byId('n').state, 'delivered');
+    assert.equal(byId('n').turn, 2);
+    assert.equal(byId('n').queued, false);
+    assert.equal(byId('n').reason, '');
+    assert.equal(byId('n').deliveredAt, dsh.sessions.get('n').events.findLast((e) => e.type === 'user/message').time);
+    assert.equal(entries(second.journal, 'nudge').filter((e) => e.sessionId === 'n').length, 1, 'still never sent twice');
     second.pilot.stop();
+    // A start after that leaves it delivered.
+    const third = setup({ dir, clock, dsh, config: { defaultRule: 'ask' } });
+    await settle();
+    assert.equal(third.journal.get(byId('n').id).state, 'delivered');
+    third.pilot.stop();
 });
 
 test('after a restart: sessions cut off too long ago, ones someone wrote in since, and Off sessions are left alone', async () => {
@@ -605,6 +630,124 @@ test('a failed turn with open todos and no goal gets a carry-on note naming the 
     const [note] = notesIn(dsh, 'e');
     assert.match(note, /^\[Autopilot\] Your last turn \(turn 1\) failed: context window exceeded\. Carry on from where you stopped\./);
     assert.match(note, /If the same error comes back, stop/);
+});
+
+test('an error DSH ends with a full stop reads once in the note and its Why, which says what is still open in plain words', async () => {
+    const { dsh, clock, journal } = setup();
+    dsh.add('e');
+    dsh.write('e', 'Go');
+    dsh.end('e', { kind: 'error', error: { message: 'Connection error.' } }, { todos: TODOS });
+    await clock.advance(2 * MIN);
+    const [note] = notesIn(dsh, 'e');
+    assert.match(note, /^\[Autopilot\] Your last turn \(turn 1\) failed: Connection error\. Carry on from where you stopped\. Still open: 2 todos \(next: “Write the parser”\)\. /);
+    assert.doesNotMatch(note, /\.\./);
+    assert.equal(entries(journal, 'error')[0].why, 'Turn 1 failed (Connection error) with 2 todos still open (next: “Write the parser”).');
+    assert.equal(errorNote({ turn: 3, error: 'Gateway timed out!' }, {}), '[Autopilot] Your last turn (turn 3) failed: Gateway timed out! Carry on from where you stopped. If the same error comes back, stop and end your reply with one line: DECISION NEEDED: <question> — recommend: <your pick>.');
+});
+
+test('a carry-on after a restart that fails too (DSH came back before its gateway): tried again note-first like any failed turn with work open, then given up with Try again', async () => {
+    const dir = tempDir('autopilot');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const before = setup({ dir, clock, dsh });
+    // No todos and no goal: only the stop says work was cut off.
+    dsh.add('pb', { title: 'Power blip' });
+    dsh.write('pb', 'Rebuild the search index.');
+    before.watch.running.flush();
+    before.pilot.stop();
+    before.store.close();
+    dsh.stop({ crash: true });
+    await clock.advance(2 * MIN);
+    const { journal, pilot, watch, config, notified } = setup({ dir, clock, dsh });
+    await clock.advance(20000);
+    assert.equal(notesIn(dsh, 'pb').length, 1, 'the carry-on note');
+    assert.equal(entries(journal, 'resume')[0].state, 'delivered');
+    assert.deepEqual(pilot.data.sessions.pb.carry, { turn: 2, cut: 1, at: clock.now() });
+    // The carry-on turn fails: the gateway is not back yet.
+    const fail = () => dsh.end('pb', { kind: 'error', error: { code: 'provider', message: 'Connection error.' } });
+    fail();
+    await settle();
+    assert.equal(pilot.pending().pb?.trigger, 'error', 'the work the stop cut off is still open: it is tried again');
+    await clock.advance(2 * MIN);
+    const [first] = entries(journal, 'error');
+    assert.equal(first.state, 'delivered');
+    assert.equal(first.why, 'Turn 2 failed (Connection error) while it carried on after DSH stopped under turn 1, so the work that stop cut off is still open.');
+    assert.equal(notesIn(dsh, 'pb')[1], '[Autopilot] Your last turn (turn 2) failed: Connection error. You were carrying on after DSH stopped under turn 1: check what already finished (files, commands, todos), then carry on from where you stopped. If the same error comes back, stop and end your reply with one line: DECISION NEEDED: <question> — recommend: <your pick>.');
+    // Still down: the waits grow, then Autopilot gives up, tagged gave up, with Try again.
+    fail();
+    await clock.advance(10 * MIN);
+    assert.equal(entries(journal, 'error').length, 2);
+    fail();
+    await clock.advance(30 * MIN);
+    assert.equal(entries(journal, 'error').length, 3);
+    fail();
+    await clock.advance(0);
+    const [giveup] = entries(journal, 'giveup');
+    assert.equal(giveup.state, 'gave up');
+    assert.equal(giveup.why, 'It failed again after 3 tries, so Autopilot stops retrying and leaves it to you.');
+    assert.equal(notified.at(-1).title, 'Autopilot stopped retrying: Power blip');
+    const view = await pageState({ pilot, watch, journal, config });
+    const row = view.sessions.find((r) => r.sessionId === 'pb');
+    assert.equal(row.word, 'gave up');
+    assert.ok(row.gaveUp, 'the Waiting card lists it, with Try again');
+    // Try again: the same carry-on note again, by the person; a turn that ends well closes the carry-on.
+    const result = await pilot.retry('pb');
+    assert.equal(result.action, 'note');
+    assert.equal(result.entry.by, 'you');
+    await settle();
+    assert.match(notesIn(dsh, 'pb').at(-1), /You were carrying on after DSH stopped under turn 1/);
+    dsh.end('pb', { kind: 'completed' }, { reply: 'The index is rebuilt.' });
+    await settle();
+    assert.equal(pilot.data.sessions.pb.carry, undefined);
+    // A failure after that, with nothing open, is the person's: no try, and the row says why instead of "failed" alone.
+    dsh.write('pb', 'Now vacuum the database.');
+    dsh.end('pb', { kind: 'error', error: { message: 'Connection error.' } });
+    await clock.advance(2 * MIN);
+    assert.equal(entries(journal, 'error').length, 4, 'nothing more after the try the person asked for');
+    assert.equal(pilot.pending().pb, undefined);
+    const after = (await pageState({ pilot, watch, journal, config })).sessions.find((r) => r.sessionId === 'pb');
+    assert.equal(after.hold, 'its last turn failed with nothing left open (no todos, no goal), so Autopilot leaves it to you');
+    pilot.stop();
+});
+
+test('a carry-on after a restart whose turn ends well, or that the person takes over, is no longer Autopilot\'s to retry', async () => {
+    const dir = tempDir('autopilot');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now });
+    const before = setup({ dir, clock, dsh });
+    for (const id of ['ok', 'mine']) dsh.write(id, 'Rebuild the search index.');
+    before.watch.running.flush();
+    before.pilot.stop();
+    before.store.close();
+    dsh.stop({ crash: true });
+    await clock.advance(2 * MIN);
+    const { journal, pilot } = setup({ dir, clock, dsh });
+    await clock.advance(20000);
+    assert.equal(entries(journal, 'resume').length, 2);
+    dsh.end('ok', { kind: 'completed' }, { reply: 'Done; the index is rebuilt.' });
+    dsh.write('mine', 'Stop; I will do it myself.');
+    await settle();
+    assert.equal(pilot.data.sessions.ok.carry, undefined);
+    assert.equal(pilot.data.sessions.mine.carry, undefined);
+    for (const id of ['ok', 'mine']) dsh.end(id, { kind: 'error', error: { message: 'Connection error.' } });
+    await clock.advance(5 * MIN);
+    assert.equal(entries(journal, 'error').length, 0);
+    pilot.stop();
+});
+
+test('the first look\'s words in a waiting row follow what Autopilot started after: DSH, a fixed setting, or a switch back on', async () => {
+    for (const [after, words] of [[undefined, 'after DSH starts'], ['dsh', 'after DSH starts'], ['settings', 'after the setting was fixed'], ['again', 'after Autopilot starts again']]) {
+        const { dsh, pilot, watch } = setup({ start: false });
+        // A failed turn with work open, as in the settings restart the judge saw.
+        dsh.add('c', { title: 'Colours' });
+        dsh.write('c', 'Pick the colours.');
+        dsh.end('c', { kind: 'error', error: { message: 'Connection error.' } }, { todos: TODOS });
+        pilot.start(after ? { after } : undefined);
+        await settle();
+        const row = (await watch.list(undefined, { maxAgeMs: 0 })).find((r) => r.sessionId === 'c');
+        assert.equal(pilot.holdOf(row), `Autopilot looks at it 20 seconds ${words}`, String(after));
+        pilot.stop();
+    }
 });
 
 // ── Rules, the switch, the limit ──────────────────────────────────────

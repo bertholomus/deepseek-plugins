@@ -47,6 +47,14 @@ const OPEN_NOTE = new Set(['sending', 'in the queue']);
 const OPEN_START = new Set(['starting', 'waiting for a round']);
 /** A handled trigger is remembered this long, so a restart never repeats one. */
 const DONE_KEEP_MS = 7 * 86400000;
+/** What Autopilot's first look follows, in the words of a row that waits for it (see start). */
+const START_WORDS = Object.freeze({
+    dsh: 'after DSH starts',
+    settings: 'after the setting was fixed',
+    again: 'after Autopilot starts again',
+});
+/** How long after a session moves Autopilot reads its log for a note a killed run left in its queue. */
+const QUEUED_LOOK_MS = 1500;
 
 /** The store's empty shape. */
 export function emptyData() {
@@ -75,6 +83,19 @@ export function hasOpenWork(state) {
     return (state?.todos?.open ?? 0) > 0 || state?.goal?.phase === 'active';
 }
 
+/**
+ * Whether a turn belongs to a carry-on after a stop that has not ended
+ * well yet: `s.carry` names the turn Autopilot's carry-on note started
+ * (after DSH stopped under an earlier one). Until a turn from there on ends
+ * without an error, the work that stop cut off counts as open, so a carry-on
+ * turn that fails (a gateway still down after a power blip) is tried again
+ * like any failed turn with open work.
+ */
+export function carrying(s, end) {
+    const carry = s?.carry;
+    return isRecord(carry) && Number.isSafeInteger(carry.turn) && Number.isSafeInteger(end?.turn) && end.turn >= carry.turn;
+}
+
 /** Whether a session moved since `mark`: a todo finished or dropped, or the goal ran a round. */
 export function progressed(mark, state) {
     if (!mark) return false;
@@ -101,6 +122,24 @@ const spanSeconds = (seconds) => {
 
 /** The text of a message in a session's log. */
 const messageText = (data) => (Array.isArray(data?.content) ? data.content.filter((b) => b?.type === 'text').map((b) => b.text ?? '').join('') : typeof data?.content === 'string' ? data.content : '');
+
+/** Whether a message in a session's log is the one a note's log entry sent (by its id, else its words). */
+const ownMessage = (entry, message) => (entry.messageId ? message?.id === entry.messageId : messageText(message) === entry.note);
+
+/**
+ * Where a session's log shows a note's message read into a turn: the turn
+ * (the last one begun before it) and when, or undefined while it does not.
+ */
+function readIn(entry, events) {
+    let turn;
+    for (const e of events) {
+        if (e?.type === 'turn/start' && Number.isSafeInteger(e.data?.turn)) turn = e.data.turn;
+        if (e?.type === 'user/message' && (Number.isFinite(e?.time) ? e.time >= (entry.at ?? 0) - 1000 : true) && ownMessage(entry, e.data)) {
+            return { ...(turn !== undefined ? { turn } : {}), ...(Number.isFinite(e.time) ? { deliveredAt: e.time } : {}) };
+        }
+    }
+    return undefined;
+}
 
 export class Pilot {
     /**
@@ -139,6 +178,10 @@ export class Pilot {
         this.proofs = new Set();
         /** The cut-off turns the last look at the logs found, by session (for rows whose saved state is still open). */
         this.cutSeen = new Map();
+        /** Notes a killed run left in DSH's queue ("not proven"), by session: their log entries, settled once the session reads them. */
+        this.queued = new Map();
+        /** Pending reads of those sessions' logs, by session. */
+        this.queuedLooks = new Map();
         this.startTimer = undefined;
         /** Settling what the last process left open; the first look waits for it. */
         this.settling = undefined;
@@ -258,9 +301,16 @@ export class Pilot {
 
     // ── Start and events ──────────────────────────────────────────────
 
-    start() {
+    /**
+     * Start watching. `after` says what the start follows, for the words of a
+     * row that waits for the first look: `dsh` (DSH started), `settings` (a
+     * wrong setting was fixed) or `again` (Autopilot or Session Watch was
+     * switched back on).
+     */
+    start({ after = 'dsh' } = {}) {
         if (this.started) return;
         this.started = true;
+        this.startedAfter = Object.hasOwn(START_WORDS, after) ? after : 'dsh';
         this.offWatch = this.watch.on((event) => this.onWatch(event));
         // What a killed process left open is settled first: its questions are set aside (asked again under their own
         // entries), its notes and goal starts checked against the sessions' logs.
@@ -276,6 +326,8 @@ export class Pilot {
         this.stopped = true;
         this.offWatch?.();
         if (this.startTimer !== undefined) this.clearTimer(this.startTimer);
+        for (const timer of this.queuedLooks.values()) this.clearTimer(timer);
+        this.queuedLooks.clear();
         for (const id of [...this.timers.keys()]) this.cancel(id);
         // A goal start still waiting for its round stays open in the log: the next start checks it in the session's log.
         for (const proof of [...this.proofs]) proof.cancel();
@@ -322,6 +374,9 @@ export class Pilot {
                 this.journal.set(entry.id, { state: 'withdrawn', stopped: true, settledAt: this.now(), reason: 'withdrawn: DSH stopped before it was answered (a crash or a forced quit); it asks again when it runs, if this still applies' });
             } else if (typeof entry.sessionId === 'string' && ((typeof entry.note === 'string' && OPEN_NOTE.has(entry.state)) || (entry.kind === 'rearm' && OPEN_START.has(entry.state)))) {
                 open.push(entry);
+            } else if (typeof entry.sessionId === 'string' && typeof entry.note === 'string' && entry.state === 'not proven' && entry.queued === true && this.now() - (entry.at ?? 0) < DONE_KEEP_MS) {
+                // Left in DSH's queue by an earlier kill: the session may have read it since, or may read it yet.
+                open.push(entry);
             }
         }
         if (open.length === 0) return;
@@ -343,14 +398,6 @@ export class Pilot {
     /** One open entry of an earlier run, settled against its session's log (see settleLeft). */
     settleFromLog(sessionId, entry, events) {
         const after = events.filter((e) => Number.isFinite(e?.time) ? e.time >= entry.at - 1000 : true);
-        const turnOf = (event) => {
-            let turn;
-            for (const e of events) {
-                if (e === event) break;
-                if (e?.type === 'turn/start' && Number.isSafeInteger(e.data?.turn)) turn = e.data.turn;
-            }
-            return turn;
-        };
         // Nothing happened, so the trigger is free again: this run's first look acts on it, if it still applies.
         const free = () => {
             const s = this.data.sessions[sessionId];
@@ -361,18 +408,19 @@ export class Pilot {
         };
         const settledAt = this.now();
         if (typeof entry.note === 'string') {
-            const ours = (message) => (entry.messageId ? message?.id === entry.messageId : messageText(message) === entry.note);
-            const read = after.find((e) => e?.type === 'user/message' && ours(e.data));
+            const read = readIn(entry, events);
             if (read) {
-                const turn = turnOf(read);
-                this.journal.set(entry.id, { state: 'delivered', settledAt, ...(turn !== undefined ? { turn } : {}), ...(Number.isFinite(read.time) ? { deliveredAt: read.time } : {}), reason: '' });
-            } else if (after.some((e) => e?.type === 'agent/inbox/spliced' && Array.isArray(e.data?.inserted) && e.data.inserted.some(ours))) {
-                // DSH keeps its queue in the session's log, so the session may still read it: it is never sent twice.
-                this.journal.set(entry.id, { state: 'not proven', settledAt, reason: 'DSH stopped with it in the session\'s queue (a crash or a forced quit); the session may still read it when it next runs' });
-            } else {
+                this.journal.set(entry.id, { state: 'delivered', settledAt, ...read, reason: '', ...(entry.queued ? { queued: false } : {}) });
+            } else if (after.some((e) => e?.type === 'agent/inbox/spliced' && Array.isArray(e.data?.inserted) && e.data.inserted.some((m) => ownMessage(entry, m)))) {
+                // DSH keeps its queue in the session's log, so the session may still read it: it is never sent twice,
+                // and Autopilot reads the log again as the session moves, to mark it delivered once it is read.
+                if (entry.state !== 'not proven') this.journal.set(entry.id, { state: 'not proven', queued: true, settledAt, reason: 'DSH stopped with it in the session\'s queue (a crash or a forced quit); the session may still read it when it next runs, and this entry says so when it does' });
+                this.follow(sessionId, entry.id);
+            } else if (entry.queued !== true) {
                 this.journal.set(entry.id, { state: 'not delivered', settledAt, reason: 'DSH stopped before it reached the session (a crash or a forced quit)' });
                 free();
             }
+            // (One an earlier kill left in the queue that the log no longer shows stays not proven: never sent twice.)
             return;
         }
         const goal = entry.goal;
@@ -384,6 +432,47 @@ export class Pilot {
         }
         this.journal.set(entry.id, { state: 'not started', settledAt, reason: entry.state === 'starting' ? 'DSH stopped before it could start the goal (a crash or a forced quit)' : 'DSH stopped before a round began (a crash or a forced quit)' });
         free();
+    }
+
+    /** Follow a note a killed run left in DSH's queue: its session's log is read again as the session moves. */
+    follow(sessionId, entryId) {
+        let ids = this.queued.get(sessionId);
+        if (!ids) {
+            ids = new Set();
+            this.queued.set(sessionId, ids);
+        }
+        ids.add(entryId);
+    }
+
+    /** A followed session moved (a turn began or ended, a message came in): read its log in a moment. */
+    lookQueued(sessionId) {
+        if (!this.queued.has(sessionId) || this.queuedLooks.has(sessionId) || this.stopped) return;
+        const timer = this.setTimer(QUEUED_LOOK_MS, () => {
+            this.queuedLooks.delete(sessionId);
+            void this.readQueued(sessionId).catch((error) => this.logger?.warn?.(`autopilot: could not read the log of ${sessionId}: ${errorText(error)}`));
+        });
+        this.queuedLooks.set(sessionId, timer);
+    }
+
+    /** The followed notes of one session that its log now shows read into a turn: delivered, with that turn. */
+    async readQueued(sessionId) {
+        const ids = this.queued.get(sessionId);
+        if (!ids?.size || this.stopped) return;
+        const log = await this.watch.readLog?.(sessionId);
+        if (this.stopped || !Array.isArray(log?.events)) return;
+        for (const entryId of [...ids]) {
+            const entry = this.journal.get(entryId);
+            if (!entry || entry.state !== 'not proven') {
+                ids.delete(entryId);
+                continue;
+            }
+            const read = readIn(entry, log.events);
+            if (!read) continue;
+            this.journal.set(entryId, { state: 'delivered', settledAt: this.now(), ...read, reason: '', queued: false });
+            ids.delete(entryId);
+        }
+        if (ids.size === 0) this.queued.delete(sessionId);
+        this.changed();
     }
 
     sessionData(sessionId) {
@@ -403,6 +492,8 @@ export class Pilot {
     onWatch(event) {
         if (this.stopped || !isRecord(event) || typeof event.sessionId !== 'string') return;
         const id = event.sessionId;
+        // A note a killed run left in this session's queue may be read now.
+        if (this.queued.has(id) && (event.type === 'turn-start' || event.type === 'turn-end' || (event.type === 'state' && event.change === 'user/message'))) this.lookQueued(id);
         switch (event.type) {
             case 'turn-start':
                 // It is working: whatever was pending waits for this turn's end.
@@ -421,12 +512,14 @@ export class Pilot {
     /** The person wrote in a session: they are on it, so Autopilot starts fresh there. */
     onPersonWrote(sessionId) {
         const s = this.data.sessions[sessionId];
-        if (s && (s.nudges || s.backedOff || s.errorTries || s.mark)) {
+        if (s && (s.nudges || s.backedOff || s.errorTries || s.mark || s.carry)) {
             s.nudges = 0;
             s.errorTries = 0;
             delete s.backedOff;
             delete s.mark;
             delete s.gaveUp;
+            // The person took the session over: what a stop cut off is theirs now.
+            delete s.carry;
             this.store.change();
             this.changed();
         }
@@ -447,6 +540,12 @@ export class Pilot {
             if (s.errorTries) s.errorTries = 0;
             delete s.gaveUp;
         }
+        // A carry-on after a stop is over once a turn of it ends without an error (or the person stopped it, or it
+        // was blocked): what the stop cut off is no longer Autopilot's to retry. A failed one keeps it (see carrying).
+        if (s.carry && carrying(s, end) && end.kind !== 'error' && !cutOff(end)) {
+            delete s.carry;
+            this.store.change();
+        }
         // The turn a carry-on note started (after a restart or an error) is over: its goal waited for it.
         const after = s.goalAfter;
         if (after && Number.isSafeInteger(end.turn) && end.turn >= after.turn) {
@@ -461,7 +560,7 @@ export class Pilot {
         }
         if (!this.active() || this.ruleOf(sessionId) === 'off') return;
         if (cutOff(end)) this.schedule(sessionId, 'resume', LIVE_CUT_DELAY_MS);
-        else if (!hasOpenWork(state)) this.cancel(sessionId);
+        else if (!hasOpenWork(state) && !(end.kind === 'error' && carrying(s, end))) this.cancel(sessionId);
         else if (end.kind === 'error') this.schedule(sessionId, 'error', this.dueIn('error', end, sessionId));
         else if (end.kind === 'completed' || end.kind === 'max-tokens') this.schedule(sessionId, 'idle', this.idleMs());
         else this.cancel(sessionId);
@@ -596,7 +695,8 @@ export class Pilot {
             // Cut-off sessions came from their logs above.
             if (!end || state.open || row.status === 'running' || cutOff(end)) continue;
             if (this.now() - end.at > windowMs) continue;
-            if (!hasOpenWork(state)) continue;
+            // A failed carry-on after a stop counts as open work too (see carrying).
+            if (!hasOpenWork(state) && !(end.kind === 'error' && carrying(this.data.sessions[id], end))) continue;
             if (end.kind === 'error') this.schedule(id, 'error', this.dueIn('error', end, id));
             else if (end.kind === 'completed' || end.kind === 'max-tokens') this.schedule(id, 'idle', this.dueIn('idle', end, id));
         }
@@ -669,7 +769,9 @@ export class Pilot {
             case 'error': {
                 if (end.kind !== 'error') return none('its last turn did not fail');
                 const tries = s.errorTries ?? 0;
-                const hasWork = startable || (state.todos?.open ?? 0) > 0;
+                // A carry-on after a stop that failed: the work the stop cut off is still open, todos or not.
+                const carry = carrying(s, end) ? s.carry : undefined;
+                const hasWork = startable || (state.todos?.open ?? 0) > 0 || Boolean(carry);
                 if (!hasWork) return spent ? { ...none(`its goal used all ${state.goal.max} of its rounds; raise its round limit to let it go on`, true), ...base } : none('nothing is open');
                 if (tries >= this.errorDelays().length && !force) {
                     if (s.gaveUp) return none('Autopilot already gave up here');
@@ -677,7 +779,7 @@ export class Pilot {
                 }
                 // A note first, never a blind goal start: a start begins a goal round, and a failing provider would spend
                 // the goal's rounds. The goal starts again once a turn ends without an error (onTurnEnd).
-                return { action: 'note', kind: 'error', ...base, text: errorNote(end, state), why: startable ? whyRearmError(end, state) : whyErrorNote(end, state), summary: 'Told it to carry on after an error', retry: true, goalAfter: startable };
+                return { action: 'note', kind: 'error', ...base, text: errorNote(end, state, { carry }), why: startable ? whyRearmError(end, state) : whyErrorNote(end, state, { carry }), summary: 'Told it to carry on after an error', retry: true, goalAfter: startable, ...(carry ? { carry: { ...carry } } : {}) };
             }
             default:
                 return none(`unknown trigger ${trigger}`);
@@ -779,6 +881,13 @@ export class Pilot {
     async note(sessionId, plan, by) {
         const title = this.titleOf(sessionId);
         const entry = this.journal.add({ kind: plan.kind, sessionId, title, text: plan.summary, note: plan.text, why: plan.why, state: 'sending', by, ...(plan.key ? { key: plan.key } : {}) });
+        // A carry-on after a stop: until a turn from it ends without an error, the cut-off work counts as open. Set
+        // before the note goes, so a turn that fails at once (before the delivery is known) still counts.
+        const carry = plan.kind === 'resume' && Number.isSafeInteger(plan.end?.turn) ? { turn: plan.end.turn + 1, cut: plan.end.turn, at: this.now() } : undefined;
+        if (carry) {
+            this.sessionData(sessionId).carry = carry;
+            this.store.change();
+        }
         this.changed();
         const delivery = await this.watch.deliver(sessionId, plan.text);
         let marked = false;
@@ -787,9 +896,16 @@ export class Pilot {
             if (this.stopped) return;
             const state = d.state === 'delivered' ? 'delivered' : d.state === 'queued' ? 'in the queue' : d.state === 'failed' ? 'not delivered' : 'sending';
             this.journal.set(entry.id, { state, ...(typeof d.id === 'string' ? { messageId: d.id } : {}), ...(d.turn !== undefined ? { turn: d.turn } : {}), ...(d.reason ? { reason: d.reason } : {}), ...(d.deliveredAt ? { deliveredAt: d.deliveredAt } : {}) });
+            const s = this.sessionData(sessionId);
+            if (carry && s.carry === carry) {
+                // The turn that read it is the carry-on's first; a note that never arrived carried nothing on.
+                if (d.state === 'delivered' && Number.isSafeInteger(d.turn)) carry.turn = d.turn;
+                else if (d.state === 'failed') delete s.carry;
+                this.store.change();
+            }
             if (plan.goalAfter && d.state === 'delivered' && Number.isSafeInteger(d.turn) && !marked) {
                 marked = true;
-                this.sessionData(sessionId).goalAfter = { turn: d.turn, at: this.now(), by, kind: plan.kind };
+                s.goalAfter = { turn: d.turn, at: this.now(), by, kind: plan.kind };
                 this.store.change();
             }
             this.changed();
@@ -916,7 +1032,9 @@ export class Pilot {
         const carried = earlier?.stopped === true && earlier.state === 'withdrawn' ? earlier : undefined;
         // The log row shows the session's name beside it: the entry says what was asked, the Why line why. Logged
         // first, so the question and its entry carry one time.
-        const entry = carried ? undefined : this.journal.add({ kind: 'ask', sessionId, title, text: `Asked you whether to ${label[0].toLowerCase()}${label.slice(1)}`, why: `${plan.why} Its rule is Ask first.`, state: 'asked you', by: 'Autopilot', askId: id });
+        const entry = carried ? undefined : this.journal.add({ kind: 'ask', sessionId, title, text: `Asked you whether to ${label[0].toLowerCase()}${label.slice(1)}`, why: `${plan.why} Its rule is Ask first.`, askWhy: plan.why, state: 'asked you', by: 'Autopilot', askId: id });
+        // Asked again: the card keeps the Why its log entry has (the moment it was first asked), not one worked out now.
+        const why = carried ? (typeof carried.askWhy === 'string' ? carried.askWhy : String(carried.why ?? plan.why).replace(/ Its rule is Ask first\.$/, '')) : plan.why;
         try {
             this.watch.raiseAsk({
                 id,
@@ -925,7 +1043,7 @@ export class Pilot {
                 title,
                 question: question(plan, title),
                 recommendation: label,
-                why: plan.why,
+                why,
                 options: [{ id: 'go', label }, { id: 'skip', label: 'Leave it' }],
                 freeText: plan.action === 'note',
                 at: carried ? carried.at : entry.at,
@@ -1028,9 +1146,13 @@ export class Pilot {
         const end = state?.end;
         if (!end || state.open) return undefined;
         const cut = cutOff(end);
-        // A cut-off turn gets a carry-on note with or without open work; any other, only with it.
-        if (!cut && !hasOpenWork(state)) return undefined;
         const s = this.data.sessions[row.sessionId];
+        // A cut-off turn gets a carry-on note with or without open work; a failed carry-on after a stop is open work
+        // too (see carrying); any other turn, only with open work.
+        if (!cut && !hasOpenWork(state) && !(end.kind === 'error' && carrying(s, end))) {
+            // A failed turn with nothing open is the person's: the row says so, so "failed" never stands alone.
+            return end.kind === 'error' ? 'its last turn failed with nothing left open (no todos, no goal), so Autopilot leaves it to you' : undefined;
+        }
         if (s?.backedOff || s?.gaveUp) return undefined;
         if (!cut && state.goal?.phase === 'active' && goalSpent(state.goal) && !this.goalArmed(row.sessionId) && (state.todos?.open ?? 0) === 0) {
             return `waits for you: its goal used all ${state.goal.max} of its rounds; raise its round limit to let it go on`;
@@ -1047,8 +1169,8 @@ export class Pilot {
         const windowHours = trigger === 'resume' ? (this.config.resumeWindowHours ?? 6) : (this.config.idleWindowHours ?? 2);
         if (this.now() - end.at <= Math.max(1, windowHours) * 3600000) {
             if (cut && this.config.resumeAfterRestart === false) return 'cut off when DSH stopped; Resume after a restart is off in Autopilot\'s settings';
-            // Autopilot's first look comes a moment after DSH starts.
-            if (this.startTimer !== undefined) return `Autopilot looks at it ${spanSeconds(this.config.startDelaySeconds ?? 20)} after DSH starts`;
+            // Autopilot's first look comes a moment after it starts: with DSH, after a setting was fixed, or again.
+            if (this.startTimer !== undefined) return `Autopilot looks at it ${spanSeconds(this.config.startDelaySeconds ?? 20)} ${START_WORDS[this.startedAfter] ?? START_WORDS.dsh}`;
             return undefined;
         }
         return cut

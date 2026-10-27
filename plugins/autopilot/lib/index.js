@@ -32,6 +32,11 @@ export { SETTING_TITLES, LIVE_SETTINGS, checkConfig, changedWords } from './conf
 
 export const name = 'autopilot';
 
+/** Whether a pilot has started in this process yet: the first one, soon after DSH starts, starts with DSH. */
+let firstStart = true;
+/** How long after DSH's process starts a first pilot still counts as starting with DSH, in seconds. */
+const WITH_DSH_SECONDS = 180;
+
 /**
  * Nothing at start: Autopilot waits for the session watcher inside apply, so
  * switching Session Watch off leaves Autopilot loaded and idle (its page says
@@ -106,8 +111,13 @@ export function apply(ctx, config) {
         };
 
         const pilot = new Pilot({ watch, config: settings, store, journal, logger, notify, changed: bump, settingsOk: () => check.ok });
-        const startIfReady = () => {
-            if (settings.enabled !== false && check.ok && !pilot.started) pilot.start();
+        /** Start once the settings allow; `after` says what the start follows, for the page's words (Pilot.start). */
+        const startIfReady = (after) => {
+            if (settings.enabled !== false && check.ok && !pilot.started) {
+                const withDsh = firstStart && (typeof process?.uptime === 'function' ? process.uptime() < WITH_DSH_SECONDS : true);
+                pilot.start({ after: after ?? (withDsh ? 'dsh' : 'again') });
+                firstStart = false;
+            }
         };
         startIfReady();
 
@@ -128,7 +138,7 @@ export function apply(ctx, config) {
             const entry = savedEntry(check, paths, { before, after: lastValues });
             if (entry) journal.add(entry);
             if (pilot.started) pilot.settingsChanged({ fixed: wasWrong && check.ok });
-            else startIfReady();
+            else startIfReady(wasWrong ? 'settings' : undefined);
             bump();
         };
         onSaved = saved;
