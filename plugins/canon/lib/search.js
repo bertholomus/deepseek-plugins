@@ -26,7 +26,7 @@
  *
  * @module dsh-plugin-canon/search
  */
-import { EVERYDAY, counts, isCodingRequest, nameKey, promptTerms, terms, wordsOf, workObject } from './text.js';
+import { CODE_TERMS, COMMON, EVERYDAY, RECORDING, asksForWork, counts, decisionSubject, isCodingRequest, isDecision, nameKey, promptTerms, proseOf, terms, wordsOf, workObject } from './text.js';
 
 /** BM25's saturation and length weight. */
 const K1 = 1.2;
@@ -35,7 +35,7 @@ const B = 0.6;
 const WEIGHTS = Object.freeze({ title: 4, aliases: 3, tags: 3, defined: 3, path: 2, headings: 1.5 });
 /** A note scores at least this, and at least this share of the best note, to be added. */
 export const MIN_SCORE = 3;
-export const NEAR_BEST = 0.5;
+export const NEAR_BEST = 0.6;
 /** A word is rare when at most this share of the vault's notes has it (one note, in a small vault). */
 export const RARE = 0.06;
 /**
@@ -52,6 +52,15 @@ export const SHARE_BODY = 0.45;
  * space left on device") thins the share, not the words in common.
  */
 export const MANY_DISTINCT = 4;
+/**
+ * A coding request says at least this share of a note's title's words (or
+ * an alias's) for the note to fit, unless it shares a value of the note's
+ * (a port, a tool's command), many distinctive words, or at least
+ * COVER_SHARE of its weight with it (most of what it asks is in the note).
+ * A decision statement is held to neither.
+ */
+export const COVER = 0.5;
+export const COVER_SHARE = 0.4;
 /** The lift for a note of the session's repo, and of the folder it sits in. */
 export const REPO_BOOST = 1.6;
 export const PARENT_BOOST = 1.2;
@@ -61,6 +70,8 @@ export const PARENT_BOOST = 1.2;
  * could ever reach the floor.
  */
 export const SMALL_VAULT = 10;
+/** A year ("2026"): a pasted timestamp's, a dated note's file name. */
+const YEAR = /^(?:19|20)\d\d$/;
 /** Prompt terms used, at most (the rest of a long prompt adds little). */
 const MAX_QUERY_TERMS = 48;
 /** The questions of a prompt that are each asked alone, at most. */
@@ -257,6 +268,9 @@ export class Index {
             slot,
             path: note.path,
             title: note.title,
+            // What the note says it is about: its title's terms and each alias's (coverage, in rank()).
+            // What the note says it is about, word by word (each word's terms: "JetStream" is one word), from its title and aliases.
+            subjects: [note.title, ...(note.aliases ?? [])].map((text) => String(text ?? '').split(/[\s/]+/).map((word) => [...new Set(terms(word).filter((t) => !/^\d+$/.test(t)))]).filter((list) => list.length > 0)).filter((words) => words.length > 0),
             tags: note.tags ?? [],
             keys,
             projects,
@@ -392,20 +406,41 @@ export class Index {
      * or "I'm") fits only a note of a project it or the session names, or
      * one that shares three words with it ("How do I run Kafka locally?").
      *
+     * Words every software project uses for its everyday parts and doings
+     * (text.js COMMON: "port", "endpoint", "deploy", "build", "request",
+     * "log", "commit"), the names of tools and languages ("postgres",
+     * "docker", "npm") and numbers of one or two digits never carry a fit on
+     * their own, whatever the vault says about them: a question whose words
+     * in common are all of these fits only a note of a project it or the
+     * session names.
+     *
      * A coding request (text.js isCodingRequest: a sentence starts with a
-     * verb such as "write", "add" or "fix", or it speaks of "this function"
-     * or "my script") leaves its everyday request words out of the words in
-     * common, though they still weigh in what it asks. Each of its words
-     * weighs as much as it is rare in the vault (a word no note has weighs
-     * most; a project's name weighs once), and a note fits when:
+     * verb such as "write", "add" or "fix"; it speaks of "this function" or
+     * "my script"; it asks for a thing to be made, "need a bash loop…"; or
+     * it has code-shaped words, a tool's or a library's name, a file name, a
+     * flag or an error, whatever its first word: "how do i check if a port
+     * is free from a shell script") leaves its everyday request words out of
+     * the words in common, though they still weigh in what it asks. So does
+     * a statement of a decision or a lesson ("we decided to keep v1 for a
+     * year, put that in the notes"), whose words that say it was decided and
+     * should be recorded say nothing of what about: it gets only notes on
+     * its subject. Each of its words weighs as much as it is rare in the
+     * vault (a word no note has weighs most; a project's name weighs once,
+     * and a word of a name that every project uses, "api" or "cache", does
+     * not name it alone), and a note fits when:
      * - it shares two words with the prompt (a project's name can be one),
      *   or the one word a prompt of one word asks;
      * - when one of those words is in its title, aliases, tags or headings:
      *   enough of them are distinctive, and they carry a third of the
      *   prompt's weight;
-     * - when they are only in its body: they carry 45% of the prompt's
-     *   weight, and a single one fits only beside a project the prompt or
-     *   the session names, in a prompt that asks more than one word.
+     * - when they are only in its body: two or more of them carry 45% of the
+     *   prompt's weight (one word in its body never fits, beside a project
+     *   the prompt or the session names or not);
+     * - one of them is a word beyond the everyday ones, tools' names and
+     *   small numbers, unless the note is of a project the prompt or the
+     *   session names and one of them is in its title, aliases, tags or
+     *   headings ("Change the HTTPS port to 9000" in harbor-gateway's folder:
+     *   Gateway ports).
      * It also fits, whatever its share, when what the request's first work
      * verb acts on is in the note's title and the note is a project's the
      * prompt or the session names ("Write a migration for the ledger…":
@@ -417,7 +452,10 @@ export class Index {
      *
      * A note that belongs to a project (its `project` or `repo`, or its
      * folder under Projects/) is left out when the session's folder or the
-     * prompt points at other projects and not at its own. A note is kept
+     * prompt points at other projects and not at its own; a session in the
+     * folder of a project the vault does not know (~/src/invoice-pdf) points
+     * at that one, so another project's note fits there only when the
+     * prompt names its project. A note is kept
      * above a floor and near the best note; a prompt that asks two things
      * also keeps the note that best answers each question asked alone
      * ("When does on-call hand over, and why did we choose NATS?"), by the
@@ -431,9 +469,12 @@ export class Index {
      * @param {string} prompt
      * @param {{ folder?: { repo: string, parent: string }, limit?: number }} [options]
      */
-    search(prompt, { folder = { repo: '', parent: '' }, limit = 10 } = {}) {
-        const coding = isCodingRequest(prompt);
-        const { query, scored } = this.rank(prompt, folder, coding);
+    search(asked, { folder = { repo: '', parent: '' }, limit = 10 } = {}) {
+        const decision = isDecision(asked);
+        const coding = isCodingRequest(asked) || decision;
+        // A decision statement is about its subject, not about how to save it ("…with the canon_capture tool").
+        const prompt = decision ? decisionSubject(asked) : asked;
+        const { query, scored } = this.rank(prompt, folder, coding, decision);
         const best = scored.find((r) => r.fits)?.score ?? 0;
         const leads = new Set();
         const questions = questionsOf(prompt);
@@ -449,7 +490,7 @@ export class Index {
         }
         if (questions.length > 1) {
             for (const question of questions.slice(0, MAX_QUESTIONS)) {
-                const lead = this.rank(question, folder, coding).scored.find((r) => r.fits && r.score >= MIN_SCORE);
+                const lead = this.rank(question, folder, coding, decision).scored.find((r) => r.fits && r.score >= MIN_SCORE);
                 if (lead) leads.add(lead.path);
             }
         }
@@ -464,6 +505,50 @@ export class Index {
         const results = kept.filter((r) => chosen.has(r.path));
         const others = [...kept.filter((r) => !chosen.has(r.path)).map((r) => ({ ...r, why: 'less' })), ...scored.filter((r) => !keep(r))].slice(0, 5);
         return { terms: query, results, others, coding };
+    }
+
+    /**
+     * The projects a note belongs to: its own (projectsOf), or else the one
+     * known project its tags name.
+     * @param {{ projects: string[], tags: string[] }} doc
+     */
+    ownersOf(doc) {
+        if (doc.projects.length) return doc.projects;
+        // One project's tag says whose note it is; a note tagged with several projects is about them all (On-call).
+        const tagged = [...new Set((doc.tags ?? []).map(nameKey).filter((tag) => this.projects.has(tag)))];
+        return tagged.length === 1 ? tagged : doc.projects;
+    }
+
+    /**
+     * Whether a prompt says all of what a note is about: every word, two or
+     * more, of its title or of one of its aliases, a project's name aside.
+     * @param {{ subjects?: string[][][] }} doc
+     * @param {Set<string> | Map<string, number>} asked - the prompt's terms.
+     * @param {Set<string>} names - the words of projects' names.
+     */
+    saysAll(doc, asked, names) {
+        return (doc.subjects ?? []).some((subject) => {
+            const words = subject.filter((word) => !word.every((t) => names.has(t)));
+            return words.length >= 2 && words.every((word) => word.some((t) => asked.has(t)));
+        });
+    }
+
+    /**
+     * The share of a note's title's words, or of one of its aliases', that
+     * a prompt has, a project's name aside (0 to 1; the best of them).
+     * @param {{ subjects?: string[][][] }} doc
+     * @param {Set<string> | Map<string, number>} asked - the prompt's terms.
+     * @param {Set<string>} names - the words of projects' names.
+     */
+    coverOf(doc, asked, names) {
+        let best = 0;
+        for (const subject of doc.subjects ?? []) {
+            const words = subject.filter((word) => !word.every((t) => names.has(t)));
+            if (words.length === 0) continue;
+            const said = words.filter((word) => word.some((t) => asked.has(t))).length / words.length;
+            if (said > best) best = said;
+        }
+        return best;
     }
 
     /** How many live notes have a term. */
@@ -487,10 +572,15 @@ export class Index {
      * @param {string} prompt
      * @param {{ repo: string, parent: string }} folder
      * @param {boolean} [coding] - the prompt is a coding request (text.js isCodingRequest).
+     * @param {boolean} [decision] - the prompt states a decision to record (text.js isDecision).
      */
-    rank(prompt, folder, coding = isCodingRequest(prompt)) {
+    rank(prompt, folder, coding = isCodingRequest(prompt), decision = isDecision(prompt)) {
         // A coding request leaves its everyday request words out of the words in common; a question keeps them.
-        let query = promptTerms(prompt, { max: 400, everyday: !coding }).slice(0, MAX_QUERY_TERMS);
+        // A decision statement's words that say it was decided and should be recorded say nothing of what about.
+        const recording = decision ? RECORDING : new Set();
+        // A coding request only for its code-shaped words ("what does `fatal: refusing to merge…` mean?") asks no work.
+        const shaped = coding && recording.size === 0 && !asksForWork(prompt);
+        let query = promptTerms(prompt, { max: 400, everyday: !coding }).filter((t) => !recording.has(t)).slice(0, MAX_QUERY_TERMS);
         // In a known project's folder, "this repo" or "this service" says that project's name, in place of its own word.
         const pointed = folder.repo && this.projects.has(folder.repo) ? [...String(prompt).matchAll(THIS_PROJECT)] : [];
         if (pointed.length) {
@@ -512,7 +602,7 @@ export class Index {
         // What the prompt asks, by weight: every word it asks about, its everyday request words too, each as
         // rare as it is in the vault; a project's name once, as its rarest word.
         const weight = new Map();
-        for (const t of [...query, ...promptTerms(prompt, { max: 400, everyday: true }).slice(0, MAX_QUERY_TERMS)]) {
+        for (const t of [...query, ...promptTerms(prompt, { max: 400, everyday: true }).filter((w) => !recording.has(w)).slice(0, MAX_QUERY_TERMS)]) {
             if (!weight.has(t)) weight.set(t, idfOf(this.notesWith(t)));
         }
         let nameWeight = 0;
@@ -557,31 +647,40 @@ export class Index {
                 const score = idf * ((tf * (K1 + 1)) / (tf + K1));
                 let hit = found.get(doc.slot);
                 if (!hit) {
-                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, plain: 0, lone: '', strong: 0, marked: 0, distinct: 0, covered: 0 };
+                    hit = { doc, topic: 0, name: 0, matched: [], topics: 0, plain: 0, special: 0, values: 0, lone: '', strong: 0, marked: 0, distinct: 0, covered: 0 };
                     found.set(doc.slot, hit);
                 }
                 hit.matched.push(t);
                 if (isName) {
-                    // A project's name counts once: its best-scoring word.
-                    hit.name = Math.max(hit.name, score);
+                    // A project's name counts once: its best-scoring word. In a coding request, a word of a name that
+                    // every project uses ("api", "cache", "web") does not name it alone: "the dns cache" is not quartz-cache's.
+                    if (!(coding && COMMON.has(t))) hit.name = Math.max(hit.name, score);
                     continue;
                 }
                 hit.topic += score;
                 hit.topics += 1;
                 hit.lone = t;
                 if (!EVERYDAY.has(t)) hit.plain += 1;
+                // Small numbers and years (a pasted log's timestamp, a decision's file name) say nothing on their own.
+                const vague = /^\d{1,2}$/.test(t) || YEAR.test(t);
+                if (!EVERYDAY.has(t) && !COMMON.has(t) && !CODE_TERMS.has(t) && !vague) hit.special += 1;
+                // A value the note holds: a number of two digits or more, a word with digits in it, a tool's command ("deployctl").
+                if (!vague && df <= rare && (/\d{2,}/.test(t) || /ctl$/.test(t))) hit.values += 1;
                 hit.covered += weight.get(t);
                 if (p.strong[i] > 0) hit.strong += 1;
                 if (p.marked[i] > 0) hit.marked += 1;
-                if (p.marked[i] > 0 || df <= rare || p.body[i] >= 2) hit.distinct += 1;
+                if (!vague && (p.marked[i] > 0 || df <= rare || p.body[i] >= 2)) hit.distinct += 1;
             }
         }
         const words = wordsOf(prompt);
+        // What a coding request says in the person's own words, without pasted code or output.
+        const prose = coding ? new Set(promptTerms(proseOf(prompt), { max: 400, everyday: true })) : new Set();
         const scored = [];
         for (const hit of found.values()) {
             const place = folder.repo && hit.doc.keys.has(folder.repo) ? 'repo' : folder.parent && hit.doc.keys.has(folder.parent) ? 'parent' : '';
             const boost = place === 'repo' ? REPO_BOOST : place === 'parent' ? PARENT_BOOST : 1;
-            const own = hit.doc.projects;
+            // A note belongs to its projects (projectsOf) and to a known project its tags name ("tags: [runbook, quartz-cache]").
+            const own = this.ownersOf(hit.doc);
             // The session's own project counts as named for its notes, as if the prompt said its name.
             const named = hit.name > 0 || (here !== '' && own.includes(here));
             const said = hit.name > 0 ? nameWeight : named ? hereWeight : 0;
@@ -590,14 +689,32 @@ export class Index {
             const titled = hit.marked > 0;
             let why = '';
             let strange = null;
+            // How much of what the note says it is about (its title, or an alias) the prompt says, a project's name aside.
+            const cover = this.coverOf(hit.doc, weight, names);
             if (hit.topics === 0) why = 'name';
             else if (coding) {
-                if ((titled ? hit.distinct : hit.topics) + (named ? 1 : 0) < need || (!titled && hit.topics === 1 && (!named || topics === 1))) why = 'few';
+                if ((titled ? hit.distinct : hit.topics) + (named ? 1 : 0) < need || (!titled && hit.topics === 1)) why = 'few';
                 else if (share < (titled ? SHARE_TITLED : SHARE_BODY)) why = 'part';
                 // "Write a migration…" in tide-ledger's folder, or "…for the ledger", works on what its Schema migrations note is about.
                 if (why === 'part' && object.length && own.some((name) => context.has(name)) && terms(hit.doc.title).some((t) => object.includes(t))) why = '';
                 // A pasted log thins the share, not the words in common: many distinctive ones fit whatever their share.
                 if (why === 'part' && hit.distinct >= MANY_DISTINCT + (named ? 0 : 1)) why = '';
+                // A request that says in its own words all of what a note is about, two words or more of its title or an
+                // alias, fits it whatever else it says ("a script that restarts quartz on every node" is Restarting a
+                // quartz-cache node; a pasted `Warn("rate limited")` is not Rate limits).
+                if (why === 'part' && named && this.saysAll(hit.doc, prose, names)) why = '';
+                // A request that asks no work, only code-shaped, about what two words of a note's say: it fits by those.
+                if ((why === 'part' || why === 'few') && shaped && hit.special >= 2) why = '';
+                // Words every project uses ("port", "deploy", "build", "request") never carry a fit on their own.
+                if (why === '' && hit.special === 0 && !(named && titled)) why = 'few';
+                // A coding request fits a note only when it says at least half of what the note is about, its title's
+                // or an alias's words ("restarts every node" is Restarting a quartz-cache node; "the account cache"
+                // is not On-call's), shares a value or many distinctive words with it (a pasted log), or finds most of
+                // what it asks in it. A decision statement need not say the note's title: the note in force comes.
+                if (why === '' && recording.size === 0 && cover < COVER && share < COVER_SHARE && hit.values === 0 && hit.distinct < MANY_DISTINCT + (named ? 0 : 1)) why = 'part';
+                // Beside a project the request or the session names, a note of no project fits only by what it is
+                // about: a word in its title, aliases, tags or headings ("…release on thursdays" is not Office's lunch).
+                if (why === '' && context.size > 0 && own.length === 0 && !titled) why = 'few';
             } else {
                 const lone = hit.topics === 1;
                 const df = lone ? this.notesWith(hit.lone) : 0;
@@ -611,11 +728,16 @@ export class Index {
                 const only = plainAsked === 1 && hit.plain === 1 && (named || !namesAsked);
                 if (inBody ? !((named || only) && hit.distinct > 0 && plain) : hit.topics + (named ? 1 : 0) < need && !(alone && plain) && !only) why = 'few';
                 else if (!plain && hit.topics < 2) why = 'few';
+                // Words every project uses, tools' names and numbers fit a question on their own only for a note of a project it or the session names.
+                else if (hit.special === 0 && !named) why = 'few';
                 // A question about a thing no note names fits a note of a project it or the session names, or one that shares three words.
                 else if (alien.length > 0 && !named && hit.topics < 3) why = 'few';
                 if (why === 'few' && alien.length > 0 && !named && hit.topics >= 2) strange = alien.map((t) => words.get(t) ?? t);
             }
             if (why === '' && context.size > 0 && own.length > 0 && !own.some((name) => context.has(name))) why = 'other';
+            // A session in the folder of a project the vault does not know points at that project: another
+            // project's note fits only when the prompt names its project.
+            if (why === '' && folder.repo && !here && own.length > 0 && hit.name === 0) why = 'other';
             scored.push({
                 path: hit.doc.path,
                 title: hit.doc.title,

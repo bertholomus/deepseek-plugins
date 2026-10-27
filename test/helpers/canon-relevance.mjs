@@ -50,12 +50,44 @@ export const DEV = join(SETS, 'dev.json');
  * measured once before they were tuned on.
  */
 export const DEV_FRESH = join(SETS, 'dev-fresh.json');
+/**
+ * The round-3 judge's two sets, written on this same fixture vault and so
+ * seen (dev only, from round 4): 86 everyday prompts and 43 casually typed
+ * ones, 41 of them coding requests ("how do i check if a port is free from
+ * a shell script"). Four prompts that repeat a dev prompt word for word in
+ * the same folder are left out.
+ */
+export const DEV_JUDGE = join(SETS, 'dev-judge.json');
+/**
+ * Round 4's builder's own: casually typed coding requests ("redis: set a key
+ * with an expiry in one command"), casually typed questions a note answers
+ * ("gateway health check port?"), and statements of a decision or a lesson
+ * to record ("we decided …, put that in the notes"), half with a note in
+ * force on the same subject and half without.
+ */
+export const DEV_CASUAL = join(SETS, 'dev-casual.json');
 /** The dev set's files: the dev measure reads them as one set. */
-export const DEV_FILES = Object.freeze([DEV, DEV_FRESH]);
+export const DEV_FILES = Object.freeze([DEV, DEV_FRESH, DEV_JUDGE, DEV_CASUAL]);
+/**
+ * Round 5's probe sets (tuned on, apart from the dev set): two fresh writers
+ * who read only the frozen vault and never saw Canon, one typing casually
+ * (w1-…: "postgres: total of entries per account per month") and one with
+ * care (w3-…): 110 everyday coding requests, 96 prompts a note answers and
+ * 14 others. Measured once at 53646c8 and at 341ff4e before any rule
+ * changed for them.
+ */
+export const PROBES = join(SETS, 'probes.json');
 /** Written by fresh writers who never saw Canon's code or the dev set; measured once. */
 export const HOLDOUT = join(SETS, 'holdout.json');
 /** The second hold-out (OPEN-QUESTIONS #33), with everyday coding requests, from two more fresh writers. */
 export const HOLDOUT2 = join(SETS, 'holdout2.json');
+/**
+ * The third hold-out (OPEN-QUESTIONS #41): casually typed coding requests
+ * and statements of a decision to record, among other prompts, from two
+ * fresh writers who saw only the vault; measured once when round 4's rules
+ * are frozen. Its tests skip while it is not there.
+ */
+export const HOLDOUT3 = join(SETS, 'holdout3.json');
 /** The home folder the sets' folders are measured under. */
 export const HOME = '/Users/someone';
 /**

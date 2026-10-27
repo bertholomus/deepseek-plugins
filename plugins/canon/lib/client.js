@@ -1215,9 +1215,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             loading: 'Reading Canon',
             noVault: 'No vault yet',
             noVaultText: 'Set “Vault folder” in Canon\'s settings to your Obsidian vault\'s folder, such as ~/Obsidian/Canon. Canon only reads it unless you allow drafts.',
+            settingsSaved: 'Saved.',
+            emptyVault: 'This folder has no notes: no Markdown (.md) file in it or the folders inside it. Is it your vault? If not, change “Vault folder” in Canon\'s settings.',
             tryTitle: 'Try a prompt',
             trySub: 'See which notes a prompt would get, and why, without sending it.',
             readQuestion: 'Read as a question.',
+            noFit: 'A turn with it gets no notes.',
             readCoding: 'Read as a coding request: it asks for work on code, or speaks of “this function” or “my script”.',
             noFitQuestion: 'A turn with it gets no notes. A note fits a question when it shares two words with it (a project\'s name counts as one). One word is enough when it is all the prompt asks beyond everyday request words like “run” or “test”, in the note\'s title, tags, aliases or headings, or in its body when few notes have it or the body has it twice. One word in the note\'s title, tags, aliases or headings is also enough when few notes have it, the prompt shares no rarer word with the vault and has no word the vault lacks; and one in its body beside a project the prompt or this folder names, when few notes have it or the body has it twice. An everyday request word is enough alone only when it is all the prompt asks. A question that names something no note has, as “Kafka” or “CORS”, needs three words in common, or a note of a project it or this folder names. A term a list in the note defines counts as one of its aliases.',
             noFitCoding: 'A turn with it gets no notes. A note fits a coding request when the words it shares with it, beyond everyday request words like “write”, “fix” and “test”, carry enough of what it asks, rare words weighing most: a third when one is in the note\'s title, tags, aliases or headings, 45% when none is. It also fits when the request works on what the note is titled for and the note is a project\'s the prompt or this folder names, as “Add a route…” and Routing rules.',
@@ -1227,9 +1230,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             noSessionsText: 'When a turn starts from your prompt and active notes fit it, Canon adds them and lists the session here. Try a prompt above to see what one would get.',
             drafts: 'Drafts',
             history: 'What happened',
-            historySub: 'Newest first: drafts saved and promoted, switches, settings and the vault.',
+            historySub: 'Newest first: drafts saved, promoted and discarded, switches, settings and the vault.',
             noHistory: 'Nothing yet',
-            noHistoryText: 'Drafts agents save, drafts you promote, sessions you switch off and setting changes show here.',
+            noHistoryText: 'Drafts agents save, drafts you promote or discard, sessions you switch off and setting changes show here.',
             settings: 'Settings',
         };
 
@@ -1280,7 +1283,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 name: 'access',
                 kind: 'choice',
                 title: 'What Canon may write',
-                hint: 'Read only: nothing, ever. Drafts: agents may save new draft notes in the drafts folder; drafts are never added to turns.',
+                hint: 'Read only: nothing, ever. Drafts: agents may save new draft notes in the drafts folder, and Discard on Canon\'s page moves one to the vault\'s .trash; drafts are never added to turns.',
                 default: 'read-only',
                 options: [{ value: 'read-only', label: 'Read only' }, { value: 'drafts', label: 'Drafts' }],
             },
@@ -1390,6 +1393,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-item[tabindex]:focus{outline:none}`,
             `.${P}-item[tabindex]:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:-2px}`,
             `.${P}-said{margin:8px 0 0;font:var(--dsw-font-xs-13)}`,
+            `.${P}-warn{color:var(--${P}-warn)}`,
+            `.${P}-also{margin-top:10px}`,
+            `.${P}-also-list{margin:4px 0 0;padding-left:18px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-primary)}`,
+            // Use the default on a switch or a choice drawn as DSH draws it on a typed field: one style in the form.
+            `.${P}-settings .${P}-set-reset{font:inherit;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);text-decoration:none}`,
+            `.${P}-settings .${P}-set-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}`,
             `.${P}-fix{margin-top:10px}`,
             `.${P}-fixed{margin:0 0 8px}`,
             `.${P}-said[tabindex]:focus{outline:none}`,
@@ -1443,6 +1452,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const more = c.closed - names.length;
                 const one = c.closed === 1;
                 out.push(`${plural(c.closed, 'folder')} Canon may not read${names.length ? `: ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}` : ''}. ${one ? 'Its' : 'Their'} notes are never added to turns: give DSH access to ${one ? 'it' : 'them'}, then read the vault again.`);
+            }
+            if (c.addressed > 0) {
+                const names = (v.addressed ?? []).slice(0, 5);
+                const more = c.addressed - names.length;
+                out.push(`${plural(c.addressed, 'note')} ${c.addressed === 1 ? 'has a line' : 'have lines'} addressed to agents, left out of turns${names.length ? `: ${names.join(', ')}${more > 0 ? `, and ${more} more` : ''}` : ''}.`);
             }
             if (c.other > 0) out.push(`${plural(c.other, 'note')} with another status (archived, draft and the like) ${c.other === 1 ? 'is' : 'are'} never added.`);
             if (c.unreadable > 0) out.push(`${plural(c.unreadable, 'note')} could not be read.`);
@@ -1543,9 +1557,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function HeaderCard({ data, onRead, reading, said = '' }) {
             const s = data.settings;
             const v = data.vault;
+            // What a fix saved takes the focus: the button pressed is gone with the problem it fixed.
+            const saidRef = React.useRef(null);
+            React.useEffect(() => {
+                if (said) saidRef.current?.focus?.();
+            }, [said]);
             // Read again stays the same button through a read and whatever it finds (an error, then the notes), so
-            // the focus stays on it; pressed again during a read, it changes nothing.
-            const readAgain = h(ui.Button, { key: 'read', variant: 'ghost', size: 'sm', onClick: onRead, 'aria-disabled': reading ? 'true' : undefined, 'data-canon-read': '' }, reading ? 'Reading…' : 'Read again');
+            // the focus stays on it; pressed again during a read, it changes nothing. Beside an error it is one of
+            // the two ways on, drawn as a button.
+            const readAgain = h(ui.Button, { key: 'read', variant: v.state === 'error' ? 'outline' : 'ghost', size: 'sm', onClick: onRead, 'aria-disabled': reading ? 'true' : undefined, 'data-canon-read': '' }, reading ? 'Reading…' : 'Read again');
             let body;
             if (!data.enabled) body = h('p', { className: `${P}-note` }, TEXT.disabled);
             else if (v.state === 'unset' || !s.vault) {
@@ -1560,14 +1580,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         h('span', { key: 'text', className: `${P}-error`, role: 'alert' }, v.error?.text ?? 'Canon cannot read the vault.'),
                         v.readAt ? h('span', { key: 'time' }, 'Tried ', h(kit.TimeText, { at: v.readAt }), '.') : null,
                         readAgain,
-                        h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings', variant: 'ghost' })));
+                        h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings', variant: 'outline' })));
             } else {
                 body = h('div', { className: `${P}-lines` },
                     h('div', { key: 'vault', className: `${P}-line`, 'data-canon-vault': 'ok' },
                         h('span', { key: 'text', className: `${P}-strong` }, vaultText(v)),
                         v.readAt ? h('span', { key: 'time' }, 'Read ', h(kit.TimeText, { at: v.readAt }), '.') : null,
                         readAgain),
-                    ...vaultNotes(v).map((text, i) => h('div', { key: `n${i}`, className: `${P}-line` }, text)),
+                    (v.counts?.notes ?? 0) === 0 && !(v.counts?.closed > 0)
+                        ? h('div', { key: 'empty', className: `${P}-line`, 'data-canon-empty': '' },
+                            h('span', { key: 'text' }, TEXT.emptyVault),
+                            h(SettingsButton, { key: 'settings', focus: 'vault', label: 'Open Canon\'s settings' })) : null,
+                    // Folders it may not read come first, drawn as a warning: notes are missing from turns.
+                    ...vaultNotes(v).map((text, i) => (i === 0 && v.counts?.closed > 0
+                        ? h('div', { key: `n${i}`, className: `${P}-line ${P}-warn`, 'data-canon-closed': '' }, text)
+                        : h('div', { key: `n${i}`, className: `${P}-line`, ...(text.includes('addressed to agents') ? { 'data-canon-addressed': '' } : {}) }, text))),
                     h('div', { key: 'access', className: `${P}-line`, 'data-canon-access': s.access }, writesText(s)),
                     h('div', { key: 'recall', className: `${P}-line`, 'data-canon-recall': s.recall ? 'on' : 'off' }, turnsText(s)));
             }
@@ -1577,8 +1604,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 main: true,
                 sub: TEXT.summary,
                 actions: h(SettingsButton, {}),
-                attrs: { 'data-canon-header': data.enabled ? v.state : 'off' },
-            }, said ? [h('p', { key: 'said', className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, said), h(React.Fragment, { key: 'body' }, body)] : body);
+                // The page is the region "Canon": its first card is not a second one inside it.
+                attrs: { 'aria-label': undefined, 'data-canon-header': data.enabled ? v.state : 'off' },
+            }, said ? [h('p', { key: 'said', ref: saidRef, tabIndex: -1, className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, said), h(React.Fragment, { key: 'body' }, body)] : body);
         }
 
         /**
@@ -1601,7 +1629,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 let ok = false;
                 try { ok = (await form.set(problem.key, problem.unquoted)) === true; } catch { ok = false; }
                 setBusy(false);
-                if (ok) onSaved(`Saved “${title}” as ${value}, without quotes. Canon works again.`);
+                const left = problem.also?.length ?? 0;
+                if (ok) onSaved(`Saved “${title}” as ${value}, without quotes. ${left === 0 ? 'Canon works again.' : `${left === 1 ? 'One more setting is' : `${left} more settings are`} still wrong.`}`);
                 else setFailed(true);
             };
             return h('div', { className: `${P}-fix`, 'data-canon-fix': problem.key },
@@ -1609,6 +1638,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('div', { className: `${P}-actions` },
                     h(ui.Button, { variant: 'primary', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void save(), 'data-canon-fix-save': '' }, busy ? 'Saving…' : `Save it as ${value}`)),
                 failed ? h('p', { className: `${P}-said ${P}-error`, role: 'alert' }, 'DSH did not save it. Change it in Canon\'s settings in Plugins instead.') : null);
+        }
+
+        /** What a fix saved, while another setting is still wrong: a status line that takes the focus. */
+        function SaidLine({ text }) {
+            const line = React.useRef(null);
+            React.useEffect(() => {
+                line.current?.focus?.();
+            }, [text]);
+            return h('p', { ref: line, tabIndex: -1, className: `${P}-said ${P}-fixed`, role: 'status', 'data-canon-fixed': '' }, text);
+        }
+
+        /** The other wrong settings, each in Canon's words, after the first (which the problem above names). */
+        function AlsoWrong({ also }) {
+            return h('div', { className: `${P}-also`, 'data-canon-also': '' },
+                h('p', { className: `${P}-trouble-text` }, also.length === 1 ? 'Also wrong:' : `${also.length} more are wrong:`),
+                h('ul', { className: `${P}-also-list` }, ...also.map((p) => h('li', { key: p.key, 'data-canon-also-key': p.key }, `${p.text}.`))));
         }
 
         /** Why a note fits, in words. */
@@ -1638,6 +1683,30 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             }
             if (r.why === 'other') return 'It belongs to another project than the one this folder or the prompt points at.';
             return 'It fits less well than the notes above, or too little to add.';
+        }
+
+        /** Why a note was close but not added, in a few words (missText says the rule, once, behind Why). */
+        function missShort(r) {
+            if (r.why === 'name') return 'It shares only a project\'s name.';
+            if (r.why === 'few' && !r.coding) {
+                if (r.unknown?.length) return `Too little in common: the prompt names ${listWords(r.unknown.map((w) => `“${w}”`))}, which no note has.`;
+                if (r.plain === 0) return 'Too little in common: only an everyday request word.';
+                return r.body ? 'Too little in common: one word, only in its body.' : 'Too little in common: one word, and the prompt asks more.';
+            }
+            if (r.why === 'few' && r.named) return 'Too little in common: the project\'s name and one word.';
+            if (r.why === 'few') return r.titled ? 'Too little in common: one word that says what it is about.' : 'Too little in common: one word, not in its title, tags, aliases or headings.';
+            if (r.why === 'part') return typeof r.share === 'number' ? `Too little of what the request asks: ${Math.round(r.share * 100)}% of it.` : 'Too little of what the request asks.';
+            if (r.why === 'other') return 'It belongs to another project.';
+            return 'It fits less well than the notes above.';
+        }
+
+        /** The rules behind a few words, said once each: a "Why" to open. */
+        function WhyRules({ rules }) {
+            const once = [...new Set(rules.filter(Boolean))];
+            if (!once.length) return null;
+            return h('details', { className: `${P}-details`, 'data-canon-why': '' },
+                h('summary', null, 'Why'),
+                ...once.map((text, i) => h('p', { key: `w${i}`, className: `${P}-why` }, text)));
         }
 
         function TryCard() {
@@ -1689,15 +1758,18 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return h('div', { 'data-canon-try-result': '' },
                 h('p', { className: `${P}-meta`, 'data-canon-try-place': '', 'data-canon-try-coding': result.coding ? '' : undefined }, `${result.place ? `For a session in ${result.place}.` : 'For a session with no folder.'} ${result.coding ? TEXT.readCoding : TEXT.readQuestion}`),
                 result.results.length === 0
-                    ? h(kit.Empty, { title: 'No note fits this prompt', text: result.coding ? TEXT.noFitCoding : TEXT.noFitQuestion })
+                    ? h(kit.Empty, { title: 'No note fits this prompt', text: TEXT.noFit, action: h(WhyRules, { rules: [(result.coding ? TEXT.noFitCoding : TEXT.noFitQuestion).replace(`${TEXT.noFit} `, '')] }) })
                     : h('div', { className: `${P}-section` },
                         h('h3', { className: `${P}-section-title` }, `A turn with this prompt gets ${plural(result.results.length, 'note')}`),
                         h('ul', { className: `${P}-list` }, ...result.results.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-result': r.path },
                             h('div', { className: `${P}-item-main` },
                                 h('div', { className: `${P}-title` }, nameOf(r)),
                                 h('div', { className: `${P}-meta ${P}-code` }, r.path),
+                                // Its kind and date, and the newer decision it comes after, as its citation in the block says.
+                                r.kind || r.when || r.older ? h('div', { className: `${P}-meta`, 'data-canon-about': '' }, sentence(upper([r.kind, r.when, r.older ? `older than ${r.older}, which comes first` : ''].filter(Boolean).join(', ')))) : null,
                                 h('div', { className: `${P}-why` }, whyText(r)),
-                                r.passage ? h('p', { className: `${P}-quote` }, r.passage) : null),
+                                r.passage ? h('p', { className: `${P}-quote` }, r.passage) : null,
+                                r.leftOut ? h('div', { className: `${P}-meta`, 'data-canon-left-out': '' }, `${r.leftOut === 1 ? 'A line' : `${plural(r.leftOut, 'line')}`} of this note ${r.leftOut === 1 ? 'is' : 'are'} addressed to agents, so ${r.leftOut === 1 ? 'it is' : 'they are'} left out: Canon never quotes ${r.leftOut === 1 ? 'it' : 'them'} into a turn.`) : null),
                             r.folder ? h('div', { className: `${P}-item-side` }, h(ui.Tag, { tone: 'info', className: `${P}-tag` }, r.folder === 'repo' ? 'this project' : 'nearby')) : null))),
                         result.block ? h('details', { className: `${P}-details` },
                             h('summary', null, `The exact text the turn gets (${plural(result.block.chars, 'character')})`),
@@ -1707,7 +1779,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('ul', { className: `${P}-list` }, ...result.others.map((r) => h('li', { key: r.path, className: `${P}-item`, 'data-canon-other': r.path },
                         h('div', { className: `${P}-item-main` },
                             h('div', null, nameOf(r)),
-                            h('div', { className: `${P}-why` }, missText(r))))))) : null);
+                            h('div', { className: `${P}-why` }, missShort(r)))))),
+                    h(WhyRules, { rules: result.others.map(missText) })) : null);
         }
 
         function SessionsCard({ data }) {
@@ -1749,18 +1822,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             React.useEffect(() => {
                 if (said.text) saidRef.current?.focus?.();
             }, [said]);
-            const onPromote = async (draft) => {
+            const act = async (what, draft) => {
                 if (busy) return;
-                setBusy(draft.path);
+                setBusy(`${what}:${draft.path}`);
                 setSaid({ text: '', bad: false });
-                const { problem, value } = await run('promote', { path: draft.path });
+                const { problem, value } = await run(what, { path: draft.path });
                 setBusy('');
                 setSaid(problem ? { text: problem, bad: true }
-                    : { text: `Promoted “${nameOf(draft)}”: it is now an active note, ${value.path}, and turns can get it.`, bad: false });
+                    : what === 'promote'
+                        ? { text: `Promoted “${nameOf(draft)}”: it is now an active note, ${value.path}, and turns can get it.`, bad: false }
+                        : { text: `Discarded “${nameOf(draft)}”: it is in the vault's trash now, ${value.path}. Move it back to ${s.draftsFolder} to keep it.`, bad: false });
                 onChanged();
             };
-            const sub = s.access === 'drafts'
-                ? `Notes agents saved in ${s.draftsFolder}. None is added to a turn until a person promotes it.`
+            const writes = s.access === 'drafts';
+            const sub = writes
+                ? `Notes agents saved in ${s.draftsFolder}. None is added to a turn until a person promotes it; Discard moves one to the vault's trash.`
                 : `The notes in the drafts folder, ${s.draftsFolder}. Canon is read only, so agents save none there, and none is ever added to a turn.`;
             return h(kit.Card, { title: TEXT.drafts, sub, attrs: { 'data-canon-drafts': String(data.drafts.length), 'data-canon-promote': s.access === 'drafts' && s.promote ? 'on' : 'off' } },
                 h('div', { className: `${P}-lines` }, h('div', { className: `${P}-line` }, promoteText(s), s.access === 'drafts' && s.promote ? null : h(SettingsButton, { focus: s.access === 'drafts' ? 'promote' : 'access', label: 'Open Canon\'s settings', variant: 'ghost' }))),
@@ -1783,10 +1859,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                 d.created ? h('span', null, 'Saved ', h(kit.TimeText, { at: d.created })) : null,
                                 d.sessionId ? h('span', null, d.created ? ' from ' : 'From ', h(SessionLink, { title: d.sessionTitle || 'a session', sessionId: d.sessionKnown === false ? '' : d.sessionId }), Number.isSafeInteger(d.turn) ? `, turn ${d.turn}` : '') : null,
                                 h('span', { className: `${P}-code` }, `${d.created || d.sessionId ? ' · ' : ''}${d.path}`)),
-                            d.preview ? h('div', { className: `${P}-why` }, d.preview) : null),
+                            d.preview ? h('div', { className: `${P}-why` }, d.preview) : null,
+                            Array.isArray(d.related) && d.related.length
+                                ? h('div', { className: `${P}-meta`, 'data-canon-related': d.related.map((r) => r.path).join('\n') },
+                                    `Active ${d.related.length === 1 ? 'note' : 'notes'} on the same subject: `,
+                                    ...d.related.flatMap((r, i) => [i ? '; ' : '', `“${nameOf(r)}” `, h('span', { key: r.path, className: `${P}-code` }, `(${r.path})`)]),
+                                    '. Read ', d.related.length === 1 ? 'it' : 'them', ' before you promote this draft.')
+                                : null,
+                            // The whole draft, when it holds more than the line above shows.
+                            typeof d.body === 'string' && d.body !== '' && d.body.replace(/\s+/g, ' ').trim() !== d.preview ? h('details', { className: `${P}-details`, 'data-canon-draft-body': '' },
+                                h('summary', null, 'Read the whole draft'),
+                                h('p', { className: `${P}-quote` }, d.body)) : null),
                         h('div', { className: `${P}-item-side` },
                             d.kind ? h(ui.Tag, { tone: 'quiet', className: `${P}-tag` }, KIND_WORD[d.kind] ?? d.kind) : null,
-                            h(ui.Button, { variant: 'outline', size: 'sm', 'aria-disabled': busy === d.path ? 'true' : undefined, onClick: () => void onPromote(d), 'aria-label': `Promote ${nameOf(d)}` }, busy === d.path ? 'Promoting…' : 'Promote'))))));
+                            h(ui.Button, { variant: 'outline', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void act('promote', d), 'aria-label': `Promote ${nameOf(d)}` }, busy === `promote:${d.path}` ? 'Promoting…' : 'Promote'),
+                            writes ? h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void act('discard', d), 'aria-label': `Discard ${nameOf(d)} to the vault's trash`, 'data-canon-discard': d.path }, busy === `discard:${d.path}` ? 'Discarding…' : 'Discard') : null)))));
         }
 
         /** What happened lists this many entries until "Show all". */
@@ -1819,13 +1906,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const live = kit.useLive(() => api.read('state'), CHANNELS, { delayMs: 300 });
             const [reading, setReading] = React.useState(false);
             const [readProblem, setReadProblem] = React.useState('');
-            // What the waiting state's fix saved, said on the page it comes back to.
-            const [fixed, setFixed] = React.useState('');
+            // What the waiting state's fix saved, said on the page it comes back to: working again, or waiting on
+            // another wrong setting.
+            const [fixed, setFixed] = React.useState({ text: '', shown: false });
             const data = live.data;
             const problemText = data?.problem?.text;
-            // A new setting problem: what an earlier fix saved is old news.
+            // The first change of the problem after a fix is the fix itself; any later one makes what it saved old news.
             React.useEffect(() => {
-                if (problemText) setFixed('');
+                setFixed((f) => (!f.text ? f : f.shown ? { text: '', shown: false } : { ...f, shown: true }));
             }, [problemText]);
             const down = live.code === 'not-running' || (data === undefined && live.error);
             const onRead = async () => {
@@ -1841,19 +1929,22 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const ok = data && data.enabled && !data.problem && data.vault.state === 'ok';
             return h(kit.Page, { label: TEXT.title, attrs: { 'data-canon-page': '' } },
                 down
-                    ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary },
+                    ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined } },
                         h(kit.Trouble, { name: 'Canon', packageName: BUNDLE, code: live.code, text: live.error, onRetry: live.refresh, needsWatch: false }))
                     : data === undefined
-                        ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true }, h(kit.Loading, { text: TEXT.loading }))
+                        ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, attrs: { 'aria-label': undefined } }, h(kit.Loading, { text: TEXT.loading }))
                         : data.problem
                             ? [
-                                h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-canon-header': 'problem' } },
+                                h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined, 'data-canon-header': 'problem' } },
+                                    fixed.text ? h(SaidLine, { key: 'said', text: fixed.text }) : null,
                                     h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem }),
-                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed(text); void live.refresh(); } })),
+                                    // Save it as N fixes the setting just named, so it sits right under it, before the others that are wrong.
+                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed({ text, shown: false }); void live.refresh(); } }),
+                                    data.problem.also?.length ? h(AlsoWrong, { key: 'also', also: data.problem.also }) : null),
                                 h(HistoryCard, { key: 'history', data, titles }),
                             ]
                             : [
-                                h(HeaderCard, { key: 'head', data, onRead: () => void onRead(), reading, said: fixed }),
+                                h(HeaderCard, { key: 'head', data, onRead: () => void onRead(), reading, said: fixed.text }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
                                 readProblem ? h(kit.ErrorLine, { key: 'read', lead: 'Couldn\'t read the vault again', text: readProblem, onRetry: () => void onRead() }) : null,
                                 ok ? h(TryCard, { key: 'try' }) : null,
@@ -1866,6 +1957,91 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** The panel entry's glyph. */
         function CanonIcon({ size = 16 }) {
             return h('span', { className: `${P}-icon`, 'data-canon-icon': '' }, h(BookGlyph, { size }));
+        }
+
+        /**
+         * A number or true/false written in quotes in the profile that is right without them: the profile's
+         * text, the form's text for what Canon would take ('3', 'on', 'off') and the form's words for it.
+         */
+        function quotedSetting(f, value) {
+            if (typeof value !== 'string' || (f.kind !== 'number' && f.kind !== 'switch')) return undefined;
+            const text = value.trim();
+            let fixed;
+            if (f.kind === 'switch' && /^(?:true|false)$/i.test(text)) fixed = text.toLowerCase() === 'true' ? 'on' : 'off';
+            if (f.kind === 'number' && /^\d+$/.test(text) && Number(text) >= f.min && Number(text) <= f.max) fixed = String(Number(text));
+            if (fixed === undefined) return undefined;
+            return { raw: value, text: fixed, words: `“${value}” is text: it is written in quotes in the profile, so Canon waits. Save writes it as ${f.kind === 'switch' ? `${fixed}, a switch` : `the number ${fixed}`}.` };
+        }
+
+        /**
+         * Canon's settings on its page in Plugins: DSH's own form model and the kit's rows, as the kit's
+         * applySettings draws them (Canon has no secret), and three things more:
+         * - a number or true/false in quotes in the profile is marked wrong in Canon's words, and the value Canon
+         *   would take is put in the form when it opens, so Save is on and writes it as a number or a switch
+         *   (DSH's form drops what it holds when it closes; it is put back the next time it opens);
+         * - "Changed" and Use the default only for a value that is not the default;
+         * - after a Save, the focus goes to a status line that says so: Save is off then, and the focus would be
+         *   lost. A Save DSH refuses is said by DSH's form beside Save, which keeps the focus.
+         */
+        function applyCanonSettings(ctx, { entry, name, summary, fields, note }) {
+            if (typeof ui.SettingsFormModel !== 'function' || typeof ui.SettingsForm !== 'function' || typeof ctx.configForms?.get !== 'function') return;
+            const scope = ctx.configForms.get(entry);
+            const snap = () => scope.getSnapshot?.() ?? {};
+            const quotedNow = (f) => quotedSetting(f, snap().value?.[f.name]);
+            const drawn = fields.map((f) => (f.kind === 'number' || f.kind === 'switch' ? { ...f, get invalid() { return quotedNow(f)?.words; } } : f));
+            const specs = new Map(drawn.map((f) => {
+                const spec = kit.fieldSpec(f);
+                // A value in quotes shows with them until the form holds the fix, so the two differ and Save writes it.
+                return [f.name, { ...spec, format: (v) => (quotedSetting(f, v) ? `“${v}”` : spec.format(v)) }];
+            }));
+            const model = new ui.SettingsFormModel(scope, [...specs.values()], []);
+            const actions = model.actions();
+            const isDefault = (f, text) => text === specs.get(f.name).format(snap().base?.[f.name] ?? f.default);
+            const projection = () => {
+                const out = { ...model.shell() };
+                for (const f of drawn) {
+                    const state = model.field(f.name);
+                    const q = quotedNow(f);
+                    out[f.name] = q && state.text === q.text ? { ...state, invalid: true } : { ...state, overridden: state.overridden && !isDefault(f, state.text) };
+                }
+                return out;
+            };
+            const store = model.bind(projection);
+            const form = { subscribe: (fn) => store.subscribe(fn), getSnapshot: () => store.getSnapshot(), actions, keepers: new Map() };
+            const putFixes = () => {
+                for (const f of drawn) {
+                    const q = quotedNow(f);
+                    if (q && model.field(f.name).text === specs.get(f.name).format(q.raw)) actions.edit(f.name, q.text);
+                }
+            };
+            function CanonSettings() {
+                const [saved, setSaved] = React.useState(false);
+                const line = React.useRef(null);
+                React.useEffect(() => {
+                    putFixes();
+                    return scope.subscribe?.(putFixes);
+                }, []);
+                // A Save that ends well says so; the next change takes the line away.
+                React.useEffect(() => {
+                    let was = form.getSnapshot().saving;
+                    return form.subscribe(() => {
+                        const now = form.getSnapshot();
+                        if (was && !now.saving) setSaved(!now.failed);
+                        else if (now.dirty && !now.saving) setSaved(false);
+                        was = now.saving;
+                    });
+                }, []);
+                React.useEffect(() => {
+                    if (saved) line.current?.focus?.();
+                }, [saved]);
+                return h('div', { className: `${P}-set-wrap` },
+                    h(kit.SettingsBody, { form, name, fields: drawn, note }),
+                    h('p', { ref: line, tabIndex: -1, role: 'status', className: `${P}-said`, 'data-canon-saved': saved ? '' : undefined }, saved ? TEXT.settingsSaved : ''));
+            }
+            const View = (props) => (props?.view === 'summary' ? summary : h(CanonSettings, {}));
+            ctx.effect(() => () => model.dispose(), `${BUNDLE}: settings form`);
+            ctx.effect(() => ctx.configForms.whileServed([entry], () => ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({ name: 'plugins.bundle.config', key: BUNDLE }, View))), `${BUNDLE}: settings page`);
+            return { model, form, View };
         }
 
         const inject = ['slots'];
@@ -1898,7 +2074,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     saved = scope.configForms?.get?.('canon');
                     views.settings = saved;
                     const fields = settingsFields(() => saved?.getSnapshot?.()?.value?.draftsFolder);
-                    kit.applySettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields, note: SETTINGS_NOTE });
+                    applyCanonSettings(scope, { entry: 'canon', name: 'Canon', summary: SETTINGS_SUMMARY, fields, note: SETTINGS_NOTE });
                 } catch (error) {
                     console?.warn?.('dsh-plugin-canon: settings:', error);
                 }
@@ -1930,7 +2106,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, settingsFields, views, notesOf, sameNotes, writesText, promoteText, turnsText, vaultText, vaultNotes, whyText, missText,
-            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard,
+            CanonTurn, TurnCard, CanonPage, CanonIcon, HeaderCard, QuotedFix, TryCard, TryResult, SessionsCard, DraftsCard, HistoryCard, quotedSetting, applyCanonSettings, missShort, AlsoWrong,
         };
         return module.exports;
     },
