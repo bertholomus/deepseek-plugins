@@ -70,6 +70,7 @@ export class ProjectsRemote {
             return {
                 ...this.lists(), guarded: this.manager.guards().map(([name]) => name), permissions: this.manager.permissionCatalog(),
                 problems: this.manager.configProblems().map((p) => p.message),
+                store: this.manager.storeProblems(),
             };
         } catch (error) {
             throw failure(error);

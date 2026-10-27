@@ -1106,9 +1106,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const guarded = Array.isArray(result.value.guarded) ? result.value.guarded.filter((name) => typeof name === 'string' && name !== '') : [];
                     const permissions = isObject(result.value.permissions) ? result.value.permissions : null;
                     const problems = Array.isArray(result.value.problems) ? result.value.problems.filter((text) => typeof text === 'string' && text !== '') : [];
+                    const store = Array.isArray(result.value.store) ? result.value.store.filter((text) => typeof text === 'string' && text !== '') : [];
                     const off = result.value.off === true;
                     setValue((was) => (was && was.guarded.join('\n') === guarded.join('\n') && JSON.stringify(was.permissions) === JSON.stringify(permissions)
-                        && was.problems.join('\n') === problems.join('\n') && was.off === off ? was : { guarded, permissions, problems, off }));
+                        && was.problems.join('\n') === problems.join('\n') && was.store.join('\n') === store.join('\n') && was.off === off ? was : { guarded, permissions, problems, store, off }));
                 };
                 void read();
                 const timer = setInterval(() => {
@@ -1123,6 +1124,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             one: 'A setting to fix',
             many: (n) => `${n} settings to fix`,
             where: 'In your profile\'s cordis.patch.yml, in the row "- id: coordinator". The plugin keeps running meanwhile, as each line says.',
+            store: 'Its record of coordinating chats',
             off: 'Switched off',
             offWhy: 'Its row in your profile\'s cordis.patch.yml ("- id: coordinator") says enabled: false, so no chat coordinates and no chat is offered the thread tools. Set it to true, or take the line out, to coordinate again.',
         };
@@ -1180,6 +1182,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 list.length > 0 ? h('ul', { className: 'dshp-problems-list' }, ...list.map((text, i) => h('li', { key: i }, text))) : null);
         }
 
+        /** What went wrong with the plugin's own record (remote.js list `store`), each in words with what to do; nothing while it is fine. */
+        function StoreProblems({ notes }) {
+            const list = Array.isArray(notes) ? notes : EMPTY;
+            if (list.length === 0) return null;
+            return h('section', { className: 'dshp-problems', 'data-projects-store-problems': '', 'aria-labelledby': 'dshp-store-title' },
+                h('h4', { id: 'dshp-store-title', className: 'dshp-title dshp-problems-title' }, PROBLEMS.store),
+                h('ul', { className: 'dshp-problems-list' }, ...list.map((text, i) => h('li', { key: i }, text))));
+        }
+
         function DefaultsForm({ form, catalog, link }) {
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const cat = React.useSyncExternalStore(catalog.subscribe, catalog.getSnapshot);
@@ -1192,6 +1203,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const disabled = !state.writable || state.saving;
             return h('div', { 'data-projects-defaults': true },
                 h(SettingProblems, { problems: listed?.problems, off: listed?.off === true }),
+                h(StoreProblems, { notes: listed?.store }),
                 h('h3', { className: 'dshp-heading' }, 'Default models'),
                 h(ui.SettingsForm, { labels, state, onSave: form.actions.save, onDiscard: form.actions.discard },
                     ...ROUTES.map((route) => h(RouteSection, { key: route.id, route, state, actions: form.actions, catalog: cat, models, disabled })),

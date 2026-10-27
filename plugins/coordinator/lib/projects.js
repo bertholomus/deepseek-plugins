@@ -379,6 +379,19 @@ function rosterIds(threads) {
 }
 
 /** The handbacks among the messages a pause holds: which thread, with what status. */
+/** A path under the home folder as "~/…", as the owner would type it. */
+function homeWords(path) {
+    const home = homedir();
+    return path === home ? '~' : path.startsWith(`${home}${sep}`) ? `~${path.slice(home.length)}` : path;
+}
+
+/** An ISO time as the owner's clock reads it ("7:12 PM"), or "an unknown time". */
+function clockWords(iso) {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return 'an unknown time';
+    return at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 function heldHandbacks(pending) {
     const out = [];
     for (const item of Array.isArray(pending) ? pending : []) {
@@ -517,6 +530,8 @@ export class ProjectManager {
         managers.set(this.storeFile, this);
         this.disposed = false;
         this.logFile = config.logFile ? dataPath(config.logFile) : '';
+        /** Where the store says what went wrong with its file (store.js): this manager's log, while it is the newest. */
+        this.storeReport = (line) => this.log(line);
         /** Set by apply when the notifications plugin is around: one news item, for a system notification (noteNews). */
         this.newsSink = undefined;
         if (this.logFile) {
@@ -610,7 +625,26 @@ export class ProjectManager {
      * into the copy the newest manager reads, never over it.
      */
     get store() {
-        return ProjectStore.open(this.storeFile);
+        return ProjectStore.open(this.storeFile, managers.get(this.storeFile) === this ? this.storeReport : undefined);
+    }
+
+    /**
+     * What went wrong with the plugin's own file (store.js `problems`), in
+     * words for its page: a file it couldn't read, and a save that fails.
+     */
+    storeProblems() {
+        const { unreadable, saveFailed } = this.store.problems ?? {};
+        const out = [];
+        const folder = homeWords(dirname(this.storeFile));
+        if (unreadable) {
+            out.push(unreadable.kept
+                ? `At ${clockWords(unreadable.at)} the plugin couldn't read its record of coordinating chats (${unreadable.reason}), so it started without them. That file is kept as ${unreadable.kept} in ${folder}: to bring them back, put it back as ${basename(this.storeFile)} while DSH is closed, or run /coordinate again in each chat.`
+                : `At ${clockWords(unreadable.at)} the plugin couldn't read its record of coordinating chats (${unreadable.reason}) or move it aside, so it saves nothing over it, and what changes now is lost when DSH closes. Fix or move ${basename(this.storeFile)} in ${folder}, then switch the plugin off and on.`);
+        }
+        if (saveFailed) {
+            out.push(`Since ${clockWords(saveFailed.at)} the plugin can't save its record of coordinating chats (${saveFailed.reason}). What changed since then is lost if DSH closes before a save goes through; it tries again at each change.`);
+        }
+        return out;
     }
 
     project(projectId) {

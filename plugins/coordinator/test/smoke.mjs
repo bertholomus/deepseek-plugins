@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
@@ -2994,6 +2994,90 @@ test('store: a reload keeps one copy, so a tool call that outlives the old insta
     assert.match(await started, /^Started t1 "Late"/);
     const saved = JSON.parse(readFileSync(join(dir, 'coordinator.json'), 'utf8')).projects['dsh-plugins'];
     assert.deepEqual([saved.settings.threadEffort, saved.threads.t1?.title], ['max', 'Late']);
+});
+
+test('store: a file it can\'t read is kept aside under a new name, never written over, and said in the log and on the page', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const file = join(dir, 'coordinator.json');
+    // A record cut short (a full disk, a bad copy): a chat, its thread and a held handback in it.
+    const cut = '{\n  "version": 1,\n  "projects": {\n    "dsh-plugins": {\n      "coordinatorSessionId": "dsh-plugins",\n      "threads": { "t1": { "sessionId": "s9", "ti';
+    writeFileSync(file, cut);
+    const { host } = setup({}, dir, { gateway: true }, { chat: false });
+    await tick();
+    const kept = readdirSync(dir).filter((name) => name.startsWith('coordinator.json.unreadable-'));
+    assert.equal(kept.length, 1, 'one copy kept aside');
+    assert.match(kept[0], /^coordinator\.json\.unreadable-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z$/);
+    assert.equal(readFileSync(join(dir, kept[0]), 'utf8'), cut, 'byte for byte');
+    assert.equal(statSync(join(dir, kept[0])).mode & 0o777, 0o600);
+    const log = () => readFileSync(join(dir, 'coordinator.log'), 'utf8');
+    assert.match(log(), new RegExp(` store-unreadable ${file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} \\(it is not whole JSON\\) kept as .*${kept[0]}\\n`));
+    const remote = host.provided.get('dshPluginCoordinatorRemote');
+    const listed = await remote.list();
+    assert.deepEqual(listed.projects, []);
+    assert.equal(listed.store.length, 1);
+    assert.match(listed.store[0], new RegExp(`^At \\d{1,2}:\\d\\d [AP]M the plugin couldn't read its record of coordinating chats \\(it is not whole JSON\\), so it started without them\\. That file is kept as ${kept[0]} in .*: to bring them back, put it back as coordinator\\.json while DSH is closed, or run /coordinate again in each chat\\.$`));
+    // The next save writes a new record; the copy stays as it was.
+    assert.equal((await coordinateIn(host, openChat(host, CHAT, { title: 'DSH Plugins' }))).kind, 'success');
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).projects[CHAT].coordinatorSessionId, CHAT);
+    assert.equal(readFileSync(join(dir, kept[0]), 'utf8'), cut);
+    assert.equal(log().match(/ store-unreadable /g).length, 1, 'said once');
+
+    // Another format (a newer version's, or a hand edit) is kept aside too, never read as no chats and written over.
+    const dir2 = mkdtempSync(join(tmpdir(), 'projects-'));
+    writeFileSync(join(dir2, 'coordinator.json'), '{"version":2,"chats":{}}');
+    const second = setup({}, dir2, {}, { chat: false });
+    await tick();
+    const kept2 = readdirSync(dir2).filter((name) => name.startsWith('coordinator.json.unreadable-'));
+    assert.equal(kept2.length, 1);
+    assert.equal(readFileSync(join(dir2, kept2[0]), 'utf8'), '{"version":2,"chats":{}}');
+    assert.match(readFileSync(join(dir2, 'coordinator.log'), 'utf8'), / store-unreadable .* \(it is not this plugin's record\) kept as /);
+    void second;
+});
+
+test('store: an unreadable file that can\'t be moved aside is never saved over; a failed save is said once, and again when one goes through', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const data = join(dir, 'data');
+    mkdirSync(data);
+    const file = join(data, 'coordinator.json');
+    writeFileSync(file, '{"version":1,"projects":');
+    // The folder can't be written: the file can be neither moved nor copied aside.
+    chmodSync(data, 0o500);
+    try {
+        const { host } = setup({ storeFile: file }, dir, { gateway: true }, { chat: false });
+        await tick();
+        await coordinateIn(host, openChat(host, CHAT, { title: 'DSH Plugins' }));
+        await tick();
+        assert.equal(readFileSync(file, 'utf8'), '{"version":1,"projects":', 'nothing saved over it');
+        const log = readFileSync(join(dir, 'coordinator.log'), 'utf8');
+        assert.match(log, / store-unreadable .* \(it is not whole JSON\) left as it is; nothing is saved over it\n/);
+        assert.match(log, / store-save-failed .* \(the unreadable file is still in its place\)\n/);
+        assert.equal(log.match(/ store-save-failed /g).length, 1, 'said once, not at every change');
+        const listed = await host.provided.get('dshPluginCoordinatorRemote').list();
+        assert.equal(listed.store.length, 2);
+        assert.match(listed.store[0], /^At .* the plugin couldn't read its record of coordinating chats \(it is not whole JSON\) or move it aside, so it saves nothing over it, and what changes now is lost when DSH closes\. Fix or move coordinator\.json in .*data, then switch the plugin off and on\.$/);
+        assert.match(listed.store[1], /^Since .* the plugin can't save its record of coordinating chats \(the unreadable file is still in its place\)\./);
+    } finally {
+        chmodSync(data, 0o700);
+    }
+
+    // A save that fails (a folder where its temporary file goes), then goes through.
+    const dir2 = mkdtempSync(join(tmpdir(), 'projects-'));
+    const { host, raw } = setup({}, dir2, { gateway: true });
+    await tick();
+    mkdirSync(join(dir2, 'coordinator.json.tmp'));
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
+    await coord.ctx.call('thread_settings', { thread_effort: 'max' });
+    const log = () => readFileSync(raw.logFile, 'utf8');
+    assert.match(log(), / store-save-failed .*coordinator\.json \(a folder has its name\)\n/);
+    assert.equal(log().match(/ store-save-failed /g).length, 1);
+    assert.equal((await host.provided.get('dshPluginCoordinatorRemote').list()).store.length, 1);
+    rmSync(join(dir2, 'coordinator.json.tmp'), { recursive: true });
+    await coord.ctx.call('thread_settings', { thread_effort: 'low' });
+    assert.match(log(), / store-saved .*coordinator\.json \(after failing since .*\)\n/);
+    const saved = JSON.parse(readFileSync(join(dir2, 'coordinator.json'), 'utf8')).projects[CHAT];
+    assert.deepEqual([saved.threads.t1.title, saved.settings.threadEffort], ['Docs', 'low'], 'what changed meanwhile is saved');
+    assert.deepEqual((await host.provided.get('dshPluginCoordinatorRemote').list()).store, []);
 });
 
 // ── code changes (changes.js) ──────────────────────────────────────────────
