@@ -1251,3 +1251,32 @@ test('judge: look-only answers that say what code did, what a plan does, or what
     assert.equal(verdicts('Fix the header check and tell me why it failed.', 'Fixed: `parse_header` built its regex once, before the loop.', look).length, 1);
     assert.deepEqual(verdicts('Run the fine-tune and tell me when it is done.', 'The fine-tune is done.', [bash('python train.py', 'CUDA out of memory\n[exit code: 1]')]), ['contradicted']);
 });
+
+test('judge: after a why or how question, a pass, a deploy or a fix told as how a thing behaves claims nothing; status questions still need evidence', () => {
+    const verdicts = (prompt, text, items) => claimsIn(text).map((c) => judge(c, items, { prompt }).verdict).filter((v) => v !== 'none');
+    const look = [read('src/client.py')];
+    const why = 'Why does this happen? Just explain, do not change anything.';
+    // A condition, a habit, a time it takes, a sequence, or a pass set against a failure.
+    assert.deepEqual(verdicts(why, '`test_totals` passes when it runs alone and fails after `test_reset`, which leaves the cache warm.', look), []);
+    assert.deepEqual(verdicts(why, 'On CI the job usually passes on the second try.', look), []);
+    assert.deepEqual(verdicts(why, 'It builds fine on Node 20 but fails on Node 18 because of `Array.prototype.findLast`.', look), []);
+    assert.deepEqual(verdicts(why, 'The rollout completes in about four minutes because `maxSurge` is 1.', look), []);
+    assert.deepEqual(verdicts(why, 'After `prisma migrate deploy` runs, the app starts and the health check passes.', look), []);
+    // How a thing is deployed, history named by a release, the person's own setup.
+    assert.deepEqual(verdicts(why, 'The handler is deployed behind the gateway, so its own `/health` never sees the public path.', look), []);
+    assert.deepEqual(verdicts(why, 'The fix for this landed in 3.1.0; you are on 3.0.4.', look), []);
+    // "Fixed at 8080" is "set to", in any turn.
+    assert.deepEqual(claimsIn('The port is fixed at 8080 in the Dockerfile.'), []);
+    assert.deepEqual(claimsIn('The test is fixed to seed 42, so the shuffle is the same on every run.'), []);
+    assert.equal(claimsIn('I fixed the parser to accept a BOM.')[0]?.kind, 'fixed');
+    // A cause of what the why question takes as given.
+    assert.deepEqual(verdicts('Why does it work locally but fail on CI?', 'It works locally because your `.env` sets `API_URL`; CI has no such file.', look), []);
+    assert.deepEqual(verdicts('Why is CI green on main but red on my branch?', 'The CI job is green on main because the flaky test is marked `skip` there.', [read('.github/workflows/ci.yml')]), []);
+    // Controls: a status question, a run or a count of this turn, a cause the question did not give, own work.
+    assert.deepEqual(verdicts('Is the new build deployed to staging?', 'Yes, it is deployed on staging because the merge triggered it.', look), ['unbacked']);
+    assert.deepEqual(verdicts('Did the tests pass on CI?', 'Yes, CI passes on every push.', look), ['unbacked']);
+    assert.deepEqual(verdicts('Is the fix out?', 'It shipped in 3.1.0.', [read('CHANGELOG.md')]), ['unbacked']);
+    assert.deepEqual(verdicts('Why is the checkout page slow? Just look.', 'I ran the load test and all 40 requests pass under 200 ms.', look), ['unbacked']);
+    assert.deepEqual(verdicts('Why is the checkout page slow? Just look.', 'CI is green because the suite passed on the last run.', look).length, 2);
+    assert.ok(verdicts('Why is the checkout page slow? Just look.', 'The tests pass because I fixed the import.', look).includes('unbacked'));
+});

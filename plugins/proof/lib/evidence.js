@@ -2446,7 +2446,9 @@ const deployLook = (i) => (i.kind === 'read' && DEPLOY_FILE.test(String(i.text ?
  * Pass claims and health claims are never descriptions: they say how a run or a service went.
  */
 export function described(claim, items, prompt = '') {
-    if (!claim || claim.kind === 'passed' || (claim.kind === 'deployed' && (claim.target === 'health' || claim.ship))) return false;
+    if (!claim) return false;
+    // A pass, a health check or a ship says how a run or a service went, unless it is told as how a thing behaves.
+    const ran = claim.kind === 'passed' || (claim.kind === 'deployed' && (claim.target === 'health' || claim.ship));
     const list = Array.isArray(items) ? items.filter(Boolean) : [];
     const ask = typeof prompt === 'string' ? prompt.trim() : '';
     if (list.length === 0 || !LOOK_ASK.test(ask) || list.some(CHANGES) || BUILD_ASK.test(ask) || WRITE_UP_ASK.test(ask) || ABOUT_OWN_WORK.test(ask)) return false;
@@ -2465,6 +2467,11 @@ export function described(claim, items, prompt = '') {
     if (CHANGE_REQUEST.test(told.replace(/\b(?:do\s+not|don'?t|never|without|no\s+need\s+to)\s+(?:[\w-]+\s+){0,3}?[\w-]+[^.!?\n]*/gi, ' '))) return false;
     const words = String(claim.part ?? claim.text ?? '').replace(/[`*]/g, '').trim();
     if (words === '' || CHANGED_NOW.test(words)) return false;
+    // "passes when it runs alone", "usually passes on the second try", "builds fine on Node 20 but fails on Node 18",
+    // "the rollout completes in about four minutes", "is deployed behind the gateway", "the fix landed in 3.1.0":
+    // how a thing behaves or what its history is, after a why or how question, not "Is it deployed?".
+    if (behaves(claim, words, String(claim.text ?? '').replace(/[`*]/g, ''), ask) && !statusAsked(ask)) return true;
+    if (ran) return false;
     // "`test_export_csv` built its header before the call", "`aws_s3_bucket_versioning.assets` — replaced along with it":
     // code is the subject, so the clause says what the code does or did, or what a plan does to it.
     const sentence = String(claim.text ?? '').replace(/[`*]/g, '').trim();
@@ -2477,6 +2484,41 @@ export function described(claim, items, prompt = '') {
     if (claim.kind === 'fixed') return FIX_HISTORY.test(words);
     return true;
 }
+/** How a thing behaves: a condition, a habit, a time it takes, a sequence, or a pass set against a failure. */
+const HABIT = /\b(?:when|whenever|unless|as\s+long\s+as|only\s+(?:when|if|with|on|after|once|under)|usually|often|sometimes|always|occasionally|typically|normally|generally|mostly|rarely|every\s+(?:time|run|push|deploy|release|merge|build|night|day|morning|hour)|each\s+time|on\s+(?:every|each)\s+\w+|in\s+(?:about|around|roughly|under)\s+\w+\s+(?:seconds?|minutes?|hours?|s|ms|min)|takes\s+(?:about|around|roughly)\b)\b|^(?:after|once|when|whenever|before|until|if)\b/i;
+const AGAINST_FAIL = /\b(?:but|and|while|whereas|yet)\s+(?:it\s+|they\s+|then\s+)?(?:fails|breaks|errors|crashes|times\s+out|hangs|flakes|panics)\b/i;
+/** How a thing is deployed ("behind the gateway", "as a sidecar", "with 3 replicas"), not whether it went out. */
+const DEPLOY_MANNER = /\b(?:deployed|runs?|running)\s+(?:behind|as\s+an?\b|alongside|next\s+to|inside|in\s+front\s+of|per\b|with\s+\d+|to\s+each|on\s+each|on\s+every)/i;
+/** History named by a release, a pull request or a commit: "landed in 3.1.0", "shipped in #1234", "went out with `a1b2c3d`". */
+const NAMED_HISTORY = /\b(?:in|by|since|with|as\s+of)\s+(?:(?:commit|release|version|pr|tag)\s+)?(?:v?\d+\.\d+(?:\.\d+)?\b|#\d+\b|(?=[0-9a-f]{0,39}\d)(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}\b)/i;
+/** A run or a count of this turn: "I ran it", "all 212 examples pass", "14 passed". */
+const RUN_RESULT = /^(?:i|we)\b|\b(?:i|we)\s+(?:ran|re-?ran|tried|checked|tested)\b|\b\d+\s+(?:of\s+\d+\s+)?(?:tests?|specs?|examples?|cases?|checks?|suites?|passed|passing|green)\b|\b(?:all|both|every)\s+(?:\d+\s+)?(?:tests?|specs?|examples?|checks?)\b/i;
+/** A cause given right after the clause: "is green on main because …", "works locally due to …". */
+const CAUSE_NEXT = /^\W{0,3}(?:only\s+)?(?:because|due\s+to|thanks\s+to)\b/i;
+const CAUSE_IN = /\b(?:because|due\s+to|thanks\s+to)\b/i;
+const PLAIN = new Set(['the', 'and', 'but', 'this', 'that', 'these', 'those', 'its', 'are', 'was', 'were', 'has', 'have', 'had', 'been', 'only', 'still', 'also', 'just', 'all', 'any', 'for', 'with', 'from', 'into', 'onto', 'our', 'your', 'their', 'there', 'here', 'then', 'than', 'which', 'when', 'what', 'why', 'how', 'doe', 'did', 'can', 'will', 'would', 'could', 'should', 'not', 'one', 'out', 'yet', 'very', 'really', 'job', 'thing']);
+const stemOf = (w) => w.toLowerCase().replace(/(?:ing|ed|es|s)$/, '');
+/** Whether a why question takes the clause as given: "Why does it work locally?" before "It works locally because …". */
+function presupposed(words, ask) {
+    if (!/\bwhy\b|\bhow\s+come\b|\bwhat\s+makes\b/i.test(ask)) return false;
+    const asked = new Set((ask.match(/[A-Za-z][\w.-]{1,}/g) ?? []).map(stemOf));
+    return (words.match(/[A-Za-z][\w.-]{1,}/g) ?? []).map(stemOf).filter((w) => w.length > 1 && !PLAIN.has(w)).some((w) => asked.has(w));
+}
+function behaves(claim, words, sentence, ask) {
+    if (RUN_RESULT.test(words) || OWN_WORK.test(words)) return false;
+    if (HABIT.test(words) || AGAINST_FAIL.test(sentence)) return true;
+    // "It works locally because your .env sets API_URL" after "Why does it work locally but not on CI?": the cause of
+    // what the question takes as given, not a new claim; "because I fixed the import" is the turn's own work.
+    const at = sentence.indexOf(words);
+    const rest = at >= 0 ? sentence.slice(at + words.length) : '';
+    if ((CAUSE_NEXT.test(rest) || CAUSE_IN.test(words)) && !/\b(?:i|we)\b/i.test(rest.split(/[.;!?]/)[0]) && presupposed(words, ask)) return true;
+    // "you are on 3.0.4": the person's own setup, as read.
+    return claim.kind === 'deployed' && !claim.ship && claim.target !== 'health' && (DEPLOY_MANNER.test(words) || NAMED_HISTORY.test(words) || /^(?:you|your)\b/i.test(words));
+}
+/** A question or a check of how something stands now: "Is it deployed?", "Did the tests pass?", "Check whether CI is green". */
+const STATUS_WORDS = String.raw`(?:deployed|deploy|live|out|released|shipped|ship|merged|pushed|up|running|green|red|passing|pass|passed|built|build|builds|done|fixed|finished|applied|landed|land|working|work|healthy|succeed(?:ed)?|go(?:ne)?\s+(?:out|through|green)|in\s+prod(?:uction)?|on\s+(?:staging|prod(?:uction)?|main))`;
+const STATUS_ASK = new RegExp(String.raw`^(?:(?:so|and|ok|okay|also|quick\s+one|hey)\s*,?\s+)*(?:is|are|was|were|has|have|had|did|does|do|can\s+you\s+(?:confirm|check|verify)|could\s+you\s+(?:confirm|check|verify))\b[^?]*\b${STATUS_WORDS}\b|\b(?:check|confirm|verify|tell\s+me|find\s+out|see)\s+(?:whether|if)\b[^.?!]*\b${STATUS_WORDS}\b|\bwhat(?:'s|\s+is)\s+(?:the\s+)?(?:status|state)\b|\bwhat\s+(?:version|build|commit|sha|tag|release)\s+(?:is|are)\b`, 'i');
+const statusAsked = (ask) => ask.split(/(?<=[.!?\n])\s+/).some((x) => STATUS_ASK.test(x.trim()));
 /** A run of tests, checks or a status read, asked for: "run the export tests once", "run `node --test`", "check the status". */
 const LOOK_RUN = /\b(?:run|rerun|re-run|execute|try)\s+(?:the\s+|a\s+|all\s+|its\s+|those\s+|these\s+|my\s+|our\s+|them\s+)?(?:`[^`]{1,80}`\s*|[\w./-]+\s+){0,3}?(?:tests?|specs?|suites?|checks?|lint(?:er|ers)?|type\s*checks?|tsc|pytest|jest|vitest|status|`[^`]*\b(?:test|tests|spec|lint|status|check)\b[^`]*`)(?:\s+(?:once|again|now))?\b|\brun\s+`[^`]*\b(?:test|tests|spec|lint|status|check|log|diff|show)\b[^`]*`/gi;
 /** A change or a ship asked for, its verb leading a request ("Fix …", "and then deploy …", "can you push …", "I want you to add …"). */
