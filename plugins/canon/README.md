@@ -381,8 +381,10 @@ Canon has its own entry in the sidebar. Its page shows:
 - **Try a prompt**: type a prompt and, if you like, a session's folder (a
   full path, or one starting with `~/`, as a session has it; anything else
   is refused and says why), and see which notes a turn in that folder would
-  get, why each fits ("Shares the words “port” and “gateway”. It belongs to
-  this folder's project, so it counts for more."), the near misses with a
+  get, each one's kind and date as its citation gives them ("Decision,
+  promoted 2026-10-26."), why each fits ("Shares the words “port” and
+  “gateway”. It belongs to this folder's project, so it counts for
+  more."), the near misses with a
   short reason under each (and under "No note fits this prompt"), the rules
   behind them once each behind **Why**, and **the exact text the turn
   gets**. It says which folder it used, and sends nothing to any session.
