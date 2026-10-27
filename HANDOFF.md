@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95 PASS 2: one more pass for every plugin but Reasoning Pill (branches goal95/*)
 
-Updated: 2026-10-26 11:39 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-27 12:26 AM PDT by A (gmail), thread "Goal 9.5 builder"
 Goal: `briefs/GOAL-95-PASS2.md` (Albert 6:35 PM PDT via MiniMe: "Promote reasoning pill - Give all other plugins one more pass"). Reasoning Pill is done (MiniMe merged d24800a into claude/split-plugins as 909ac14). The other 19: one builder each from the RESULT commit (fix the top remaining finding plus the rest of the latest scorecard), one hand-over, then ONE fresh judge; no second fix round. Then `review/GOAL95-PASS2.md` (score before, score after, commit, branch, verdict, top remaining finding), commit, push, stop. Nothing deploys to live.
 
 ## Doing now (PASS 2)
@@ -15,9 +15,11 @@ Goal: `briefs/GOAL-95-PASS2.md` (Albert 6:35 PM PDT via MiniMe: "Promote reasoni
 
 - 11:39 PM PDT: the account's usage limit stopped 14 pass-2 agents at about 9:01 PM (builders Agent Terminals, Fleet, Proof, Calendar, Recall; judges DNA Studio, Wallpaper, Coordinator, Canon, Categories, Session Bridge, Notifications, Session Watch, Autopilot). It reset at 11:30 PM; all 14 are resumed (ids in `~/Projects/goal95/agents.txt`): judges finish 1:00-1:15 AM, builders hand over by 12:30 AM. Judged so far: dsh-site 9.0, Hermes Bridge 9.0, Discord 8.5, Focus 9.3 (all NOT YET). Decisions handed over 2ccbfb3; its judge r6 runs to 1:12 AM. If the limit stops agents again: resume each by its id once it resets (`get_usage` shows when).
 
+- 12:26 AM PDT (Tue 10-27): all 19 builders handed over (last: Agent Terminals 8a21b90 at 12:03 AM). 18 of 19 judged and pushed; one PASS: Session Bridge 9.5 (782641f). NOT YET: dsh-site 9.0, Hermes Bridge 9.0, Discord 8.5, Focus 9.3, Categories 8.9, DNA Studio 8.5, Canon 9.0, Wallpaper 9.0, Decisions 9.0, Session Watch 9.0, Coordinator 9.0, Notifications 9.4, Autopilot 9.0, Fleet 9.0, Calendar 8.9, Proof 8.5, Recall 9.0. The Agent Terminals judge r5 (aa53b76a1966db4da) runs to 1:37 AM. Then fill `{LAST_JUDGE}`, `{LIVE_LAST}` and `{LEFT}` in `~/Projects/goal95/pass2-final-notes.md` and run `python3 ~/Projects/goal95/bin/pass2-final.py`, which writes `review/GOAL95-PASS2.md` from `~/Projects/goal95/pass2-results.tsv`. The Recall judge printed the owner gateway API key into its own tool output (no file or commit holds it); rotating it is Albert's call.
+
 ## Next steps (PASS 2, in order)
 1. As each builder hands over (`COMMIT <sha>`): check the push, then start its judge from `~/Projects/goal95/briefs/judge-prompt-template.md` with the round and instance in PASS2-PLAN.md (Discord and dsh-site: no instance, throwaway homes, scorecards stay local).
-2. Each scorecard: commit it with its pictures (not Discord or dsh-site), add its SCOREBOARD row under a "GOAL95 PASS 2" heading.
+2. Each scorecard: commit it with its pictures (not Discord or dsh-site), add its SCOREBOARD row under a "GOAL95 PASS 2" heading (`~/Projects/goal95/bin/pass2-record.py` writes the row, the PROGRESS and PASS2-PLAN lines and the tsv row, then commits and pushes).
 3. If the usage limit stops agents: resume each from where it stopped (SendMessage to its id) with new times; drop none.
 4. When all 19 are judged: `review/GOAL95-PASS2.md`, HANDOFF, PROGRESS, commit, push to gh, tell Albert, stop.
 
