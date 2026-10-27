@@ -71,6 +71,8 @@ console.log(`# DSH ${version}: ${bin}`);
 console.log(`# pictures: ${shots}`);
 
 const WAIT_SECONDS = 15;
+/** How many sessions a chosen state lists at first, and how many more each "Show more" adds (lib/client.js). */
+const SHOWN = 12;
 const tally = checks();
 const { check, step } = tally;
 const model = await startFakeModel();
@@ -149,6 +151,20 @@ function turnOf(log, id) {
     return start.data?.turn;
 }
 
+/** What became of message `id` in the session's queue, from the log's own splices: 'queued', 'canceled', 'claimed' or undefined. */
+function queueFate(log, id) {
+    const lists = { 'next-turn': [], 'next-step': [] };
+    let fate;
+    for (const e of log) {
+        if (e.type !== 'agent/inbox/spliced' || !lists[e.data?.target]) continue;
+        const { target, start, removedCount = 0, inserted = [], outcome } = e.data;
+        const removed = lists[target].splice(start, removedCount, ...inserted.map((m) => m.id));
+        if (removed.includes(id)) fate = outcome === 'canceled' ? 'canceled' : 'claimed';
+        if (inserted.some((m) => m.id === id)) fate = 'queued';
+    }
+    return fate;
+}
+
 const ids = {};
 let window;
 let pw = null;
@@ -206,6 +222,7 @@ try {
         check('a goal: its objective, its phase when it completes, and its rounds', goal.state.goal.objective === 'Write three lines about rivers' && goal.state.goal.phase === 'complete' && goal.state.goal.rounds >= 1, JSON.stringify(goal.state.goal));
     });
 
+    const sinceAsk = (await probeApi('events', { since: 0 })).next;
     ids.approval = await run.newSession(call('write', { file_path: join(outside, 'draft.txt'), content: 'The draft.', sandbox_permissions: 'danger-full-access', justification: 'It saves the draft next to the workspace.' }), 'Draft upload');
     ids.question = await run.newSession(call('ask_user_question', {
         questions: [{ id: 'env', question: 'Which environment should I deploy to?', header: 'Target', options: [{ label: 'staging' }, { label: 'production' }] }],
@@ -225,6 +242,13 @@ try {
         await prompts.answer(ask, { answers: [{ id: 'env', selected: ['staging'] }] });
         const answered = await rowWhen(ids.question, (r) => !r.state.asking, 'the question answered', 30000).catch(() => null);
         check('answered, the question is cleared', answered && !answered.state.asking, JSON.stringify(answered?.state?.asking ?? answered));
+        // Pushed, not polled: listeners (and through them the windows) hear the question box ask and get its answer.
+        const pushed = await waitFor(async () => {
+            const heard = (await probeApi('events', { since: sinceAsk })).items.filter((e) => e.sessionId === ids.question && e.type === 'state' && ['tool/call', 'tool/result'].includes(e.change));
+            return heard.some((e) => e.change === 'tool/result') ? heard : null;
+        }, 'the question box to be heard', 10000, 200).catch(() => []);
+        check('listeners hear the question box ask, as a state change with the question, and hear its answer',
+            JSON.stringify(pushed.map((e) => [e.change, e.asking])) === JSON.stringify([['tool/call', 'Which environment should I deploy to?'], ['tool/result', null]]), JSON.stringify(pushed));
     });
 
     // ── Delivery with proof ────────────────────────────────────────────
@@ -285,22 +309,64 @@ try {
         }, 'running.json to name the running turn', 10000, 200).catch(() => false);
         check('running.json names the session whose turn runs', named);
     });
+    // A message on its way when DSH stops: queued behind the running turn.
+    const noteQ = await probeApi('deliver', { sessionId: ids.quit, text: 'Probe note Q: sent while the migration ran.', from: 'probe' });
+    check('a message sent while the turn runs waits in its queue', noteQ.state === 'queued' && noteQ.from === 'probe', JSON.stringify(noteQ));
     await run.stop();
     check('DSH quits (SIGTERM) under a running turn', !run.alive());
     prompts.close();
     await run.boot('after a quit');
     await probeReady();
-    await step('after a quit: cutOffSessions finds the cut-off session (checked against its log) and not the ones that finished', async () => {
+    const cutAfterQuit = {};
+    {
+        cutAfterQuit.found = await probeApi('cutOff', { withinMs: 0 });
+        cutAfterQuit.mine = cutAfterQuit.found.find((f) => f.sessionId === ids.quit);
+        cutAfterQuit.row = await windowRow(ids.quit);
+    }
+    // DSH may take what is queued out of the queue as it quits (0.2's agents do when they close), or leave it queued:
+    // the watcher must tell whichever the session's log shows.
+    const letGo = queueFate(await probeApi('log', { sessionId: ids.quit }), noteQ.id) === 'canceled';
+    if (letGo) await step('after a quit: DSH let the message on its way go unread as it quit (its log says so); the watcher told so, kept the record, and the carry-on goes alone', async () => {
+        const told = await probeApi('deliveryOf', { id: noteQ.id });
+        check('after the start, its record says not delivered, and why, as the log has it', told?.state === 'failed' && told.reason === 'the session let the message go without reading it' && told.from === 'probe', JSON.stringify(told));
+        check('cutOffSessions names nothing as still waiting', cutAfterQuit.mine && !cutAfterQuit.mine.queued, JSON.stringify(cutAfterQuit.mine?.queued));
+        ids.carryQ = await probeApi('deliver', { sessionId: ids.quit, text: 'Probe carry-on: DSH stopped while you were working; carry on.' });
+        const done = await settled(ids.carryQ.id);
+        const log = await probeApi('log', { sessionId: ids.quit });
+        check('the carry-on goes into a new turn of its own, and the message DSH let go is never read', done.state === 'delivered' && done.mode === 'queue' && !done.waiting && turnOf(log, ids.carryQ.id) === done.turn && !log.some((e) => e.type === 'user/message' && e.data?.id === noteQ.id), JSON.stringify(done));
+    });
+    else await step('after a quit: the message on its way is followed again, named as waiting, and read with the carry-on, which goes first', async () => {
+        const followed = await waitFor(async () => {
+            const d = await probeApi('deliveryOf', { id: noteQ.id });
+            return d?.restored === true && d.state === 'queued' ? d : null;
+        }, 'the message to be followed again', 20000, 250).catch(async () => probeApi('deliveryOf', { id: noteQ.id }));
+        check('after the start, the message sent before the quit is followed again: still queued, from its record', followed?.state === 'queued' && followed.restored === true && followed.from === 'probe', JSON.stringify(followed));
         const found = await probeApi('cutOff', { withinMs: 0 });
         const mine = found.find((f) => f.sessionId === ids.quit);
-        check('the session DSH quit under is found, with how its turn ended', Boolean(mine) && typeof mine.end?.kind === 'string' && mine.title === 'Long migration', JSON.stringify(found));
-        check('sessions that finished their turns are not', !found.some((f) => [ids.todos, ids.decision, ids.steer].includes(f.sessionId)), JSON.stringify(found.map((f) => f.title)));
-        const row = await windowRow(ids.quit);
-        check('its row reads cut off, and it is not loaded', row?.word === 'cut off' && row.status === 'cold', JSON.stringify({ word: row?.word, status: row?.status }));
-        const note = await probeApi('deliver', { sessionId: ids.quit, text: 'Probe carry-on: DSH stopped while you were working; carry on.' });
-        const done = await settled(note.id);
+        check('cutOffSessions names it as still waiting in the cut-off session\'s queue, with its sender and first words',
+            mine?.queued?.length === 1 && mine.queued[0].id === noteQ.id && mine.queued[0].from === 'probe' && mine.queued[0].preview === 'Probe note Q: sent while the migration ran.', JSON.stringify(mine?.queued));
+        ids.carryQ = await probeApi('deliver', { sessionId: ids.quit, text: 'Probe carry-on: DSH stopped while you were working; carry on.' });
+        const done = await settled(ids.carryQ.id);
+        const q = await waitFor(async () => {
+            const d = await probeApi('deliveryOf', { id: noteQ.id });
+            return d?.state === 'delivered' || d?.state === 'failed' ? d : null;
+        }, 'the message from before the quit to settle', 20000, 250).catch(() => null);
         const log = await probeApi('log', { sessionId: ids.quit });
-        check('a carry-on message to it (not loaded) loads it and is delivered into a new turn, as its log shows', done.state === 'delivered' && done.turn >= 2 && turnOf(log, note.id) === done.turn, JSON.stringify(done));
+        const turn = turnOf(log, ids.carryQ.id);
+        const inTurn = log.filter((e) => e.type === 'user/message' && turnOf(log, e.data?.id) === turn).map((e) => e.data.id).filter((id) => id === ids.carryQ.id || id === noteQ.id);
+        check('the carry-on (sent as Autopilot sends one) goes ahead of it, into the turn it starts', done.state === 'delivered' && done.mode === 'steer' && done.waiting === 1 && done.turn === turn, JSON.stringify(done));
+        check('both are read in that one turn, the carry-on first: neither waits behind the other', q?.state === 'delivered' && q.turn === turn && JSON.stringify(inTurn) === JSON.stringify([ids.carryQ.id, noteQ.id]), JSON.stringify({ q, inTurn }));
+        check('neither was taken back out of the queue', !log.some((e) => e.type === 'agent/inbox/spliced' && e.data?.outcome === 'canceled'), JSON.stringify(log.filter((e) => e.type === 'agent/inbox/spliced').map((e) => e.data)).slice(0, 400));
+        const heard = (await probeApi('events', { since: 0 })).items.filter((e) => e.type === 'delivery' && e.delivery?.id === noteQ.id).map((e) => `${e.delivery.state}${e.delivery.restored ? ' (again)' : ''}`);
+        check('listeners hear it followed again and then delivered', heard.includes('delivered (again)'), JSON.stringify(heard));
+    });
+    await step('after a quit: cutOffSessions found the cut-off session (checked against its log) and not the ones that finished', async () => {
+        check('the session DSH quit under was found, with how its turn ended', Boolean(cutAfterQuit.mine) && typeof cutAfterQuit.mine.end?.kind === 'string' && cutAfterQuit.mine.title === 'Long migration', JSON.stringify(cutAfterQuit.found));
+        check('sessions that finished their turns are not', !cutAfterQuit.found.some((f) => [ids.todos, ids.decision, ids.steer].includes(f.sessionId)), JSON.stringify(cutAfterQuit.found.map((f) => f.title)));
+        check('its row read cut off, and it was not loaded', cutAfterQuit.row?.word === 'cut off' && cutAfterQuit.row.status === 'cold', JSON.stringify({ word: cutAfterQuit.row?.word, status: cutAfterQuit.row?.status }));
+        const done = await settled(ids.carryQ.id);
+        const log = await probeApi('log', { sessionId: ids.quit });
+        check('the carry-on message to it (not loaded) loaded it and was delivered into a new turn, as its log shows', done.state === 'delivered' && done.turn >= 2 && turnOf(log, ids.carryQ.id) === done.turn, JSON.stringify(done));
     });
     await step('sessions not loaded keep their state from DSH\'s saved values', async () => {
         const row = await windowRow(ids.todos);
@@ -327,15 +393,39 @@ try {
             return false;
         }
     }, 'running.json to name the turn before the crash', 10000, 200).catch(() => {});
+    const noteK = await probeApi('deliver', { sessionId: ids.crash, text: 'Probe note K: sent while the import ran.', from: 'probe' });
+    check('a message sent while that turn runs waits in its queue', noteK.state === 'queued', JSON.stringify(noteK));
     await run.crash();
     check('DSH crashed (SIGKILL to its process group) under a running turn', !run.alive());
     await run.boot('after a crash');
     await probeReady();
-    await step('after a crash: the cut-off session is found too', async () => {
+    await step('after a crash: the cut-off session is found too, with the message it left waiting; the carry-on goes first and both are read in one turn', async () => {
         const found = await probeApi('cutOff', { withinMs: 0 });
-        check('the session DSH crashed under is found', found.some((f) => f.sessionId === ids.crash), JSON.stringify(found.map((f) => f.title)));
+        const mine = found.find((f) => f.sessionId === ids.crash);
+        check('the session DSH crashed under is found', Boolean(mine), JSON.stringify(found.map((f) => f.title)));
         check('the one already carried on (its carry-on turn ended before the crash) is not found again', carriedOn && !found.some((f) => f.sessionId === ids.quit), JSON.stringify({ carriedOn, found: found.map((f) => f.title) }));
+        check('a crash leaves the queue as it was: the log still has the message queued', queueFate(await probeApi('log', { sessionId: ids.crash }), noteK.id) === 'queued');
+        const followed = await waitFor(async () => {
+            const d = await probeApi('deliveryOf', { id: noteK.id });
+            return d?.restored === true && d.state === 'queued' ? d : null;
+        }, 'the message to be followed again', 20000, 250).catch(async () => probeApi('deliveryOf', { id: noteK.id }));
+        check('the message sent before the crash is followed again from the journal: still queued', followed?.state === 'queued' && followed.restored === true && followed.from === 'probe', JSON.stringify(followed));
+        check('cutOffSessions names it as still waiting there', mine?.queued?.length === 1 && mine.queued[0].id === noteK.id && mine.queued[0].from === 'probe', JSON.stringify(mine?.queued));
+        const carry = await probeApi('deliver', { sessionId: ids.crash, text: 'Probe carry-on: DSH crashed while you were working; carry on.' });
+        const done = await settled(carry.id);
+        const k = await waitFor(async () => {
+            const d = await probeApi('deliveryOf', { id: noteK.id });
+            return d?.state === 'delivered' || d?.state === 'failed' ? d : null;
+        }, 'the message from before the crash to settle', 20000, 250).catch(() => null);
+        const log = await probeApi('log', { sessionId: ids.crash });
+        const turn = turnOf(log, carry.id);
+        const order = log.filter((e) => e.type === 'user/message' && turnOf(log, e.data?.id) === turn).map((e) => e.data.id).filter((id) => id === carry.id || id === noteK.id);
+        check('after the crash too, the carry-on goes ahead of it and both are read in one turn, the carry-on first',
+            done.state === 'delivered' && done.mode === 'steer' && k?.state === 'delivered' && k.turn === done.turn && done.turn === turn && JSON.stringify(order) === JSON.stringify([carry.id, noteK.id]), JSON.stringify({ done, k, order }));
+        check('nothing was taken back out of its queue', !log.some((e) => e.type === 'agent/inbox/spliced' && e.data?.outcome === 'canceled'));
     });
+    model.release();
+    await waitFor(async () => (await run.session(ids.crash).catch(() => null))?.status !== 'running', 'the carry-on turn after the crash to end', 30000, 200).catch(() => {});
 
     // ── Questions, outside agents, files ───────────────────────────────
     await step('questions for a person: raised, answered once, refused a second time in words, and an answer\'s outcome told', async () => {
@@ -468,6 +558,22 @@ try {
             if (!(await form.isVisible())) await view.click();
             await form.waitFor({ state: 'visible', timeout: 20000 });
             await watching.waitFor({ state: 'visible', timeout: 15000 });
+            // The question box, pushed: the model asks 4 s into the turn, after the section has read the session as running.
+            const asker = await run.prompts();
+            ids.liveAsk = await run.newSession(`${call('ask_user_question', { questions: [{ id: 'size', question: 'Which size should the export be?', header: 'Size', options: [{ label: 'small' }, { label: 'large' }] }], timeout: -1 })}\n#delay=4000`, 'Live question');
+            const askChip = watching.locator('button[title$=" that read waiting for your answer"]');
+            const asked = await waitFor(() => asker.find('user-questions/request', (r) => JSON.stringify(r).includes('Which size should the export be?')), 'the question box to ask', 30000, 100).catch(() => null);
+            const t0 = Date.now();
+            const shown = await waitFor(async () => ((await askChip.count()) === 1 ? (await askChip.innerText()).replace(/\s+/g, ' ').trim() : null), 'the section to show the question', 6000, 100).catch(() => null);
+            const took = Date.now() - t0;
+            const headline = (await watching.innerText()).split('\n').find((l) => / sessions · /.test(l)) ?? '';
+            check('a question asked in the question box shows in the open section by itself, within seconds, and the headline counts it as waiting on you',
+                Boolean(asked) && shown === 'waiting for your answer 1' && / · 1 waiting on you$/.test(headline), `${shown} in ${took} ms | ${headline}`);
+            await shot(page, shots, 'watching-question-light', watching);
+            if (asked) await asker.answer(asked, { answers: [{ id: 'size', selected: ['small'] }] });
+            const cleared = await waitFor(async () => ((await askChip.count()) === 0 ? true : null), 'the answered question to leave the section', 15000, 100).catch(() => false);
+            check('answered, it leaves the section by itself', cleared === true, (await watching.innerText()).replace(/\n+/g, ' '));
+            asker.close();
             // By keyboard: a chosen state whose last session leaves it stays, at 0, says so, and keeps the focus;
             // closed, its button goes and the focus moves to the first state left.
             ids.slowView = await run.newSession('E2E:slow', 'Slow view');
@@ -507,6 +613,61 @@ try {
             const firstChip = (await watching.locator('[aria-label="Sessions by state"] button').first().innerText()).replace(/\s+/g, ' ').trim();
             const moved = await focused();
             check('closed, its button goes and the focus moves to the first state left', (await runningList.count()) === 0 && (await runningChip.count()) === 0 && moved === `false:${firstChip}`, `${moved} | ${firstChip}`);
+            // The state buttons are one tab stop: arrows, Home and End move among them, and one Tab leaves them all.
+            const stateButtons = watching.locator('[aria-label="Sessions by state"] button');
+            const texts = (await stateButtons.allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim());
+            await page.keyboard.press('End');
+            const atEnd = await focused();
+            await page.keyboard.press('ArrowLeft');
+            const stepped = await focused();
+            await page.keyboard.press('ArrowRight');
+            const back = await focused();
+            await page.keyboard.press('Home');
+            const home = await focused();
+            const tabStops = await stateButtons.evaluateAll((buttons) => buttons.filter((b) => b.tabIndex === 0).length);
+            check('the state buttons are one tab stop: End, the arrows and Home move the focus among them',
+                texts.length >= 2 && atEnd === `false:${texts.at(-1)}` && stepped === `false:${texts.at(-2)}` && back === atEnd && home === `false:${texts[0]}` && tabStops === 1, JSON.stringify({ texts, atEnd, stepped, back, home, tabStops }));
+            // More than twelve in a state: twelve listed, then "Show N more", which keeps the focus.
+            const newNow = (await watchApi('sessions')).value.items.filter((r) => r.word === 'new').length;
+            for (let i = 1; i <= Math.max(0, SHOWN + 1 - newNow); i++) await run.newSession(undefined, `Blank ${String(i).padStart(2, '0')}`);
+            const newChip = watching.locator('button[title$=" that read new"]');
+            const newRows = await waitFor(async () => {
+                const items = (await watchApi('sessions')).value.items.filter((r) => r.word === 'new').sort((x, y) => y.updatedAt - x.updatedAt);
+                return items.length > SHOWN && (await newChip.count()) === 1 && (await newChip.innerText()).replace(/\s+/g, ' ').trim() === `new ${items.length}` ? items : null;
+            }, 'the blank sessions to be counted', 20000, 300);
+            await newChip.focus();
+            await page.keyboard.press('Enter');
+            const newList = watching.locator('[data-session-watch-chosen="new"]');
+            await newList.waitFor({ state: 'visible', timeout: 10000 });
+            await page.keyboard.press('Tab');
+            const afterTab = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? '');
+            check('one Tab from the state buttons goes to the first session listed', afterTab === `Open ${newRows[0].title}`, afterTab);
+            const moreButton = newList.locator('[data-session-watch-more]');
+            const listedAtFirst = await newList.locator('li').count();
+            const firstWords = (await newList.innerText()).replace(/\s+/g, ' ');
+            check(`more than twelve in a state (${newRows.length}): twelve listed, newest first, then how many are shown and "Show ${Math.min(SHOWN, newRows.length - SHOWN)} more"`,
+                listedAtFirst === SHOWN && (await moreButton.count()) === 1 && (await moreButton.innerText()) === `Show ${Math.min(SHOWN, newRows.length - SHOWN)} more` && firstWords.includes(`${SHOWN} of ${newRows.length} shown, newest first.`), `${listedAtFirst} | ${firstWords.slice(-200)}`);
+            await moreButton.scrollIntoViewIfNeeded();
+            await shot(page, shots, 'watching-more-light', watching);
+            await setDark(page, true);
+            await shot(page, shots, 'watching-more-dark', watching);
+            await setDark(page, false);
+            await moreButton.focus();
+            await page.keyboard.press('Enter');
+            const grown = Math.min(2 * SHOWN, newRows.length);
+            const listedAfter = await waitFor(async () => ((await newList.locator('li').count()) === grown ? grown : null), 'the next sessions to be listed', 10000, 100).catch(async () => newList.locator('li').count());
+            const focusAfter = await page.evaluate(() => {
+                const el = document.activeElement;
+                return el && el !== document.body ? (el.getAttribute('aria-label') ?? el.innerText.replace(/\s+/g, ' ').trim()) : 'body';
+            });
+            const expectFocus = newRows.length > 2 * SHOWN ? `Show ${Math.min(SHOWN, newRows.length - 2 * SHOWN)} more` : `Open ${newRows[SHOWN].title}`;
+            check('"Show more" lists the next ones; the focus stays on it, or moves to the first one it showed once none are left',
+                listedAfter === grown && focusAfter === expectFocus && (newRows.length > 2 * SHOWN || (await newList.innerText()).includes(`All ${newRows.length} shown.`)), `${listedAfter} | ${focusAfter} vs ${expectFocus}`);
+            await page.setViewportSize({ width: 760, height: 860 });
+            const wideMore = await page.evaluate(() => document.documentElement.scrollWidth);
+            check('at 760 px, with every session of a state listed, no sideways scroll', wideMore <= 760, `${wideMore} px`);
+            await shot(page, shots, 'watching-all-760-light', watching);
+            await page.setViewportSize({ width: 1280, height: 860 });
             const save = form.getByRole('button', { name: 'Save' });
             await field.fill('5');
             const refused = (await page.locator('[data-suite-setting="deliveryTimeoutSeconds"]').innerText()).replace(/\n+/g, ' ');
@@ -540,6 +701,13 @@ try {
             const styled = await styleCount();
             const failed = page.getByText(/Could not (disable|enable)/);
             const watchSwitch = page.getByRole('switch', { name: 'Enable Session Watch' });
+            // A message on its way when it is switched off: queued behind a running turn, off for longer than the wait.
+            ids.offSlow = await run.newSession('E2E:slow', 'Held over a switch-off');
+            await runningSession(ids.offSlow);
+            await waitFor(() => model.held.size === 1, 'the turn\'s reply to be held open', 20000, 100);
+            const noteO = await probeApi('deliver', { sessionId: ids.offSlow, text: 'Probe note O: sent before Session Watch was switched off.', from: 'probe' });
+            const sentAt = Date.now();
+            check('a message sent before the switch-off waits in its queue', noteO.state === 'queued', JSON.stringify(noteO));
             await watchSwitch.click();
             await waitFor(async () => (await watchSwitch.getAttribute('aria-checked')) === 'false', 'Session Watch\'s switch to go off', 20000, 200);
             await waitFor(async () => (await watchApi('status')).ok === false, 'its endpoints to go', 20000, 300);
@@ -552,10 +720,27 @@ try {
             check('its service is gone: the plugin that used it no longer has it', probe.ok && probe.value.ready === false, JSON.stringify(probe));
             check('it leaves nothing behind in the window: its style sheet and its section are gone', styled === 1 && (await styleCount()) === 0 && (await page.locator('[data-session-watch-watching]').count()) === 0, `${styled} then ${await styleCount()}`);
             await shot(page, shots, 'switched-off-light');
+            await waitFor(() => Date.now() - sentAt > (WAIT_SECONDS + 5) * 1000, 'the wait to pass while it is off', (WAIT_SECONDS + 10) * 1000, 250);
+            const offLog = await run.events(ids.offSlow);
+            check(`off for longer than its ${WAIT_SECONDS}-second wait, it took nothing back out of the queue and the message is still unread`,
+                !offLog.some((e) => e.type === 'agent/inbox/spliced' && e.data?.removedCount > 0 && e.data?.outcome === 'canceled') && !offLog.some((e) => e.type === 'user/message' && e.data?.id === noteO.id),
+                JSON.stringify(offLog.filter((e) => e.type === 'agent/inbox/spliced').map((e) => e.data)).slice(0, 400));
             await watchSwitch.click();
             await waitFor(async () => (await watchApi('status')).ok === true, 'its endpoints to come back', 30000, 300);
             await probeReady();
             check('on again, it serves at once and its user has it again', true);
+            const followed = await waitFor(async () => {
+                const d = await probeApi('deliveryOf', { id: noteO.id });
+                return d?.restored === true && d.state === 'queued' ? d : null;
+            }, 'the message to be followed again', 15000, 250).catch(async () => probeApi('deliveryOf', { id: noteO.id }));
+            check('on again, it follows the message it left on its way, still queued', followed?.state === 'queued' && followed.restored === true, JSON.stringify(followed));
+            model.release();
+            const read = await waitFor(async () => {
+                const d = await probeApi('deliveryOf', { id: noteO.id });
+                return d?.state === 'delivered' || d?.state === 'failed' ? d : null;
+            }, 'the message to settle', 30000, 250).catch(() => null);
+            const onLog = await probeApi('log', { sessionId: ids.offSlow });
+            check('once the running turn ends, the next turn reads it and the watcher proves it from the log', read?.state === 'delivered' && read.turn === 2 && turnOf(onLog, noteO.id) === 2, JSON.stringify(read));
             const note = await probeApi('deliver', { sessionId: ids.todos, text: 'Probe note after switching on again.' });
             check('and it delivers with proof again', (await settled(note.id)).state === 'delivered');
             await waitFor(async () => (await styleCount()) === 1, 'its style sheet to come back once', 10000, 200).catch(() => {});

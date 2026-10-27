@@ -5,14 +5,19 @@ reads every session's state once, from DSH's own events, and serves it to
 the other suite plugins, so they never read session logs or poll on their
 own. It has no page of its own: you see it through the plugins that use
 it. Its page in Plugins has its one setting and, under it, **What it
-watches**: how many sessions are in each state (*running*, *waiting for
-approval*, *cut off*, *idle* and so on), which of Autopilot, Decisions and
-Agent Terminals are on, and what a wrong setting means meanwhile. Choose a
-state to list its sessions, the latest change first (twelve at a time),
-each with when it last changed and **Open**, which shows that session in
-the window as the sidebar does. It follows the sessions as they change,
-without a reload: a chosen state stays open when its last session leaves
-it, and says so.
+watches**: how many sessions there are, how many run and how many wait on
+you, how many are in each state (*running*, *waiting for approval*,
+*waiting for your answer*, *cut off*, *idle* and so on), which of
+Autopilot, Decisions and Agent Terminals are on, and what a wrong setting
+means meanwhile. Choose a state to list its sessions, the latest change
+first: the twelve newest, then twelve more at each **Show 12 more** (the
+last press names how many are left; the focus stays on the button, and
+moves to the first session it showed once none are left). Each has when
+it last changed and **Open**, which shows that session in the window as
+the sidebar does. The states are one tab stop: the arrow keys, Home and
+End move between them. It follows the sessions as they change, without a
+reload, a question in DSH's question box included: a chosen state stays
+open when its last session leaves it, and says so.
 
 ## What it knows about every session
 
@@ -22,7 +27,7 @@ it, and says so.
 | The last reply's closing text (for `DECISION NEEDED` lines and questions) | `assistant/message` |
 | Its todos: open, in progress, done, and the next one | `todo/write` |
 | Its goal: objective, phase, rounds | `goal/change` and goal-round messages |
-| What a running turn waits on you for: a tool waiting for approval, a question in DSH's question box (the state reads *waiting for approval* or *waiting for your answer*). Both end with their turn; a turn a stop cut off keeps what was left waiting, so Autopilot's carry-on note can say it did not run. | `approval/asked`, `approval/decided`, and the question box's `tool/call` and `tool/result` |
+| What a running turn waits on you for: a tool waiting for approval, a question in DSH's question box (the state reads *waiting for approval* or *waiting for your answer*). Listeners and open windows hear each as it is asked and answered. Both end with their turn; a turn a stop cut off keeps what was left waiting, so Autopilot's carry-on note can say it did not run. | `approval/asked`, `approval/decided`, and the question box's `tool/call` and `tool/result` |
 | When a person last wrote, and when anything last went in | `user/message` |
 
 DSH folds every committed event into this state (a registered session
@@ -44,10 +49,10 @@ start until a turn ends there again.
   session's own log: *queued* once the session's inbox shows it, *delivered*
   once a turn reads it, naming that turn, *not delivered* with the reason
   when DSH refuses it, lets it go unread, or no turn reads it within the
-  delivery timeout. It never reports a message as sent on hope, and it
-  logs each message it puts in, and what became of it, through DSH's
-  plugin logger (DSH keeps those lines in memory; it writes only startup
-  warnings to a file).
+  delivery timeout. It never reports a message as sent on hope. Each
+  message it puts in, and what became of it, goes into its private
+  journal (`deliveries.jsonl`, see Files) as it happens, and into DSH's
+  plugin logger.
 - **Not delivered means never read.** Past the delivery timeout, the
   watcher takes the message back out of the session's queue (DSH's
   `inbox.remove`; the session's log records it), so no later turn reads a
@@ -56,6 +61,27 @@ start until a turn ends there again.
   minute. Where DSH cannot take it back (the session is not loaded), the
   reason says the message still waits in the queue and is read when the
   session runs again.
+- **A message on its way when DSH stops.** At each start (after a quit, a
+  crash, or Session Watch switched off and on again) the watcher reads
+  every message its journal still has on its way against that session's
+  log: read into a turn, it is *delivered*, naming the turn; still in the
+  queue, it is followed again for the rest of its wait (at least a
+  minute); taken out unread, or never queued, it is *not delivered*, with
+  the reason. DSH 0.2 takes the queued messages out of a session's queue
+  unread when it closes the session, as it does when it quits, and says so
+  in the log: such a message reads *not delivered* ("the session let the
+  message go without reading it"). After a crash the queue stays as it
+  was. Listeners hear each outcome as a `delivery` event (with
+  `restored: true`), and `deliveryOf(id)` gives any message's record, from
+  this run or an earlier one. Switched off, the watcher stops its timers,
+  so it never takes a message back while it is off.
+- **A queue a stop left.** DSH reads one queued message per turn, so a
+  carry-on queued behind messages a stop left in a session would wait a
+  turn for each, or be taken back unread. When a session is not running
+  and has messages waiting, `deliver` puts the new message in as a steer
+  instead: it starts the next turn, and DSH reads it there with the oldest
+  waiting message, the new one first. `cutOffSessions` names what still
+  waits in each cut-off session (`queued`).
 - **Cut off by a stop.** It keeps a small record of turns running now
   (`running.json`). After DSH restarts, crashes or reloads, it finds the
   sessions whose turn the stop cut off, from that record and from DSH's
@@ -91,16 +117,19 @@ with DSH's reason.
 | `readLog(sessionId)` | Its log through DSH, without loading it: `{ state, events }`. |
 | `projection(sessionId, key)` | Another projection's value (DSH's question box, a coordinator's threads): `{ live, value }`. |
 | `on(listener)` | Events: `turn-start`, `turn-end` (with `end`), `state` (with the event type as `change`), `status`, `agent`, `delivery`, `ask`, `external`. Returns a function that stops listening. |
-| `deliver(sessionId, text, { mode })` | A delivery: `id`, `state` (`pending`, `queued`, `delivered` or `failed`), `turn` once delivered, `reason` once failed, and `done`, a promise that settles then. `mode: 'steer'` puts it into the running turn's next step (a session that is not running gets it as its next turn). |
-| `cutOffSessions({ withinMs })` | Sessions whose last turn a stop cut off and that nothing went into since, checked against their logs (only cuts within `withinMs`; `0` for any): `sessionId`, `title`, `cwd`, `end`, `state`. Subagents' sessions are left to their parents. |
+| `deliver(sessionId, text, { mode, from })` | A delivery: `id`, `state` (`pending`, `queued`, `delivered` or `failed`), `turn` once delivered, `reason` once failed, `mode` (how it went in: `queue` or `steer`), `waiting` (how many messages were already waiting, when it went ahead of them), and `done`, a promise that settles then. `mode: 'steer'` puts it into the running turn's next step (a session that is not running gets it as its next turn). `from` names the sender in the journal and in `cutOffSessions`. |
+| `deliveryOf(id)` | A delivery's record as the journal has it, from this run or an earlier one (without `done`); `restored: true` when it was followed again after a stop. Undefined when it is not known. |
+| `deliveries({ sessionId, limit })` | The newest records (all sessions, or one), newest first; `limit` up to 1000 (default 50). |
+| `cutOffSessions({ withinMs })` | Sessions whose last turn a stop cut off and that nothing went into since, checked against their logs (only cuts within `withinMs`; `0` for any): `sessionId`, `title`, `cwd`, `end`, `state`, and `queued` when messages still wait in its queue (each with `id`, `at`, its first words as `preview`, and `from` when the watcher put it in). Subagents' sessions are left to their parents. |
 | `raiseAsk(ask)`, `answerAsk(id, answer, by)`, `dropAsk(id)`, `askOutcome(id, outcome)`, `asks()` | Questions for a person: raised with an `onAnswer` handler, answered once (a second answer is refused in words), and what became of an answer. |
 | `setExternal(sessionId, external)` | An outside agent's state on its session's row (`null` clears it). |
 | `resolveAgent(sessionId)` | The live agent, loading the session when it is cold. |
 
 Window endpoints, at `/api/dsh-plugin-session-watch/<name>`: `wait` (`since`,
 `timeoutMs`: answers when a channel moved, or after at most 25 seconds),
-`sessions` (the rows, without the reply text) and `status` (`running`, and
-`problem` naming a wrong setting and its value).
+`sessions` (the rows, without the reply text), `deliveries` (`sessionId`,
+`limit`: the newest delivery records, up to 200) and `status` (`running`,
+and `problem` naming a wrong setting and its value).
 
 ## Settings
 
@@ -126,6 +155,7 @@ mode 600:
 | File | What |
 | --- | --- |
 | `session-watch/running.json` | Sessions with a turn running now, so the next start knows what a stop cut off; and the sessions a stop cut off that have not ended a turn since (the newest 50), whose rows it reads from their logs at each start. |
+| `session-watch/deliveries.jsonl` | Its journal: one JSON line for each message it puts in (session, sender, mode, first words) and one for each change of its state (queued, delivered with the turn, not delivered with the reason). It reads back the newest 1000 deliveries at each start; past 1 MB it writes the file again with only those. |
 
 ## Setup
 
@@ -148,7 +178,9 @@ nothing, and their pages say they need Session Watch; they start again by
 themselves when it does (an open page comes back within about ten seconds).
 Its section and its style sheet leave the window with it. It leaves nothing
 else behind: its projection's saved values go when DSH drops them, and
-`running.json` can be deleted.
+`running.json` and `deliveries.jsonl` can be deleted. While it is off it
+takes nothing back out of a queue; on again, it follows what it left on
+its way.
 
 ## Rollback
 
@@ -156,11 +188,12 @@ DSH runs it from its folder in your clone. To go back to a release, restore
 that folder from the release's tag and restart DSH Desktop:
 
 ```bash
-git -C ~/.dsh-plugins/deepseek-plugins restore --source session-watch-v1.0.0 -- plugins/session-watch
+git -C ~/.dsh-plugins/deepseek-plugins restore --source session-watch-v1.0.1 -- plugins/session-watch
 ```
 
-The saved state carries a version number, so an older or newer copy folds
-again from the log instead of misreading it. To remove it, remove the
+This build is 1.1.0 (Plugins shows the version). The saved state carries a
+version number, so an older or newer copy folds again from the log instead
+of misreading it; 1.0.1 never reads `deliveries.jsonl` and leaves it be. To remove it, remove the
 plugins that use it first, then follow
 [Remove a plugin](../../README.md#remove-a-plugin) for
 `dsh-plugin-session-watch` (row `session-watch`).
@@ -170,7 +203,7 @@ plugins that use it first, then follow
 From the repository root:
 
 ```sh
-node --test test/session-watch.test.js   # the fold, the watcher over a stand-in DSH, its page in Plugins
+node --test test/session-watch.test.js   # the fold, the watcher over a stand-in DSH (its journal across stops), its page in Plugins
 node --test test/suite-shared.test.js    # the window kit: the settings form, one request per window
 node scripts/e2e.mjs session-watch       # in real DSH, on every DSH build
 ```
@@ -184,26 +217,37 @@ proves, from each session's own log:
 
 - the fold: a todo list, a `DECISION NEEDED` line, a goal, a tool waiting
   for approval and a question in DSH's question box, each cleared when
-  answered; listeners hear turns in order;
+  answered; listeners hear turns in order, and hear the question box ask
+  and get its answer;
 - delivery with proof: queued, then read inside the very turn the delivery
   names; a steer read into the running turn; a session that does not exist
   refused in words; a message past the wait taken back out of the queue and
   never read;
-- a quit (SIGTERM) and a crash (SIGKILL) under running turns: the cut-off
-  sessions are found and the finished ones are not, their rows read *cut
-  off*, and a carry-on message to one that is not loaded is delivered into
-  a new turn; no session that ran a turn reads *new* after later restarts;
+- a quit (SIGTERM) and a crash (SIGKILL) under running turns, each with a
+  message queued behind the turn: the cut-off sessions are found and the
+  finished ones are not, their rows read *cut off*, and a carry-on message
+  to one that is not loaded is delivered into a new turn. The queued
+  message is told as the log has it: let go unread at the quit (DSH 0.2
+  does that), so the carry-on goes alone; still queued after the crash, so
+  it is followed again, named in `cutOffSessions`, and read with the
+  carry-on, in one turn, the carry-on first, with nothing taken back; no
+  session that ran a turn reads *new* after later restarts;
 - questions for a person, outside agents, and the folder (700) and file
   (600) modes;
 - a number in quotes in the profile: `status` names it, delivery still
   works, and its page in Plugins flags it, refuses a value out of range,
   and fixes it on Save; **What it watches** counts every session by state,
-  follows a new session without a reload, lists a chosen state's sessions
-  as the watcher has them, opens one with **Open**, keeps a chosen state
-  (at 0) and the keyboard focus when its last session leaves it, and drops
+  follows a new session and a question in the question box without a
+  reload (and counts it as waiting on you), lists a chosen state's
+  sessions as the watcher has them, opens one with **Open**, keeps a
+  chosen state (at 0) and the keyboard focus when its last session leaves
+  it, moves between states by arrow keys, Home and End as one tab stop,
+  lists past twelve with **Show 12 more** and keeps the focus, and drops
   its setting line once fixed; pictures light, dark and at 760 px;
-- switched off in Plugins: no failure from DSH, its endpoints, service,
-  section and style sheet go; on again, it serves and delivers at once.
+- switched off in Plugins with a message queued behind a running turn: no
+  failure from DSH, its endpoints, service, section and style sheet go,
+  and past its wait it has taken nothing back; on again, it serves at
+  once, follows that message again, and proves it read in the next turn.
 
 Autopilot's, Decisions' and Agent Terminals' own real-DSH tests run with it
 too (`node scripts/e2e.mjs autopilot`, and so on).

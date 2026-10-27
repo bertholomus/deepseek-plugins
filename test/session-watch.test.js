@@ -845,6 +845,72 @@ test('its page in Plugins: what it watches, by state word, which plugins read th
     kit.setConnection(undefined);
 });
 
+test('its page in Plugins: past twelve, "Show N more" lists the next twelve; the headline counts what waits on you; the states are one tab stop with arrow keys', () => {
+    const { client } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url));
+    const { WatchingView, ChosenView, SHOWN, moveAmong } = client.internals;
+    const plain = (value) => JSON.parse(JSON.stringify(value));
+    const at = Date.now() - 60000;
+    const rows = Array.from({ length: 2 * SHOWN + 3 }, (_, i) => ({ sessionId: `s${i}`, title: `Session ${i}`, word: 'idle', updatedAt: at - i * 1000 }));
+    // Twelve first, then "Show 12 more", then the last three, then all.
+    const more = [];
+    const first = ChosenView({ word: 'idle', rows, onOpen: () => {}, onMore: (next, from) => more.push([next, from]) });
+    assert.equal(elementsOf(first).filter((e) => e.type === 'li').length, SHOWN);
+    const button = (view) => elementsOf(view).find((e) => e.type === 'button' && e.props['data-session-watch-more'] !== undefined);
+    assert.equal(textIn(button(first)), `Show ${SHOWN} more`);
+    const status = (view) => elementsOf(view).find((e) => e.props?.role === 'status');
+    assert.equal(textIn(status(first)), `12 of ${rows.length} shown, newest first.`, 'said in a status line, so a screen reader hears it');
+    button(first).props.onClick();
+    assert.deepEqual(plain(more), [[2 * SHOWN, SHOWN]], 'it asks for twelve more and says where the new ones start, for the focus');
+    const second = ChosenView({ word: 'idle', rows, onOpen: () => {}, limit: 2 * SHOWN, onMore: () => {} });
+    assert.equal(elementsOf(second).filter((e) => e.type === 'li').length, 2 * SHOWN);
+    assert.equal(textIn(button(second)), 'Show 3 more', 'the last press names how many are left');
+    const all = ChosenView({ word: 'idle', rows, onOpen: () => {}, limit: 3 * SHOWN, onMore: () => {} });
+    assert.equal(elementsOf(all).filter((e) => e.type === 'li').length, rows.length);
+    assert.equal(button(all), undefined, 'none left: the button goes');
+    assert.equal(textIn(status(all)), `All ${rows.length} shown.`);
+    assert.equal(elementsOf(ChosenView({ word: 'idle', rows: rows.slice(0, SHOWN), onMore: () => {} })).some((e) => e.props?.role === 'status'), false, 'twelve or fewer: no line about it');
+    // The section passes its limit to the chosen list.
+    const data = { total: rows.length + 3, words: [{ word: 'waiting for approval', count: 1 }, { word: 'waiting for your answer', count: 1 }, { word: 'running', count: 1 }, { word: 'idle', count: rows.length }], rows };
+    const view = WatchingView({ data, chosen: 'idle', limit: 2 * SHOWN, onMore: () => {} });
+    assert.equal(elementsOf(view).filter((e) => e.type === 'li' && e.props.className === 'dshsw-session').length, 2 * SHOWN);
+    // The headline: how many run, and how many wait on a person (approval, an answer, an outside agent's "waiting on you").
+    assert.match(textIn(view), new RegExp(`^What it watches${rows.length + 3} sessions · 1 running · 2 waiting on you`));
+    assert.match(textIn(WatchingView({ data: { ...data, words: data.words.slice(2) } })), new RegExp(`^What it watches${rows.length + 3} sessions · 1 running(?! ·)`), 'nobody waited on: the part is left out');
+    // One tab stop for the state buttons: the one last focused, else the chosen one, else the first.
+    const chips = (v) => elementsOf(v).filter((e) => e.type === 'button' && e.props.className === 'dshsw-word');
+    const stops = (v) => plain(chips(v).map((b) => b.props.tabIndex));
+    assert.deepEqual(stops(WatchingView({ data })), [0, -1, -1, -1]);
+    assert.deepEqual(stops(WatchingView({ data, chosen: 'idle' })), [-1, -1, -1, 0]);
+    assert.deepEqual(stops(WatchingView({ data, chosen: 'idle', current: 'running' })), [-1, -1, 0, -1]);
+    assert.deepEqual(stops(WatchingView({ data, current: 'gone' })), [0, -1, -1, -1], 'a word no longer shown: the first');
+    const toolbar = elementsOf(view).find((e) => e.props?.['aria-label'] === 'Sessions by state');
+    assert.equal(toolbar.props.role, 'toolbar');
+    assert.deepEqual(plain(elementsOf(toolbar).filter((e) => e.type === 'li').map((e) => e.props.role)), ['none', 'none', 'none', 'none']);
+    const moved = [];
+    chips(WatchingView({ data, onMove: (word) => moved.push(word) }))[2].props.onFocus();
+    assert.deepEqual(moved, ['running'], 'a button that takes the focus holds the tab stop');
+    // Arrows, Home and End move the focus among them, around the ends; other keys are left alone.
+    const focused = [];
+    const buttons = [0, 1, 2, 3].map((i) => ({ focus: () => focused.push(i) }));
+    const press = (key, from, extra = {}) => {
+        let prevented = false;
+        moveAmong({ key, target: buttons[from], currentTarget: { querySelectorAll: () => buttons }, preventDefault: () => { prevented = true; }, ...extra });
+        return prevented;
+    };
+    assert.equal(press('ArrowRight', 0), true);
+    press('ArrowDown', 3);
+    press('ArrowLeft', 0);
+    press('ArrowUp', 2);
+    press('Home', 2);
+    press('End', 1);
+    assert.deepEqual(focused, [1, 0, 3, 1, 0, 3]);
+    assert.equal(press('Enter', 1), false);
+    assert.equal(press('a', 1), false);
+    assert.equal(press('ArrowRight', 1, { altKey: true }), false);
+    assert.deepEqual(focused, [1, 0, 3, 1, 0, 3], 'Enter, letters and modified arrows do not move it');
+    assert.equal(toolbar.props.onKeyDown, moveAmong);
+});
+
 test('its page in Plugins: choosing a state lists the sessions that read it, newest first, each with Open; choosing it again closes the list', async () => {
     const { client } = loadClient(new URL('../plugins/session-watch/lib/client.js', import.meta.url));
     const { kit, readWatching, WatchingView, SHOWN, views } = client.internals;
@@ -883,7 +949,8 @@ test('its page in Plugins: choosing a state lists the sessions that read it, new
     assert.equal(rows.length, SHOWN);
     assert.deepEqual(plain(rows.slice(0, 3).map(textIn)), ['Late5 min agoOpen', 'Idle 05 min agoOpen', 'Idle 15 min agoOpen']);
     assert.equal(elementsOf(rows[1]).find((e) => e.type === 'time').props.dateTime, new Date(at).toISOString());
-    assert.match(textIn(list), /and 3 more, older$/);
+    // Past twelve: how many are shown, and a button for the next twelve (here the last three).
+    assert.match(textIn(list), /12 of 15 shown, newest first\.$/, 'without a way to show more, it says how many are shown');
     const open = elementsOf(rows[2]).find((e) => e.type === 'button');
     assert.equal(open.props['aria-label'], 'Open Idle 1');
     open.props.onClick();

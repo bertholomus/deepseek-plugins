@@ -1133,9 +1133,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-session time{flex:none;color:var(--${P}-text-2)}`,
             `.${P}-session .${P}-link{flex:none;margin-left:auto}`,
             `.${P}-watching .${P}-note{max-width:72ch}`,
+            `.${P}-more{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;margin:6px 0 0;font:var(--dsw-font-xs-13)}`,
         ];
-        /** How many sessions a chosen state lists at once. */
+        /** How many sessions a chosen state lists at once, and how many more each "Show more" adds. */
         const SHOWN = 12;
+        /** The state words that wait on a person: the headline counts them. */
+        const WAITING_WORDS = ['waiting for approval', 'waiting for your answer', 'waiting on you'];
 
         const api = kit.link(BUNDLE, { name: 'Session Watch' });
         const pluginList = kit.link('pluginManager', { name: 'DSH' });
@@ -1204,52 +1207,87 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const listed = (parts) => (parts.length < 2 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`);
         const sessionsWord = (n) => `${n} session${n === 1 ? '' : 's'}`;
 
-        /** The sessions of the chosen state, newest first, each with when it last changed and Open. */
-        function ChosenView({ word, rows, onOpen }) {
+        /**
+         * The sessions of the chosen state, newest first, each with when it last changed and Open: `limit` of them
+         * (twelve at first), and "Show N more" for the next twelve while there are more.
+         */
+        function ChosenView({ word, rows, onOpen, limit = SHOWN, onMore }) {
             const mine = (Array.isArray(rows) ? rows : []).filter((row) => row.word === word);
             if (mine.length === 0) {
                 return h('div', { id: `${P}-chosen`, className: `${P}-chosen`, 'data-session-watch-chosen': word },
                     h('p', { className: `${P}-note`, role: 'status' }, `No session reads ${word} now.`));
             }
+            const shown = Number.isSafeInteger(limit) && limit > SHOWN ? limit : SHOWN;
+            const left = mine.length - shown;
             return h('div', { id: `${P}-chosen`, className: `${P}-chosen`, 'data-session-watch-chosen': word },
                 h('ul', { className: `${P}-sessions`, 'aria-label': `Sessions that read ${word}` },
-                    mine.slice(0, SHOWN).map((row) => {
+                    mine.slice(0, shown).map((row) => {
                         const title = row.title || 'Untitled session';
                         return h('li', { key: row.sessionId, className: `${P}-session` },
                             h('span', { className: `${P}-session-title`, title }, title),
                             h(kit.TimeText, { at: row.updatedAt }),
                             onOpen ? h('button', { type: 'button', className: `${P}-link`, 'aria-label': `Open ${title}`, onClick: () => onOpen(row.sessionId) }, 'Open') : null);
                     })),
-                mine.length > SHOWN ? h('p', { className: `${P}-note` }, `and ${mine.length - SHOWN} more, older`) : null);
+                // Said in a status line, so a screen reader hears how many are listed after each "Show more".
+                left > 0 || shown > SHOWN ? h('div', { className: `${P}-more` },
+                    h('span', { className: `${P}-note`, role: 'status' }, left > 0 ? `${shown} of ${mine.length} shown, newest first.` : `All ${mine.length} shown.`),
+                    left > 0 && onMore ? h('button', {
+                        type: 'button',
+                        className: `${P}-link`,
+                        'data-session-watch-more': '',
+                        onClick: () => onMore(shown + SHOWN, shown),
+                    }, `Show ${Math.min(SHOWN, left)} more`) : null) : null);
         }
 
-        /** What it watches, from what `readWatching` gave: pure, for the tests. Choosing a state lists its sessions. */
-        function WatchingView({ data, error, onRetry, chosen, onChoose, onOpen, sectionRef }) {
+        /** Arrow keys, Home and End move between the state buttons: one tab stop for them all (DESIGN.md). */
+        const MOVES = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1, Home: 'first', End: 'last' };
+        function moveAmong(event) {
+            const step = MOVES[event?.key];
+            if (step === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
+            const buttons = [...(event.currentTarget?.querySelectorAll?.('button') ?? [])];
+            if (buttons.length === 0) return;
+            const at = Math.max(0, buttons.indexOf(event.target));
+            const next = step === 'first' ? 0 : step === 'last' ? buttons.length - 1 : (at + step + buttons.length) % buttons.length;
+            event.preventDefault?.();
+            buttons[next].focus?.();
+        }
+
+        /**
+         * What it watches, from what `readWatching` gave: pure, for the tests. Choosing a state lists its sessions.
+         * `current` is the state button that holds the one tab stop (else the chosen one, else the first); a button
+         * that takes the focus tells `onMove`.
+         */
+        function WatchingView({ data, error, onRetry, chosen, onChoose, onOpen, sectionRef, current, onMove, limit, onMore }) {
             const head = [h('h2', { key: 'title', className: `${P}-h2`, id: `${P}-watching-title` }, 'What it watches')];
             let body;
             if (!data) {
                 body = error ? h(kit.ErrorLine, { text: error, onRetry, lead: 'Couldn\'t read the sessions' }) : h(kit.Loading, { text: 'Reading the sessions' });
             } else {
                 const running = data.words.find((w) => w.word === 'running')?.count ?? 0;
+                const waiting = data.words.filter((w) => WAITING_WORDS.includes(w.word)).reduce((n, w) => n + w.count, 0);
                 // A chosen state stays, in its place, after its last session leaves it: it says so, and the focus stays on it.
                 const open = typeof chosen === 'string' && chosen !== '' ? chosen : undefined;
                 const words = wordsWith(data.words, open);
-                head.push(h('span', { key: 'count', className: `${P}-watching-count ${P}-num` }, data.total === 0 ? 'none yet' : `${sessionsWord(data.total)} · ${running} running`));
+                const stop = Math.max(0, [current, open].map((word) => words.findIndex((w) => w.word === word)).find((at) => at >= 0) ?? 0);
+                head.push(h('span', { key: 'count', className: `${P}-watching-count ${P}-num` }, data.total === 0 ? 'none yet'
+                    : `${sessionsWord(data.total)} · ${running} running${waiting > 0 ? ` · ${waiting} waiting on you` : ''}`));
                 body = [
                     data.total === 0
                         ? h('p', { key: 'none', className: `${P}-note` }, 'No sessions yet. Each new session shows here as soon as DSH makes it.')
-                        : h('ul', { key: 'words', className: `${P}-words`, 'aria-label': 'Sessions by state' },
-                            words.map(({ word, count }) => h('li', { key: word },
+                        : h('ul', { key: 'words', className: `${P}-words`, role: 'toolbar', 'aria-label': 'Sessions by state', onKeyDown: moveAmong },
+                            words.map(({ word, count }, at) => h('li', { key: word, role: 'none' },
                                 h('button', {
                                     type: 'button',
                                     className: `${P}-word`,
+                                    tabIndex: at === stop ? 0 : -1,
                                     'aria-expanded': open === word ? 'true' : 'false',
                                     ...(open === word ? { 'aria-controls': `${P}-chosen` } : {}),
                                     title: open === word ? 'Hide these sessions' : `Show the ${sessionsWord(count)} that read ${word}`,
+                                    onFocus: () => onMove?.(word),
                                     // Closing a state no session reads now takes its button away: the focus goes to the first state left.
                                     onClick: () => onChoose?.(open === word ? undefined : word, { gone: open === word && count === 0 }),
                                 }, h(kit.StateTag, { word }), h('span', { className: `${P}-num` }, String(count)))))),
-                    open && data.total > 0 ? h(ChosenView, { key: 'chosen', word: open, rows: data.rows, onOpen }) : null,
+                    open && data.total > 0 ? h(ChosenView, { key: 'chosen', word: open, rows: data.rows, onOpen, limit, onMore }) : null,
                     data.users ? h('p', { key: 'users', className: `${P}-note`, 'data-session-watch-users': '' },
                         `Autopilot, Decisions and Agent Terminals read sessions through it. ${listed(data.users.map((u) => `${u.name} is ${u.state}`))}.`) : null,
                     data.problem ? h('p', { key: 'problem', className: `${P}-note`, 'data-session-watch-problem': '' },
@@ -1267,22 +1305,44 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function Watching() {
             const live = kit.useLive(readWatching, ['sessions', 'settings'], { delayMs: 800 });
             const [chosen, setChosen] = React.useState(undefined);
+            const [current, setCurrent] = React.useState(undefined);
+            const [limit, setLimit] = React.useState(SHOWN);
             const sectionRef = React.useRef(null);
             const refocus = React.useRef(false);
+            const shownFrom = React.useRef(undefined);
             const onChoose = React.useCallback((word, how) => {
                 refocus.current = how?.gone === true;
+                setLimit(SHOWN);
                 setChosen(word);
             }, []);
+            const onMore = React.useCallback((next, from) => {
+                shownFrom.current = from;
+                setLimit(next);
+            }, []);
             React.useEffect(() => {
+                const root = sectionRef.current;
+                if (shownFrom.current !== undefined) {
+                    // "Show more" keeps the focus while it stays; once the last are shown it goes, and the focus
+                    // moves to the first session it showed.
+                    const from = shownFrom.current;
+                    shownFrom.current = undefined;
+                    if (!root?.querySelector?.('[data-session-watch-more]')) {
+                        const row = root?.querySelectorAll?.(`#${P}-chosen li`)?.[from];
+                        const target = row?.querySelector?.('button') ?? row;
+                        if (target) {
+                            if (target.tagName !== 'BUTTON') target.setAttribute('tabindex', '-1');
+                            target.focus?.();
+                        }
+                    }
+                }
                 if (!refocus.current) return;
                 refocus.current = false;
-                const root = sectionRef.current;
                 const target = root?.querySelector?.('[aria-label="Sessions by state"] button') ?? root?.querySelector?.('h2');
                 if (!target) return;
                 if (target.tagName !== 'BUTTON') target.setAttribute('tabindex', '-1');
                 target.focus?.();
             });
-            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh, chosen, onChoose, onOpen: views.openSession, sectionRef });
+            return h(WatchingView, { data: live.data, error: live.error, onRetry: live.refresh, chosen, onChoose, onOpen: views.openSession, sectionRef, current, onMove: setCurrent, limit, onMore });
         }
 
         /** On Session Watch's own page in Plugins only. */
@@ -1338,7 +1398,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, SHOWN, views, wordCounts, wordsWith, usersOf, readWatching, WatchingView, ChosenView, WatchingSection };
+        module.exports.internals = { kit, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, USERS, SHOWN, views, wordCounts, wordsWith, usersOf, readWatching, WatchingView, ChosenView, WatchingSection, moveAmong };
         return module.exports;
     },
 });

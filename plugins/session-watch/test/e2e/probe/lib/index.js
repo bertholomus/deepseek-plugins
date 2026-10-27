@@ -20,6 +20,7 @@ function brief(event) {
     const out = { type: event.type, at: Date.now() };
     for (const key of ['sessionId', 'change', 'status', 'turn', 'id']) if (event[key] !== undefined) out[key] = event[key];
     if (event.end) out.end = { kind: event.end.kind, turn: event.end.turn, ...(event.end.left ? { left: event.end.left } : {}) };
+    if (event.type === 'state' && event.state) out.asking = event.state.asking?.question ?? null;
     if (event.delivery) out.delivery = event.delivery;
     if (event.ask) out.ask = { id: event.ask.id, source: event.ask.source, question: event.ask.question };
     if (event.answer !== undefined) out.answer = event.answer;
@@ -45,12 +46,18 @@ class ProbeRemote {
         return { next: this.probe.events.length, items: this.probe.events.slice(from) };
     }
 
-    /** `deliver(sessionId, text, { mode })`: the delivery as it is when the call returns. */
-    async deliver(sessionId, text, mode) {
+    /** `deliver(sessionId, text, { mode, from })`: the delivery as it is when the call returns. */
+    async deliver(sessionId, text, mode, from) {
         const watch = this.probe.need();
-        const delivery = await watch.deliver(sessionId, text, mode ? { mode } : undefined);
+        const options = { ...(mode ? { mode } : {}), ...(from ? { from } : {}) };
+        const delivery = await watch.deliver(sessionId, text, Object.keys(options).length ? options : undefined);
         this.probe.deliveries.set(delivery.id, delivery);
         return delivery.toJSON();
+    }
+
+    /** `deliveryOf(id)`: a delivery's record as the watcher has it (an earlier run's too). */
+    async deliveryOf(id) {
+        return this.probe.need().deliveryOf(id) ?? null;
     }
 
     /** One delivery as it is now, and whether its `done` promise has resolved. */
@@ -123,7 +130,7 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(ProbeRemote, ['ready', 'events', 'deliver', 'delivery', 'row', 'full', 'log', 'cutOff', 'projection', 'raise', 'answer', 'asks', 'outcome', 'external']);
+markRemote(ProbeRemote, ['ready', 'events', 'deliver', 'deliveryOf', 'delivery', 'row', 'full', 'log', 'cutOff', 'projection', 'raise', 'answer', 'asks', 'outcome', 'external']);
 
 export function apply(ctx) {
     const probe = {
