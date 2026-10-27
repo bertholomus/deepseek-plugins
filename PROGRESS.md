@@ -163,3 +163,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 11:50 PM PDT: PASS 2 session-bridge (782641f) judged 9.5 PASS (U 9.5, R 9.5, UX 9.5, T 9.5, D 9.5).
 - 2026-10-26 11:53 PM PDT: PASS 2 canon (f31de80) judged 9.0 NOT YET (U 9, R 9, UX 9, T 9, D 9).
 - 2026-10-26 11:58 PM PDT: PASS 2 wallpaper (3a81132) judged 9.0 NOT YET (U 9, R 9.5, UX 8.5, T 9, D 9).
+- 2026-10-27 12:01 AM PDT: PASS 2 decisions (2ccbfb3) judged 9.0 NOT YET (U 9.5, R 9, UX 9.5, T 9, D 9.5).
