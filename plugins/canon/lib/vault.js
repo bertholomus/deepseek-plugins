@@ -17,7 +17,7 @@ import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { displayPath } from './config.js';
 import { field, noteOf, parseNote } from './frontmatter.js';
-import { Index, folderKeys } from './search.js';
+import { Index, folderKeys, projectsOf } from './search.js';
 import { EVERYDAY, distinctTerms, terms } from './text.js';
 
 /** The most notes Canon reads; past it the page says the vault was cut short. */
@@ -437,42 +437,56 @@ export class Vault {
     }
 
     /**
-     * The passage of a note that best fits the prompt's terms, read fresh
-     * from the file: its best paragraph (and the next, when it holds the
-     * prompt's words too and there is room), under the heading it sits in;
-     * the note's start when no paragraph has a prompt word. Lines addressed
-     * to agents are never in it. At most `budget` characters; undefined
-     * when the note cannot be read or is no longer active.
+     * The quote of a note for the prompt's terms (bestPassage), read fresh
+     * from the file, at most `budget` characters; undefined when the note
+     * cannot be read or is no longer active.
      * @param {string} rel - the note's vault path.
      * @param {string[]} queryTerms
      * @param {number} budget
      */
     async passage(rel, queryTerms, budget) {
+        const note = await this.quotable(rel);
+        return note === undefined ? undefined : bestPassage(note.body, queryTerms, budget);
+    }
+
+    /**
+     * An active note as a turn may quote it, read fresh from the file: its
+     * body, its frontmatter, its projects and when the file last changed;
+     * undefined when it cannot be read or is no longer active.
+     * @param {string} rel - the note's vault path.
+     */
+    async quotable(rel) {
         if (!this.root || !this.index.has(rel)) return undefined;
+        const file = join(this.root, rel);
         let text;
+        let mtimeMs = 0;
         try {
-            text = await readHead(join(this.root, rel));
+            text = await readHead(file);
+            mtimeMs = (await stat(file)).mtimeMs;
         } catch {
             return undefined;
         }
         const note = noteOf(rel, text);
         if (!note.active) return undefined;
-        return bestPassage(note.body, queryTerms, budget);
+        return { body: note.body, data: note.data, projects: projectsOf(note), mtimeMs };
     }
 }
 
 /**
- * The paragraphs of a body, each with the heading it sits under; code
- * fences stay whole.
+ * The paragraphs of a body, each with the heading it sits under, that
+ * heading's level and its section (a number that changes at each heading);
+ * code fences stay whole.
  */
 export function paragraphs(body) {
     const out = [];
     let heading = '';
+    let level = 0;
+    let section = 0;
     let current = [];
     let fenced = false;
     const flush = () => {
         const text = current.join('\n').trim();
-        if (text) out.push({ heading, text });
+        if (text) out.push({ heading, level, section, text });
         current = [];
     };
     for (const line of String(body ?? '').split(/\r?\n/)) {
@@ -484,7 +498,9 @@ export function paragraphs(body) {
         }
         if (!fenced && /^#{1,6}\s+\S/.test(line)) {
             flush();
+            level = /^#+/.exec(line)[0].length;
             heading = line.replace(/^#{1,6}\s+/, '').replace(/[\s#]+$/, '').trim();
+            section += 1;
             continue;
         }
         if (!fenced && line.trim() === '') {
@@ -497,6 +513,9 @@ export function paragraphs(body) {
     return out;
 }
 
+/** Whether a text ends on a line that introduces what follows ("Today:", "Steps:"). */
+const opens = (text) => /:\s*$/.test(String(text ?? ''));
+
 /** Cut text to at most `max` characters, at a line or word end when one is near, with "…". */
 export function cut(text, max) {
     const t = String(text ?? '').trim();
@@ -504,35 +523,116 @@ export function cut(text, max) {
     if (max <= 1) return '';
     const head = t.slice(0, max - 1);
     const at = Math.max(head.lastIndexOf('\n'), head.lastIndexOf(' '));
-    return `${(at > max * 0.6 ? head.slice(0, at) : head).trimEnd()}…`;
+    let kept = (at > max * 0.6 ? head.slice(0, at) : head).trimEnd();
+    // Never on a line that introduces what it leaves out ("Today:…"): back to the line before it, when there is one.
+    if (opens(kept) && kept.includes('\n')) kept = kept.slice(0, kept.lastIndexOf('\n')).trimEnd();
+    return `${kept}…`;
+}
+
+/** The characters a text takes as the block's quoted lines: "> " before each line, ">" alone for an empty one. */
+export function quotedLength(text) {
+    const lines = String(text ?? '').split('\n');
+    return lines.reduce((n, line) => n + (line.trim() ? line.length + 2 : 1), 0) + lines.length - 1;
+}
+
+/** `text` cut so that `size(text)` is at most `budget` (cut()'s rules). */
+function cutTo(text, budget, size) {
+    let max = Math.min(String(text ?? '').trim().length, budget);
+    let out = cut(text, max);
+    while (out && size(out) > budget && max > 1) {
+        max -= Math.max(1, size(out) - budget);
+        out = cut(text, max);
+    }
+    return size(out) <= budget ? out : '';
 }
 
 /**
- * The best passage of a body for a prompt's terms, at most `budget`
- * characters. The words that say what the prompt is about choose it; its
- * everyday request words ("run", "check") only when it has no others.
+ * The quote of a note for a prompt's terms, at most `budget` characters
+ * as `size` measures them (plain length by default; the block measures
+ * quoted lines, quotedLength):
+ * - the whole note when it fits (its title heading aside: the block's
+ *   citation names the note), so a question that asks two things gets
+ *   both;
+ * - else the paragraph that fits the prompt best, and then, while there is
+ *   room, the paragraph that adds the most of the prompt's words not quoted
+ *   yet (so each half of a question that asks two things gets the
+ *   paragraph that answers it), in the note's own order;
+ * - the note's start when no paragraph has a prompt word.
+ * A paragraph that ends on a line introducing what follows ("Today:")
+ * always brings the next one. The first paragraph quoted from a section
+ * says its heading ("Changing a port: Edit …"). The words that say what
+ * the prompt is about choose; its everyday request words ("run",
+ * "check") only when it has no others. Lines addressed to agents are
+ * never in it.
  */
-export function bestPassage(body, queryTerms, budget) {
+export function bestPassage(body, queryTerms, budget, size = (text) => text.length) {
     const about = queryTerms.filter((t) => !EVERYDAY.has(t));
     const wanted = new Set(about.length ? about : queryTerms);
     // A paragraph keeps its other lines when one is addressed to agents; one with nothing else is gone.
     const parts = paragraphs(body).map((p) => ({ ...p, text: unaddressed(p.text) })).filter((p) => p.text);
     if (parts.length === 0 || budget < 20) return '';
-    let best = -1; let bestScore = 0;
-    parts.forEach((p, i) => {
+    // The note's own title heading says nothing the citation does not.
+    const titleSection = parts[0].level === 1 ? parts[0].section : -1;
+    const write = (chosen) => {
+        const order = [...new Set(chosen)].sort((a, b) => a - b);
+        return order.map((i, k) => {
+            const p = parts[i];
+            const first = k === 0 || parts[order[k - 1]].section !== p.section;
+            return first && p.heading && p.section !== titleSection ? `${p.heading}: ${p.text}` : p.text;
+        }).join('\n');
+    };
+    const every = parts.map((_, i) => i);
+    if (size(write(every)) <= budget) return write(every);
+    const scores = parts.map((p) => {
         const hits = distinctTerms(`${p.heading} ${p.text}`).filter((t) => wanted.has(t)).length;
         const all = terms(p.text).filter((t) => wanted.has(t)).length;
-        const score = hits * 2 + Math.min(all, 6) * 0.25;
-        if (score > bestScore) { best = i; bestScore = score; }
+        return hits * 2 + Math.min(all, 6) * 0.25;
     });
-    const start = best < 0 ? 0 : best;
-    const chosen = parts[start];
-    let text = chosen.heading && best >= 0 ? `${chosen.heading}: ${chosen.text}` : chosen.text;
-    // The next paragraph only when its own words share the prompt's: the quote stays on what was asked.
-    const next = parts[start + 1];
-    const shares = best >= 0 && next && terms(next.text).some((t) => wanted.has(t));
-    if (shares && next.heading === chosen.heading && text.length + next.text.length + 1 <= budget) text = `${text}\n${next.text}`;
-    return cut(text, budget);
+    // A prompt word in a section's own heading says the section is about it (the note's title heading says that of
+    // the whole note, not of one paragraph).
+    const headed = parts.map((p) => (p.section === titleSection ? 0 : distinctTerms(p.heading).filter((t) => wanted.has(t)).length));
+    // A paragraph that introduces what follows comes with it.
+    const unit = (i) => (opens(parts[i].text) && i + 1 < parts.length ? [i, i + 1] : [i]);
+    let best = -1;
+    scores.forEach((score, i) => { if (score > 0 && (best < 0 || score > scores[best])) best = i; });
+    if (best < 0) {
+        // No paragraph has a prompt word: the note's start, as far as it goes.
+        const chosen = [];
+        for (const i of every) {
+            if (size(write([...chosen, ...unit(i)])) > budget) break;
+            chosen.push(...unit(i));
+        }
+        return chosen.length ? write(chosen) : cutTo(write(unit(0)), budget, size);
+    }
+    const first = unit(best);
+    if (size(write(first)) > budget) return cutTo(write(first), budget, size);
+    // Then, while there is room, the paragraph that adds the most of the prompt's words not quoted yet (of those, one
+    // whose section's heading has them, then the best scored): a question that asks two things gets the paragraph
+    // that answers each.
+    const chosen = new Set(first);
+    const words = parts.map((p) => distinctTerms(`${p.heading} ${p.text}`).filter((t) => wanted.has(t)));
+    const covered = new Set(first.flatMap((i) => words[i]));
+    const rest = every.filter((i) => !chosen.has(i) && scores[i] > 0);
+    while (rest.length) {
+        let pick = rest[0];
+        let gain = -1;
+        for (const i of rest) {
+            const adds = words[i].filter((t) => !covered.has(t)).length;
+            const better = headed[i] - headed[pick] || scores[i] - scores[pick];
+            if (adds > gain || (adds === gain && better > 0)) {
+                pick = i;
+                gain = adds;
+            }
+        }
+        rest.splice(rest.indexOf(pick), 1);
+        const tried = [...chosen, ...unit(pick)];
+        if (size(write(tried)) > budget) continue;
+        for (const i of unit(pick)) {
+            chosen.add(i);
+            for (const t of words[i]) covered.add(t);
+        }
+    }
+    return write([...chosen]);
 }
 
 /*
