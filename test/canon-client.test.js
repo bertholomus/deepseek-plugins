@@ -396,7 +396,7 @@ test('the page: no vault, a vault it cannot read, empty lists, switched off, a w
     assert.equal(withAttr(unset.tree, 'data-canon-try').length, 0, 'nothing to try without a vault');
     assert.equal(withAttr(unset.tree, 'data-canon-drafts').length, 0);
     assert.match(text, new RegExp(`${TEXT.noSessions}${TEXT.noSessionsText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
-    assert.match(text, /Nothing yetDrafts agents save, drafts you promote, sessions you switch off and setting changes show here\./);
+    assert.match(text, /Nothing yetDrafts agents save, drafts you promote or discard, sessions you switch off and setting changes show here\./);
 
     state = { ...PAGE_STATE, vault: { ...VAULT, state: 'error', error: { code: 'missing', text: 'The vault folder ~/Canon does not exist. Check the folder in Canon\'s settings, or create it.' }, counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0 } } };
     const missing = mount(CanonPage, {});

@@ -13,9 +13,10 @@ default, writes nothing to it):
   something worth keeping (a decision, a checked fact, a how-to, a gotcha)
   as a **draft** note in the vault's drafts folder. Drafts are never added
   to a turn.
-- **Promote**: a person, and only a person, makes a draft an active note
-  with **Promote** on Canon's page, and only while Canon's settings allow
-  it. Nothing promotes a draft by itself.
+- **Promote**: a person, and only a person, reads a draft in full on
+  Canon's page and makes it an active note with **Promote**, only while
+  Canon's settings allow it; or moves it to the vault's trash with
+  **Discard**. Nothing promotes or discards a draft by itself.
 
 Canon reads the vault on this computer, in DSH's own process: no model
 call, no network. It needs nothing else running. With Session Watch
@@ -48,7 +49,15 @@ database…" in the glossary). Words are lightly stemmed ("listens" finds
 "listen", "rotation" finds "Rotating", "429s" finds "429"); short forms
 read as the whole word ("certs", "DB", "auth", "config", "k8s"), and a few
 words people use in operations as the notes' own ("revert" and "undo" as
-roll back, "reboot" as restart, "RAM" as memory, "TTL" as expiry). Words
+roll back, "reboot" and "bounce" as restart, "wipe" and "nuke" as flush,
+"dump" and "snapshot" as backup, "responsible" and "maintainer" as owner,
+"RAM" as memory, "TTL" as expiry). So are a few phrases: "go live", "get
+it live" (or push, put or make it live), "roll it out", "a rollout" and
+"ship a new build" (a version, release, image, change, fix or update, or
+"ship it to prod") as deploy, and "who looks after" as owner. "Live" is a
+deploy only after go, get, push, put or make and where it ends the phrase:
+"routes live in routes.yaml" and "make the live config the default" stay
+as they are, and so does "once v2 ships". Words
 that say nothing ("please", "thanks", "looks good", "called") are left out,
 and so are a prompt's words about the vault and about answering from it
 ("answer from the team's shared notes and cite the note"): they say where
@@ -97,7 +106,14 @@ was decided and should be recorded are left out of what it is about; it is
 read by a coding request's rules, but brings the note in force on its
 subject without saying that note's title: "decision: quartz keys now expire
 after 10 minutes instead of 15. save it to the vault" gets the eviction
-policy decision it changes.
+policy decision it changes. A decision that also says how to save it is
+about the decision only: the sentences that name the capture tool, "as a
+draft (decision) note", "kind decision", "do not edit any files" or "no
+code changes" are left out first, so "We just agreed in standup:
+quartz-cache client reads now time out after 80 ms instead of 50 ms. Save
+that as a draft decision note with the canon_capture tool, kind decision,
+with a short title. Do not edit any files yourself." in quartz-cache's
+folder gets Client settings, the note that says 50 ms.
 
 ### When a note fits a question
 
@@ -290,107 +306,31 @@ out of sight, so Canon's card stands for it there.
 
 ## How well it picks notes
 
-Measured on labelled sets of prompts over the fixture vault
-(`test/fixtures/canon/vault`: 42 notes, 35 of them active, for five
-projects, people, decisions, runbooks and ideas), each prompt going through
-Canon's own recall exactly as a turn does, with the default settings (3
-notes, 2,000 characters), and given only the prompt and the session's
-folder (a test takes every label away and gets the same blocks). The floors
-were fixed before anything was measured (OPEN-QUESTIONS #29 and #33): the
-block's first note answers at least 80% of the prompts a note answers, an
+Measured on labelled sets of prompts over the fixture vault, each prompt
+going through Canon's own recall exactly as a turn does, at the default
+settings, against floors fixed before anything was measured: the block's
+first note answers at least 80% of the prompts a note answers, an
 answering note is in the block for at least 90%, at most 1.0 notes per
-block do not answer, at least 70% of the prompts no note answers get no
-block, and so do at least 90% of the everyday coding requests no note
-answers.
+block do not answer, and no block for at least 70% of the prompts no note
+answers and 90% of the everyday coding requests. Now:
 
-The sets:
+| | Dev set (tuned on) | Probe sets (tuned on) | Second hold-out | First hold-out (guard) |
+| --- | --- | --- | --- | --- |
+| The block's first note answers | 605 of 655 (92.4%) | 71 of 96 (74.0%): missed | 20 of 24 (83.3%) | 18 of 24 (75.0%): missed |
+| An answering note is in the block | 620 (94.7%) | 76 (79.2%): missed | 20 (83.3%): missed | 19 (79.2%): missed |
+| Notes per block that do not answer | 0.25 | 0.40 | 0.15 | 0.37 |
+| No block, for a prompt no note answers | 537 of 570 (94.2%) | 113 of 124 (91.1%) | 48 of 48 (100%) | 21 of 24 (87.5%) |
+| No block, for an everyday coding request | 432 of 445 (97.1%) | 101 of 110 (91.8%) | 40 of 40 (100%) | (not labelled) |
 
-- **The dev set** (tuned on; 1,213 prompts, 647 that a note answers, 566
-  that none does, 445 of those everyday coding requests): `dev.json` (922,
-  rounds 2 and 3, from sessions in a project's folder, in a folder inside
-  one, in an unrelated folder and in none, in many forms), `dev-fresh.json`
-  (72 by two fresh writers in round 3), `dev-judge.json` (the round-3
-  judge's 129, casually typed coding requests among them) and
-  `dev-casual.json` (round 4's 90 casually typed prompts and decisions to
-  record).
-- **The probe sets** (`probes.json`, tuned on, kept apart from the dev set;
-  220 prompts, 96 that a note answers, 110 everyday coding requests): two
-  fresh writers who read only the fixture vault and never saw Canon wrote
-  them in round 5, one typing as people type to a coding agent in a hurry
-  (`w1-`: "postgres: total of entries per account per month, include months
-  with nothing in them") and one with care (`w3-`). They were measured at
-  53646c8 and 341ff4e before any rule changed for them.
-- **The first hold-out** (`holdout.json`, 48 prompts, 24 that a note
-  answers; no kinds): a guard. Its prompts and misses are never read and no
-  rule is chosen on it; only its figures print.
-- **The second hold-out** (`holdout2.json`, 72 prompts with kinds, 24 that a
-  note answers, 40 everyday coding requests): measured once at 638044e,
-  tuned on from round 4 (OPEN-QUESTIONS #41).
-
-The figures, with round 3's frozen rules (638044e, as in 341ff4e), with
-round 4's unchecked work (53646c8), and now (the rules frozen at 41b4130):
-
-| Dev set | Round 3 | Round 4's work | Now |
-| --- | --- | --- | --- |
-| The block's first note answers | 599 of 647 (92.6%) | 595 (92.0%) | 595 (92.0%) |
-| An answering note is in the block | 614 (94.9%) | 609 (94.1%) | 610 (94.3%) |
-| Notes per block that do not answer | 0.38 (233 in 620 blocks) | 0.36 (219 in 615) | 0.26 (159 in 616) |
-| No block, for a prompt no note answers | 478 of 566 (84.5%) | 531 (93.8%) | 533 (94.2%) |
-| No block, for an everyday coding request | 383 of 445 (86.1%) | 430 (96.6%) | 432 (97.1%) |
-
-| Probe sets (tuned on) | Round 3 | Round 4's work | Now |
-| --- | --- | --- | --- |
-| The block's first note answers | 74 of 96 (77.1%) | 70 (72.9%) | 71 (74.0%) |
-| An answering note is in the block | 81 (84.4%) | 76 (79.2%) | 76 (79.2%) |
-| Notes per block that do not answer | 0.59 (49 in 83 blocks) | 0.52 (41 in 79) | 0.38 (30 in 78) |
-| No block, for a prompt no note answers | 74 of 124 (59.7%) | 105 (84.7%) | 113 (91.1%) |
-| No block, for an everyday coding request | 71 of 110 (64.5%) | 94 (85.5%) | 101 (91.8%) |
-
-| Second hold-out | Round 3 (measured once) | Round 4's work | Now |
-| --- | --- | --- | --- |
-| The block's first note answers | 20 of 24 (83.3%) | 20 (83.3%) | 20 (83.3%) |
-| An answering note is in the block | 20 (83.3%): missed | 20 (83.3%): missed | 20 (83.3%): missed |
-| Notes per block that do not answer | 0.35 (7 in 20 blocks) | 0.30 (6 in 20) | 0.15 (3 in 20) |
-| No block, for a prompt no note answers | 37 of 48 (77.1%) | 46 (95.8%) | 48 (100%) |
-| No block, for an everyday coding request | 29 of 40 (72.5%): missed | 38 (95.0%) | 40 (100%) |
-
-| First hold-out (guard) | Round 3 | Round 4's work | Now |
-| --- | --- | --- | --- |
-| The block's first note answers | 22 of 24 (91.7%) | 18 (75.0%): missed | 18 (75.0%): missed |
-| An answering note is in the block | 24 (100%) | 19 (79.2%): missed | 19 (79.2%): missed |
-| Notes per block that do not answer | 0.71 (17 in 24 blocks) | 0.60 (12 in 20) | 0.37 (7 in 19) |
-| No block, for a prompt no note answers | 21 of 24 (87.5%) | 21 (87.5%) | 21 (87.5%) |
-
-So round 4's rules keep notes off everyday coding requests (on the probe
-sets about one in three got a block with round 3's rules, one in twelve
-now), at a cost in recall: on the guard, two of its floors are missed since
-53646c8, and nothing chosen since on the other sets moved it. `npm test`
-holds the guard to no worse than that, with the floors it meets, and runs
-its four floors as a known miss (a `todo` test, the way OPEN-QUESTIONS #40
-set for the second hold-out). The builder also kept a hold-out of their
-own, a third writer's 55 prompts on the fixture vault with a sixth project
-added (not in the repo), measured once when the rules were frozen: the
-block's first note answered 9 of 21 (42.9%), an answering note was in the
-block for 10 (47.6%), 0.50 notes per block did not answer, and 28 of 34
-prompts no note answers got no block (82.4%; everyday coding requests 26
-of 29, 89.7%). With round 3's rules the same prompts got 11 of 21 (52.4%)
-first and 21 of 34 (61.8%) without a block. On prompts in words unlike the
-notes', Canon still misses many notes that bear on them.
-
-To measure again, with each prompt that got a wrong note, an extra one or a
-block it should not have:
-
-```sh
-node scripts/canon-relevance.mjs --set dev --misses
-node scripts/canon-relevance.mjs --set probes --misses
-```
+So Canon keeps notes off everyday coding requests and prompts no note
+answers, and gets the right note for prompts in the notes' own words; on
+prompts written by people who never saw Canon, in words unlike the notes',
+it misses many notes that bear on them. [MEASURES.md](MEASURES.md) says
+what each set is, how the figures moved round by round, and how to measure
+again (`node scripts/canon-relevance.mjs --set dev --misses`).
 
 What it still misses, by the dev set and the probe sets:
 
-- Words a note says another way: "Who looks after lantern-web?" and the
-  owners note; "How do I ship a new build of this service to production?"
-  in harbor-gateway's folder and "Deploying the gateway" (it says "deploy"
-  and "roll out", never "ship" or "production").
 - Questions told as a situation, with code-shaped words: "local dev, every
   /api call fails with dial tcp 127.0.0.1:7311: connect: connection
   refused" in lantern-web's folder and the local-run note; "merged a min ago
@@ -451,29 +391,40 @@ Canon has its own entry in the sidebar. Its page shows:
   reader hears it as "Add notes to <the session's title>"). The title opens
   the session.
 - **Drafts**: the notes in the drafts folder, each with when and where it
-  was saved (the session and turn) and **Promote**, and a line that says
-  whether Promote does anything now.
-- **What happened**: drafts saved and refused, drafts promoted and
-  refused, sessions switched off and on, setting changes (with a switch's,
-  a number's or a choice's new value: *“Add notes to turns” off*, *“Notes a
-  turn, at most” to 5*) and vault problems, newest first.
+  was saved (the session and turn), its first words, **Read the whole
+  draft** (its text as written, below its title, when there is more than
+  the first words), the active notes on the same subject ("Active note on the same
+  subject: “Gateway ports” (Projects/harbor-gateway/Gateway ports.md). Read
+  it before you promote this draft."), **Promote**, and, while Canon may
+  write drafts, **Discard**; and a line that says whether Promote does
+  anything now. A note is on the same subject when a turn with the draft's
+  words, in the folder it was saved from, would get it, and it shares two
+  of its own words (not a project's name) and a third of what the draft
+  says; the newest 30 drafts name theirs.
+- **What happened**: drafts saved and refused, drafts promoted, discarded
+  and refused, sessions switched off and on, setting changes (with a
+  switch's, a number's or a choice's new value: *“Add notes to turns” off*,
+  *“Notes a turn, at most” to 5*, and, while another setting is still
+  wrong, *“Notes a turn, at most” to 3; Canon waits until a wrong one is
+  fixed*) and vault problems, newest first.
 
 While a setting is wrong, the page names every wrong setting, what each
 must be and where to change it, and shows What happened. A number or
 true/false written in quotes in the profile (`maxNotes: "3"`) is text;
 when it would be right without the quotes, the page offers **Save it as
-3**, which saves it so through DSH's own settings call, says "Saved “Notes
+3** right under that setting, before the others that are wrong, which
+saves it so through DSH's own settings call, says "Saved “Notes
 a turn, at most” as 3, without quotes." (and "One more setting is still
 wrong." while another is), and puts the focus on that line.
 
 Every empty state says what to do next, and every refusal says why in
 words: "Not promoted: promoting is off (“Allow promoting drafts” in
 Canon's settings). Turn it on to promote drafts; until then Promote
-changes nothing." The switches, **Read again**, **Try it** and
-**Promote** keep the keyboard's focus while they work; after Promote it
-moves to the line that says what happened.
+changes nothing." The switches, **Read again**, **Try it**, **Promote**
+and **Discard** keep the keyboard's focus while they work; after Promote
+or Discard it moves to the line that says what happened.
 
-## Drafts and Promote
+## Drafts, Promote and Discard
 
 With **What Canon may write** set to **Drafts**, agents are offered
 `canon_capture` (title, body, kind, tags). In the default **Read only**, the
@@ -497,7 +448,7 @@ source:
   session: session-3b09dbf4-…
   turn: 5
   folder: "/Users/you/Projects/harbor-gateway"
-  by: "canon_capture"
+  by: canon_capture
 ---
 
 # Gateway keepalive
@@ -516,12 +467,24 @@ drafts** is on; otherwise it changes nothing and says which setting to
 change. It moves the draft out of the drafts folder into **Promoted notes
 go to** (the vault's top level by default) with `status: active` and the
 time it was promoted; every other line stays as written. The next turn it
-fits can get it.
+fits can get it, with "promoted" and its date in its citation; a decision
+comes before an older note of its project that the same turn gets, and
+that note's line says it is older (see The block).
+
+**Discard** also works only from Canon's page and only when a person
+presses it, while **What Canon may write** is **Drafts** (promoting need
+not be on). It moves the draft, as written, into the vault's `.trash`
+folder, where Obsidian keeps the notes it deletes, under a name that is
+free there (" 2" when one is taken), never over another note and never
+through a link; nothing is deleted. The page says where it went ("Discarded
+“Port notes”: it is in the vault's trash now, .trash/Port notes.md. Move
+it back to Drafts to keep it."), and What happened notes it. Canon never
+reads `.trash`, so a discarded draft is in no turn and no list.
 
 ### What Read only covers
 
 *What Canon may write* binds Canon, not the agents: in **Read only**,
-Canon offers no tool to save a note and promotes nothing. An agent's own
+Canon offers no tool to save a note, and promotes and discards nothing. An agent's own
 tools are another matter. An agent asked to record something can still
 find the vault on disk, read its notes and write one itself with its shell
 or file tools, like any other file. What keeps those tools out of the
@@ -547,7 +510,7 @@ drafts folder, and says what fits instead.
 | Setting | Default | Range | Where | What it does |
 | --- | --- | --- | --- | --- |
 | `vault` (Vault folder) | empty | a full path, or one starting with `~/` | Plugins | The Obsidian vault Canon reads. Empty: Canon does nothing until it is set. Never the home folder, `/`, or DSH's own data folder. |
-| `access` (What Canon may write) | `read-only` | `read-only` (Read only) or `drafts` (Drafts) | Plugins | Read only: Canon writes nothing, ever (agents' own tools: see [What Read only covers](#what-read-only-covers)). Drafts: agents may save new drafts in the drafts folder. |
+| `access` (What Canon may write) | `read-only` | `read-only` (Read only) or `drafts` (Drafts) | Plugins | Read only: Canon writes nothing, ever (agents' own tools: see [What Read only covers](#what-read-only-covers)). Drafts: agents may save new drafts in the drafts folder, and Discard on Canon's page moves one to the vault's `.trash`. |
 | `draftsFolder` (Drafts folder) | `Drafts` | a folder inside the vault | Plugins | Where drafts go. Its notes are never added to turns. |
 | `promote` (Allow promoting drafts) | `false` | on or off | Plugins | Whether Promote on Canon's page does anything. Needs `access: drafts`. |
 | `promoteFolder` (Promoted notes go to) | empty | empty, or a folder inside the vault outside the drafts folder | Plugins | Where promoted notes go. Empty: the vault's top level. |
@@ -580,13 +543,14 @@ mode 600:
 | File | What |
 | --- | --- |
 | `canon/recall.jsonl` | Each block added: session, turn, the notes and their size (the last 300). |
-| `canon/events.jsonl` | What happened: drafts, promotes, refusals, switches, settings, vault problems. It keeps the last 400 entries and rewrites itself past 1 MB. |
+| `canon/events.jsonl` | What happened: drafts, promotes, discards, refusals, switches, settings, vault problems. It keeps the last 400 entries and rewrites itself past 1 MB. |
 | `canon/state.json` | The sessions turned off, and the folders inside the vault Canon may not read as What happened last said them. |
 
 Which notes each session's latest recall cited also lives in the session's
 own state in DSH (the `canonRecall` projection), for the card after the
-turn. In the vault, Canon writes only drafts (with **Drafts** allowed) and
-promoted notes (with Promote allowed and pressed).
+turn. In the vault, Canon writes only drafts (with **Drafts** allowed),
+promoted notes (with Promote allowed and pressed) and discarded drafts in
+`.trash` (with **Drafts** allowed and Discard pressed).
 
 ## Setup
 
@@ -651,7 +615,7 @@ To remove it, follow [Remove a plugin](../../README.md#remove-a-plugin) for
 `dsh-plugin-canon` (row `canon`), and delete `canon/` in DSH's data folder
 to forget its logs and switches. Notes it wrote stay in your vault as
 ordinary notes: drafts in the drafts folder, promoted notes where they were
-promoted to. Earlier turns keep the blocks they got in their logs.
+promoted to, discarded drafts in `.trash`. Earlier turns keep the blocks they got in their logs.
 
 ## Limits
 
@@ -667,13 +631,19 @@ promoted to. Earlier turns keep the blocks they got in their logs.
 - The card stands on the session's latest turn that got notes; earlier
   turns' notes are on Canon's page (the last few per session) and in the
   Trajectory tab.
+- The words read as the notes' own are a short list (What a turn gets);
+  other paraphrases are not.
+- Which note is current is said in the block (kind, date, "older than"),
+  not decided: Canon never changes an active note, so after Promote the
+  older note stays active until a person changes its status in Obsidian.
+  The drafts card names the notes a draft shares its subject with for that.
 
 ## Tests
 
 From the repository root:
 
 ```sh
-node --test test/canon*.test.js       # the vault, search, which notes a prompt gets, the block, drafts and Promote, the page, the browser half
+node --test test/canon*.test.js       # the vault, search, which notes a prompt gets, the block, drafts, Promote and Discard, the page, the browser half
 node scripts/canon-relevance.mjs      # the figures in "How well it picks notes"
 node scripts/e2e.mjs canon            # real DSH in a throwaway home, on every DSH build here
 ```
@@ -688,8 +658,14 @@ a decision statement, a question about the team or for a fact, the fit
 rules above with prompts of each kind, a vault folder DSH may not list and
 a folder inside it that DSH may not list, the try-out's `~/` folder,
 numbers in quotes in the profile and the page's fix for them, the form's
-promote-folder check, lines addressed to agents, and where the focus goes
-after each switch, Read again and Promote. `test/canon-relevance.test.js`
+promote-folder check, lines addressed to agents, the words and phrases read
+as the notes' own (and "live" that is no deploy), decisions that say how to
+save them, the quote (the whole note when it fits, the paragraphs that
+answer each part of a two-part question, a list kept with the line that
+introduces it), each note's kind and date and the newer decision first,
+Discard (to `.trash`, under a free name, never through a link) and the
+whole draft and its subject's notes on the card, and where the focus goes
+after each switch, Read again, Promote and Discard. `test/canon-relevance.test.js`
 holds the dev set and the probe sets to the figures they reached, the first
 hold-out to no worse than measured and to the floors it meets (its four
 floors run as a known miss), and the second hold-out's shape and the
@@ -704,7 +680,8 @@ a throwaway home, with Session Watch and Canon and a scripted model
 copies the fixture vault into its temporary folder, and checks at the end
 that only the copy changed. From real sessions it shows that a prompt gets
 one block right after it that says its paths are in the canon vault and
-cites the note that fits first, that DSH's log keeps it as Canon's context
+cites the note that fits first, quoting all of it with the date in its
+citation, that DSH's log keeps it as Canon's context
 and its Trajectory tab lists it, that the page's try-out shows exactly the
 block the model got (with a full path or `~/`, and a folder that is
 neither refused in words), that a thank-you gets nothing, and that the
@@ -713,9 +690,12 @@ dark, wide and narrow, it turns a session off from the card (its next
 prompt gets nothing, and the focus stays on the switch) and back on from
 the page (the switch named for the session keeps the focus), saves Drafts
 in Canon's settings, lets the model save a draft (status draft, with its
-session, turn and folder, never recalled), presses Promote with promoting
-off (nothing changes, and the page says why) and with it on (an active
-note the next turn gets; the focus goes to the line that says so), and
+session, turn and folder, never recalled), opens the whole draft on its
+row, presses Promote with promoting off (nothing changes, and the page
+says why) and with it on (an active note the next turn gets; the focus
+goes to the line that says so), discards a draft (the card names the note
+on its subject first; the draft lands in the copy's `.trash` byte for
+byte, the page says where, and the focus goes there), and
 switches Canon off and on in Plugins (its card, entry and style go and
 come back; a turn in between gets nothing). It restarts DSH (a session
 switched off stays off), runs without Session Watch (the page still

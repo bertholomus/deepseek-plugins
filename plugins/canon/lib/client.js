@@ -1067,9 +1067,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             noSessionsText: 'When a turn starts from your prompt and active notes fit it, Canon adds them and lists the session here. Try a prompt above to see what one would get.',
             drafts: 'Drafts',
             history: 'What happened',
-            historySub: 'Newest first: drafts saved and promoted, switches, settings and the vault.',
+            historySub: 'Newest first: drafts saved, promoted and discarded, switches, settings and the vault.',
             noHistory: 'Nothing yet',
-            noHistoryText: 'Drafts agents save, drafts you promote, sessions you switch off and setting changes show here.',
+            noHistoryText: 'Drafts agents save, drafts you promote or discard, sessions you switch off and setting changes show here.',
             settings: 'Settings',
         };
 
