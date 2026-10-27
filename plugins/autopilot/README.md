@@ -170,7 +170,7 @@ setting to fix.
 | `idleWindowHours` (At start, look back) | `2` | 1 to 168 hours | Plugins | At start, idle sessions whose last turn ended within this many hours are looked at. |
 | `errorRetrySeconds` (Waits before each try after an error) | `120, 600, 1800` | 1 to 10 waits, each 0 to 86400 seconds | Plugins | The wait before each try after a failed turn; one try (a carry-on note) per wait. When the last try fails it gives up at once. |
 | `defaultRule` | `auto` | `auto`, `ask` or `off` | Profile | The rule for sessions without their own until you pick one on its page, which then wins. |
-| `startDelaySeconds` | `20` | 0 to 600 seconds | Profile | How long after it starts it first looks: after DSH starts, after a wrong setting is fixed, or after it is switched back on; a row waiting for that look says which. |
+| `startDelaySeconds` | `20` | 0 to 600 seconds | Profile | How long after it starts it first looks: after DSH starts, after a wrong setting is fixed, or after it is turned back on (`enabled` set to `true` again, or Autopilot or Session Watch turned back on in DSH's Plugins; the switch on Autopilot's page looks at once); a row waiting for that look says which. |
 | `enabled` | `true` | `true` or `false` | Profile | `false` keeps Autopilot loaded but idle: it watches nothing, and its page says so and how to change it. |
 
 *Profile* settings go in the `autopilot` row of the profile's
