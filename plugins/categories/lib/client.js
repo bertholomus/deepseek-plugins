@@ -550,7 +550,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [error, setError] = React.useState('');
             const composing = React.useRef(false);
             const alive = React.useRef(true);
+            const field = React.useRef(null);
             React.useEffect(() => () => { alive.current = false; }, []);
+            // Refused: the field had the keyboard, and lost it while it waited (disabled), so it takes it back.
+            React.useEffect(() => { if (error && !busy) field.current?.focus(); }, [error, busy]);
             const clean = draft.replace(/\s+/g, ' ').trim();
             const submit = async () => {
                 if (busy || clean === '') return;
@@ -574,7 +577,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(ui.Button, { variant: 'primary', disabled: busy || clean === '', onClick: () => void submit(), 'data-categories-dialog-submit': '' }, busy ? busyLabel : action)),
             },
             h('input', {
-                className: 'dshc-pg-input', value: draft, 'aria-label': label, placeholder: label, maxLength: 120,
+                ref: field, className: 'dshc-pg-input', value: draft, 'aria-label': label, placeholder: label, maxLength: 120,
                 'data-modal-autofocus': true, 'data-categories-name-input': '', disabled: busy,
                 onFocus: (event) => event.target.select(),
                 onChange: (event) => {
@@ -598,6 +601,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [error, setError] = React.useState('');
             const alive = React.useRef(true);
             React.useEffect(() => () => { alive.current = false; }, []);
+            // Refused: the keyboard goes back to the button that asked (it lost it while it waited, disabled).
+            React.useEffect(() => {
+                if (error && !busy && typeof document !== 'undefined') document.querySelector('.dshc-pg-dialog [data-categories-dialog-submit]')?.focus();
+            }, [error, busy]);
             const submit = async () => {
                 if (busy) return;
                 setBusy(true);

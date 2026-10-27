@@ -40,15 +40,15 @@
  * Without DSH_BIN it runs the newest DSH under .e2e/ (never one from PATH).
  * KEEP=1 keeps the temp folder.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { request } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
-import { dshBin, findPlaywright, openWindow, repoRoot, setDark, shot } from '../../../../test/e2e/harness.mjs';
+import { dismissNotices, dshBin, findPlaywright, openWindow, repoRoot, setDark, shot } from '../../../../test/e2e/harness.mjs';
 import { startFakeModel } from '../../../../test/e2e/fake-model.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -178,11 +178,14 @@ function webApi(web, endpoint, args) {
 
 const profile = join(home, 'profiles', 'web');
 
-/** The web profile with these of the repo's plugins linked in, and its patch (plus `rows`, more patch rows). */
+/**
+ * The web profile with these of the repo's plugins linked in (a name, or {name, dir} for one from elsewhere), and its
+ * patch (plus `rows`, more patch rows).
+ */
 function writeProfile(names, rows = '') {
     rmSync(join(profile, 'node_modules'), { recursive: true, force: true });
     mkdirSync(join(profile, 'node_modules'), { recursive: true });
-    const plugins = Object.fromEntries(names.map((name) => [`dsh-plugin-${name}`, join(pluginsDir, name)]));
+    const plugins = Object.fromEntries(names.map((one) => (typeof one === 'string' ? [`dsh-plugin-${one}`, join(pluginsDir, one)] : [`dsh-plugin-${one.name}`, one.dir])));
     writeFileSync(join(profile, 'package.json'), `${JSON.stringify({
         name: 'dsh-profile-web',
         private: true,
@@ -247,6 +250,27 @@ async function boot(dsh, what) {
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, `the session bridge (${what})`, 90000);
     await waitFor(() => signIns() > before, `the web sign-in link (${what})`, 30000);
     return child;
+}
+
+/**
+ * Wallpaper as the user's DSH runs it, copied (read only) from its commit into the test's folder: WALLPAPER_DIR, else
+ * `git archive` of WALLPAPER_REV (default 5b4d1eb, the live DSH's) from WALLPAPER_REPO (default the live DSH's
+ * checkout). Null when neither is there.
+ */
+function wallpaperCopy() {
+    if (process.env.WALLPAPER_DIR) return existsSync(join(process.env.WALLPAPER_DIR, 'package.json')) ? process.env.WALLPAPER_DIR : null;
+    const repo = process.env.WALLPAPER_REPO || join(homedir(), 'Projects', 'worktrees', 'dsh-split-plugins');
+    const rev = process.env.WALLPAPER_REV || '5b4d1eb';
+    const out = join(root, 'wallpaper-copy');
+    try {
+        const tar = execFileSync('git', ['-C', repo, 'archive', rev, 'plugins/wallpaper'], { maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+        mkdirSync(out, { recursive: true });
+        execFileSync('tar', ['-x', '-C', out], { input: tar });
+        const dir = join(out, 'plugins', 'wallpaper');
+        return existsSync(join(dir, 'package.json')) ? dir : null;
+    } catch {
+        return null;
+    }
 }
 
 const dsh = findDsh();
@@ -424,6 +448,8 @@ try {
         const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
         const section = async (name, fn) => {
             try {
+                // DSH's first-run notices (its Preview Notice) can open late, over whatever a check points at.
+                await dismissNotices(page).catch(() => {});
                 await fn();
             } catch (error) {
                 check(name, false, error?.stack ?? String(error));
@@ -468,6 +494,28 @@ try {
             }
             return out.sort((x, y) => x.ratio - y.ratio).slice(0, 3);
         }, selector);
+
+        /** Where the keyboard is: the header or page row that has it (and whether its ring shows), else what does. */
+        const focusedOn = () => page.evaluate(() => {
+            const el = document.activeElement;
+            const head = el?.closest?.('[data-categories-sb]');
+            if (head) return { sb: head.getAttribute('data-categories-sb'), self: head === el, ring: el.matches(':focus-visible') };
+            const row = el?.closest?.('[data-categories-page] [role="treeitem"][data-categories-id]');
+            if (row) return { row: row.getAttribute('data-categories-id'), self: row === el, ring: el.matches(':focus-visible') };
+            return { tag: el?.tagName ?? null, name: (el?.getAttribute?.('aria-label') ?? el?.textContent ?? '').trim().slice(0, 40) };
+        });
+        /** Open a header's or a page row's ⋯ from the keyboard (Shift+F10) and choose `item` with it (Enter). */
+        const choose = async (target, item) => {
+            await target.focus();
+            await page.keyboard.press('Shift+F10');
+            const row = page.getByRole('menuitem', { name: item, exact: true });
+            await row.waitFor({ state: 'visible', timeout: 5000 });
+            await row.focus();
+            await page.keyboard.press('Enter');
+        };
+        const nameField = page.locator('[data-categories-name-input]');
+        const refusal = page.locator('.dshc-pg-dialog-error');
+        const dialogGone = () => page.getByRole('dialog').first().waitFor({ state: 'hidden', timeout: 5000 });
 
         await section('the session list by category in a real window', async () => {
             await waitFor(async () => (await heads()).length >= 5, 'the headers in DSH\'s session list', 60000);
@@ -572,7 +620,129 @@ try {
             await shot(page, shots, 'sidebar-dragged-light');
             await rowE.dragTo(experimentation);
             const back = await waitFor(async () => { const now = await holds(); return now.Experimentation?.length === 1 ? now : null; }, 'work-e back in Experimentation', 10000).catch(() => holds());
-            check('dragged back onto its own category\'s header, it is where it was', json(back['Fleet Services']) === json([wsId.d]) && json(back.Experimentation) === json([wsId.e]), json(back));
+            // The window has it too once its header counts it (the plugin answers once DSH's order is in step).
+            const counted = await waitFor(async () => ((await experimentation.getAttribute('aria-label')) === 'Experimentation, 1 workspace' ? true : null), 'the window to count it back', 10000).catch(() => false);
+            check('dragged back onto its own category\'s header, it is where it was', json(back['Fleet Services']) === json([wsId.d]) && json(back.Experimentation) === json([wsId.e]) && counted,
+                json({ back, label: await experimentation.getAttribute('aria-label') }));
+        });
+
+        await section('Add a workspace names every row of its submenu, the ones in other categories with where they are now', async () => {
+            const general = page.locator('[data-categories-sb="testing-out-coordinator"]');
+            await choose(general, 'Add a workspace');
+            // DSH draws a submenu's entries as menuitem rows with their labels: the last menu open is the submenu.
+            const expected = [`${titles.c} · Local Model Recipe`, `${titles.d} · Fleet Services`, `${titles.e} · Experimentation`];
+            let rows = null;
+            await waitFor(async () => {
+                const found = await page.evaluate(() => {
+                    const menus = [...document.querySelectorAll('[role="menu"]')].filter((m) => m.getClientRects().length > 0);
+                    const sub = menus.length > 1 ? menus.at(-1) : null;
+                    if (!sub) return null;
+                    const text = (node, skip) => [...node.childNodes].map((n) => (n.nodeType === 3 ? n.textContent : n.nodeType === 1 && !skip(n) ? text(n, skip) : '')).join('');
+                    return [...sub.querySelectorAll('[role="menuitem"]')].map((item) => ({
+                        shown: text(item, (n) => n.classList.contains('dshc-sr')).replace(/\s+/g, ' ').trim(),
+                        spoken: text(item, (n) => n.getAttribute('aria-hidden') === 'true').replace(/\s+/g, ' ').trim(),
+                    }));
+                });
+                rows = found && found.length > 0 ? found : rows;
+                // DSH's own order of its workspaces can reach the window a moment after the plugin's answer.
+                return rows && json(rows.slice(1).map((r) => r.shown)) === json(expected) ? rows : null;
+            }, 'Add a workspace\'s submenu', 5000).catch(() => {});
+            rows ??= [];
+            await shot(page, shots, 'sidebar-add-a-workspace-light');
+            const taken = rows.slice(1);
+            check('Add a workspace: no blank row; the workspace in no category first, then each in another category with where it is now, said aloud too',
+                rows.length === 4 && rows.every((r) => r.shown && r.spoken) && !rows[0].shown.includes('·')
+                && json(taken.map((r) => r.shown)) === json(expected)
+                && json(taken.map((r) => r.spoken)) === json([`${titles.c}, now in Local Model Recipe`, `${titles.d}, now in Fleet Services`, `${titles.e}, now in Experimentation`]),
+            json(rows));
+            await page.keyboard.press('Escape');
+            await page.keyboard.press('Escape');
+            await waitFor(async () => (await page.locator('[role="menu"]').count()) === 0, 'the menu to close', 5000).catch(() => {});
+        });
+
+        await section('a dialog from a header\'s ⋯ gives the keyboard back to that header; a name in use is refused', async () => {
+            const general = page.locator('[data-categories-sb="testing-out-coordinator"]');
+            await choose(general, 'Rename…');
+            await nameField.waitFor({ state: 'visible', timeout: 5000 });
+            await page.keyboard.press('Escape');
+            await dialogGone();
+            const escaped = await focusedOn();
+            check('Escape closes Rename… and the keyboard is back on its header, with its ring', escaped.sb === 'testing-out-coordinator' && escaped.self && escaped.ring, json(escaped));
+            // A name another category has, in another case: refused under the field; the dialog and the keyboard stay.
+            await choose(general, 'Rename…');
+            await nameField.fill('fleet SERVICES');
+            await nameField.press('Enter');
+            await refusal.waitFor({ state: 'visible', timeout: 5000 });
+            const words = await refusal.innerText();
+            const inField = await page.evaluate(() => document.activeElement?.hasAttribute('data-categories-name-input') === true);
+            check('a name another category has, in any case, is refused under the field, and the keyboard stays in it', words === 'There is a category named Fleet Services already.' && inField, json({ words, inField }));
+            await shot(page, shots, 'sidebar-rename-refused-light');
+            // Renamed by the keyboard: the keyboard is back on the header, under its new name.
+            await nameField.fill('General Ops');
+            await nameField.press('Enter');
+            await dialogGone();
+            await waitFor(async () => (await heads())[0] === 'General Ops', 'the new name', 5000).catch(() => {});
+            const renamed = await focusedOn();
+            check('Rename… confirmed with Enter: renamed, and the keyboard is back on its header', (await heads())[0] === 'General Ops' && renamed.sb === 'testing-out-coordinator' && renamed.self, json({ heads: await heads(), renamed }));
+            await choose(general, 'Rename…');
+            await nameField.fill('General');
+            await nameField.press('Enter');
+            await dialogGone();
+            await waitFor(async () => (await heads())[0] === 'General', 'the name back', 5000);
+            // New category… from General's ⋯: made last of the categories, the keyboard back on General's header.
+            await choose(general, 'New category…');
+            await nameField.fill('Scratch');
+            await nameField.press('Enter');
+            await dialogGone();
+            await waitFor(async () => (await heads()).includes('Scratch'), 'Scratch in the list', 5000);
+            const made = await focusedOn();
+            check('New category… confirmed with Enter: made, last of the categories, and the keyboard is back on the header it came from',
+                json(await heads()) === json(['General', 'Local Model Recipe', 'Fleet Services', 'Experimentation', 'Scratch', 'Other workspaces']) && made.sb === 'testing-out-coordinator' && made.self,
+            json({ heads: await heads(), made }));
+            // Deleted by the keyboard: its header goes, and the keyboard is on the header now in its place.
+            await choose(page.locator('[data-categories-sb="scratch"]'), 'Delete…');
+            const remove = page.getByRole('button', { name: 'Delete category', exact: true });
+            await remove.waitFor({ state: 'visible', timeout: 5000 });
+            await remove.focus();
+            await page.keyboard.press('Enter');
+            await dialogGone();
+            await waitFor(async () => !(await heads()).includes('Scratch'), 'Scratch gone', 5000);
+            await page.waitForTimeout(300);
+            const gone = await focusedOn();
+            check('Delete… confirmed with Enter: gone, and the keyboard is on the header now in its place (Other workspaces)', gone.sb === '@others' && gone.self, json(gone));
+        });
+
+        await section('a long name is cut once, at a word, with the whole name in DSH\'s tooltip; 24 characters are never cut', async () => {
+            const general = page.locator('[data-categories-sb="testing-out-coordinator"]');
+            const long = 'Local Model Recipe Operations and Tensor Modulation Sweeps';
+            const short = 'Experimentation and Labs';
+            for (const name of [long, short]) {
+                await choose(general, 'New category…');
+                await nameField.fill(name);
+                await nameField.press('Enter');
+                await dialogGone();
+            }
+            const named = (name) => page.locator('[data-categories-sb]').filter({ has: page.locator(`[data-categories-title="${name}"]`) });
+            await named(long).waitFor({ state: 'visible', timeout: 5000 });
+            const cut = await named(long).locator('.dshc-sb-name').evaluate((el) => ({ text: el.textContent, mark: el.hasAttribute('data-categories-cut'), over: el.scrollWidth > el.clientWidth }));
+            const start = cut.text.slice(0, -1);
+            const atWord = cut.text.endsWith('…') && long.startsWith(start) && long[start.length] === ' ';
+            await named(long).hover();
+            const tip = page.getByRole('tooltip');
+            const tipText = await waitFor(async () => ((await tip.count()) > 0 ? (await tip.first().innerText()).trim() : null), 'DSH\'s tooltip on the long name', 5000).catch(() => null);
+            await shot(page, shots, 'sidebar-long-name-light');
+            const whole = await named(short).locator('.dshc-sb-name').evaluate((el) => ({ text: el.textContent, mark: el.hasAttribute('data-categories-cut'), over: el.scrollWidth > el.clientWidth }));
+            check('a name too long for its header is cut once, at a word, with "…", the whole name in DSH\'s tooltip',
+                atWord && cut.mark && !cut.over && tipText === long, json({ cut, tipText }));
+            check('a name of 24 characters shows whole, uncut', short.length === 24 && whole.text === short && !whole.mark && !whole.over, json(whole));
+            await page.mouse.move(5, 5);
+            for (const name of [long, short]) {
+                await choose(named(name), 'Delete…');
+                const remove = page.getByRole('button', { name: 'Delete category', exact: true });
+                await remove.click();
+                await dialogGone();
+            }
+            await waitFor(async () => (await heads()).length === 5, 'the two gone', 5000);
         });
 
         await section('the Categories page on its glass card', async () => {
@@ -585,7 +755,7 @@ try {
             const rows = await pageRoot.locator('[role="treeitem"][data-categories-node="category"] > .dshc-tree-row .dshc-tree-title').allInnerTexts();
             check('the page: its heading, its count, each category in order with Other workspaces last', heading === 'Categories' && count === '4 categories' && json(rows) === json(['General', 'Local Model Recipe', 'Fleet Services', 'Experimentation', 'Other workspaces']), json({ heading, count, rows }));
             const grounds = await page.evaluate(() => {
-                const root = getComputedStyle(document.querySelector('.dshc-pg'));
+                const root = getComputedStyle(document.querySelector('.dshc-page'));
                 const card = getComputedStyle(document.querySelector('.dshc-pg-scroll'));
                 return { root: root.backgroundColor, card: card.backgroundColor, blur: card.backdropFilter || card.webkitBackdropFilter, radius: card.borderTopLeftRadius };
             });
@@ -607,6 +777,65 @@ try {
             check('find by name keeps what matches', json(found) === json(['Fleet Services']), json(found));
             await shot(page, shots, 'page-find-light');
             await findBox.press('Escape');
+        });
+
+        await section('a change that can\'t be saved is refused in the window, the page says why, and a page row\'s dialog gives the keyboard back to it', async () => {
+            const pageRoot = page.locator('[data-categories-page]');
+            const row = pageRoot.locator('[role="treeitem"][data-categories-id="testing-out-coordinator"]');
+            await row.waitFor({ state: 'visible', timeout: 5000 });
+            check('all well: the page names no trouble with its store', (await pageRoot.locator('[data-categories-store-note]').count()) === 0);
+            // Escape from a page row's dialog: the keyboard is back on that row.
+            await choose(row, 'Rename…');
+            await nameField.waitFor({ state: 'visible', timeout: 5000 });
+            await page.keyboard.press('Escape');
+            await dialogGone();
+            const back = await focusedOn();
+            check('on the page, Escape closes Rename… and the keyboard is back on that row', back.row === 'testing-out-coordinator' && back.self, json(back));
+            // The store can't be written (a folder where its next copy goes): the rename is refused, and nothing changed.
+            const blocker = `${storeFile}.tmp`;
+            mkdirSync(blocker);
+            try {
+                await choose(row, 'Rename…');
+                await nameField.fill('Not kept');
+                await nameField.press('Enter');
+                await refusal.waitFor({ state: 'visible', timeout: 5000 });
+                const words = await refusal.innerText();
+                const inField = await page.evaluate(() => document.activeElement?.hasAttribute('data-categories-name-input') === true);
+                check('a rename that can\'t be saved is refused in the dialog in words, the keyboard in the field',
+                    /^Not saved: \S*categories\.json can't be written \(a folder is in the way\), so nothing changed\. Try again once it can be\.$/.test(words) && inField, json({ words, inField }));
+                await shot(page, shots, 'page-not-saved-dialog-light');
+                await page.keyboard.press('Escape');
+                await dialogGone();
+                const note = pageRoot.locator('[data-categories-store-note="unsaved"]');
+                await note.waitFor({ state: 'visible', timeout: 5000 });
+                const said = await note.innerText();
+                const store = readJson(storeFile);
+                check('… the page says it can\'t be saved, as an alert, and the name and the store are as they were',
+                    (await note.getAttribute('role')) === 'alert' && /^Not saved: The categories can't be saved in \S*categories\.json \(a folder is in the way\), so a change made now is undone\. Each change tries again\.$/.test(said.replace(/\s+/g, ' ').trim())
+                    && (await row.locator(':scope > .dshc-tree-row .dshc-tree-title').innerText()) === 'General' && store.categories?.['testing-out-coordinator']?.name === 'General',
+                json({ said, store: store.categories?.['testing-out-coordinator']?.name }));
+                await shot(page, shots, 'page-not-saved-light');
+                await setDark(page, true);
+                await shot(page, shots, 'page-not-saved-dark');
+                await setDark(page, false);
+            } finally {
+                rmSync(blocker, { recursive: true, force: true });
+            }
+            // Once it can be written, the next change saves, the note goes, and the keyboard is back on the row.
+            await choose(row, 'Rename…');
+            await nameField.fill('General Ops');
+            await nameField.press('Enter');
+            await dialogGone();
+            await waitFor(async () => (await pageRoot.locator('[data-categories-store-note]').count()) === 0, 'the note to go', 5000).catch(() => {});
+            const saved = readJson(storeFile).categories?.['testing-out-coordinator']?.name;
+            const after = await focusedOn();
+            check('… the next change saves, the note goes, and the keyboard is back on the row', saved === 'General Ops' && (await pageRoot.locator('[data-categories-store-note]').count()) === 0 && after.row === 'testing-out-coordinator' && after.self,
+                json({ saved, after }));
+            await choose(row, 'Rename…');
+            await nameField.fill('General');
+            await nameField.press('Enter');
+            await dialogGone();
+            await waitFor(async () => readJson(storeFile).categories?.['testing-out-coordinator']?.name === 'General', 'the name back', 5000);
         });
 
         await section('a 760 px window', async () => {
@@ -674,12 +903,13 @@ try {
 
     // 7. Its row in the profile, as the user writes it, at DSH's next start. Values of the wrong type: each counts as
     //    its default (the categories still show), the plugin's log warns once for each, in words, and the list names
-    //    them for the page. Then enabled: false: the list says off, a change is refused in words, and nothing is
-    //    written (the store, the log, DSH's workspace order).
+    //    them for the page. A word that plainly means off ("no", as YAML 1.2 reads an unquoted no) counts as off, said
+    //    the same way. Then enabled: false: the list says off, a change is refused in words, and nothing is written
+    //    (the store, the log, DSH's workspace order).
     const names = WITH_COORDINATOR ? ['categories', 'session-bridge', 'coordinator'] : ['categories', 'session-bridge'];
     await stopDsh(child);
     const logAt = readText(logFile).length;
-    writeProfile(names, '- id: categories\n  config:\n    enabled: "no"\n    projectsStoreFile: 7\n');
+    writeProfile(names, '- id: categories\n  config:\n    enabled: "yes"\n    projectsStoreFile: 7\n');
     child = await boot(dsh, 'wrong settings');
     const webWrong = await signInWeb();
     const wrong = await waitFor(async () => { const r = await webApi(webWrong, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the list with wrong settings', 30000);
@@ -689,10 +919,23 @@ try {
         json({ categories: wrong.value?.categories?.map((c) => c.name), problems: wrong.value?.problems }));
     check('… and the plugin\'s log warns once for each, in words',
         warned.filter((line) => line.startsWith('warn a setting is wrong: ')).length === 2
-        && warned.includes('warn a setting is wrong: enabled must be true or false, but it is "no"; it counts as true until you change it')
+        && warned.includes('warn a setting is wrong: enabled must be true or false, but it is "yes"; it counts as true until you change it')
         && warned.includes('warn a setting is wrong: projectsStoreFile must be a file path, or empty to skip the move from the projects plugin, but it is 7; ~/.dsh/projects/projects.json is used until you change it'),
         warned.join('\n'));
     const orderKept = await dshOrder();
+    await stopDsh(child);
+    const storeNo = readText(storeFile);
+    const logNo = readText(logFile).length;
+    writeProfile(names, '- id: categories\n  config:\n    enabled: "no"\n');
+    child = await boot(dsh, 'enabled: no');
+    const webNo = await signInWeb();
+    const noList = await waitFor(async () => { const r = await webApi(webNo, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the list with enabled: no', 30000);
+    const noLines = readText(logFile).slice(logNo).split('\n').filter(Boolean).map((line) => line.replace(/^\S+ /, ''));
+    check('enabled: no (a word that means off) counts as off: the list says off and names it; the log warns once; the store and DSH\'s order untouched',
+        noList.value?.off === true && noList.value.categories.length === 0 && json((noList.value.problems ?? []).map((p) => p.text)) === json(['enabled must be true or false, but it is "no"; it counts as false until you change it'])
+        && json(noLines) === json(['warn a setting is wrong: enabled must be true or false, but it is "no"; it counts as false until you change it'])
+        && readText(storeFile) === storeNo && json(await dshOrder()) === json(orderKept),
+    json({ off: noList.value?.off, problems: noList.value?.problems, lines: noLines }));
     await stopDsh(child);
     const storeKept = readText(storeFile);
     const logKept = readText(logFile);
@@ -730,6 +973,53 @@ try {
         made.ok && keptFiles.length === 1 && readText(join(categoriesDir, keptFiles[0])) === broken && (statSync(join(categoriesDir, keptFiles[0])).mode & 0o777) === 0o600
         && JSON.parse(readText(storeFile)).categories?.fresh?.name === 'Fresh',
         json({ made: made.ok, keptFiles }));
+
+    // 9. Beside Wallpaper, as on the user's DSH (its commit, copied read only): the Categories page keeps an
+    //    unpainted root and one glass card with one blur; Wallpaper's glass for the page's old root class falls on
+    //    nothing. Pictures light and dark.
+    const wallpaper = pw ? wallpaperCopy() : null;
+    if (!pw) console.log('skipped: beside Wallpaper (no window)');
+    else if (!wallpaper) console.log('skipped: beside Wallpaper (not found: set WALLPAPER_DIR, or WALLPAPER_REPO and WALLPAPER_REV)');
+    else {
+        await stopDsh(child);
+        writeProfile([...names, { name: 'wallpaper', dir: wallpaper }]);
+        child = await boot(dsh, 'beside Wallpaper');
+        const link = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1];
+        win = await openWindow({ signIn: async () => ({ link }) }, pw, { width: 1280, height: 860 });
+        const { page } = win;
+        await waitFor(() => page.evaluate(() => document.body.classList.contains('wp-on')), 'Wallpaper on', 30000);
+        await dismissNotices(page).catch(() => {});
+        await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
+        await page.locator('[data-categories-page]').waitFor({ state: 'visible', timeout: 20000 });
+        await page.waitForTimeout(600);
+        const look = () => page.evaluate(() => {
+            const root = document.querySelector('[data-categories-page]');
+            const blurOf = (el) => { const cs = getComputedStyle(el); const f = cs.backdropFilter || cs.webkitBackdropFilter || 'none'; return f === 'none' ? null : f; };
+            const name = (el) => `${el.tagName.toLowerCase()}${el.className && typeof el.className === 'string' ? `.${el.className.trim().split(/\s+/).join('.')}` : ''}`;
+            const inside = [root, ...root.querySelectorAll('*')].filter((el) => blurOf(el)).map(name);
+            const above = [];
+            for (let el = root.parentElement; el && el !== document.body; el = el.parentElement) if (blurOf(el)) above.push(name(el));
+            const rs = getComputedStyle(root);
+            const card = getComputedStyle(document.querySelector('.dshc-pg-scroll'));
+            return {
+                on: document.body.classList.contains('wp-on'), root: rs.backgroundColor, rootBorder: rs.borderTopWidth, rootRadius: rs.borderTopLeftRadius,
+                inside, above, old: document.querySelectorAll('.dshc-pg').length, card: card.backgroundColor, cardBlur: card.backdropFilter || card.webkitBackdropFilter,
+            };
+        });
+        const light = await look();
+        await shot(page, shots, 'wallpaper-page-light');
+        await setDark(page, true);
+        await page.waitForTimeout(400);
+        const dark = await look();
+        await shot(page, shots, 'wallpaper-page-dark');
+        await setDark(page, false);
+        const one = (l) => l.on && l.root === 'rgba(0, 0, 0, 0)' && l.rootBorder === '0px' && l.old === 0 && l.inside.length === 1 && l.above.length === 0 && /blur\(/.test(l.cardBlur);
+        check('beside Wallpaper: the page\'s root stays unpainted and unframed, its content on one glass card, blurred once (light and dark)', one(light) && one(dark), json({ light, dark }));
+        const ours = win.errors.filter((text) => /categor/i.test(text));
+        check('beside Wallpaper: no errors from the plugin in the window', ours.length === 0, ours.join('\n'));
+        await win.browser?.close().catch(() => {});
+        win = undefined;
+    }
 } catch (error) {
     failed += 1;
     console.log(`not ok - e2e aborted: ${error?.stack ?? error}`);

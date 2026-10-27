@@ -2567,3 +2567,40 @@ test('browser half: with workspaces and no category yet, the page says what cate
     assert.equal(hint(), undefined);
     assert.ok(byHook(draw(), 'data-categories-empty'));
 });
+
+test('browser half: a refused name or delete keeps the keyboard in its dialog: the field, or the button that asked', async () => {
+    const focused = [];
+    const submit = { focus() { focused.push('delete'); } };
+    const document = { querySelector: (selector) => (selector === '.dshc-pg-dialog [data-categories-dialog-submit]' ? submit : null) };
+    const { client, react } = loadClient({ document });
+    const { NameDialog, ConfirmDialog } = client.internals;
+    let answer = 'There is a category named Shop already.';
+    const draw = mount(react, () => NameDialog({ title: 'Rename category', label: 'Category name', initial: 'Fleet', action: 'Rename', busyLabel: 'Renaming…', onSubmit: async () => answer, onClose() {} }), { effects: true });
+    let tree = draw();
+    const input = () => elementsOf(tree).find((e) => e.type === 'input');
+    // The field (DSH's dialog gives it the keyboard as it opens) is disabled while the plugin answers, which takes
+    // the keyboard from it; refused, it takes the keyboard back, with the reason under it.
+    input().props.ref.current = { focus() { focused.push('field'); } };
+    input().props.onChange({ target: { value: 'shop' } });
+    tree = draw();
+    input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
+    tree = draw();
+    assert.equal(input().props.disabled, true);
+    await tick();
+    tree = draw();
+    assert.deepEqual([textIn(byClass(tree, 'dshc-pg-dialog-error')), byClass(tree, 'dshc-pg-dialog-error')[0].props.role, input().props.disabled, focused], ['There is a category named Shop already.', 'alert', false, ['field']]);
+    // Typing clears the reason; nothing takes the keyboard again until the next refusal.
+    input().props.onChange({ target: { value: 'Shop floor' } });
+    tree = draw();
+    assert.deepEqual([byClass(tree, 'dshc-pg-dialog-error').length, focused], [0, ['field']]);
+
+    // Delete…: refused, the keyboard goes back to its Delete button.
+    const confirm = mount(react, () => ConfirmDialog({ title: 'Delete category', text: 'This deletes “Shop”.', action: 'Delete category', busyLabel: 'Deleting…', onSubmit: async () => 'Not saved: the disk is full.', onClose() {} }), { effects: true });
+    let asked = confirm();
+    // DSH's dialog draws its buttons from its footer.
+    const button = (t) => elementsOf(t.props.footer).find((e) => e.props?.['data-categories-dialog-submit'] !== undefined);
+    button(asked).props.onClick();
+    await tick();
+    asked = confirm();
+    assert.deepEqual([textIn(byClass(asked, 'dshc-pg-dialog-error')), focused.at(-1)], ['Not saved: the disk is full.', 'delete']);
+});
