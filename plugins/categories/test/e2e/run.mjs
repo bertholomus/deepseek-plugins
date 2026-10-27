@@ -16,18 +16,26 @@
  * session list by category with every workspace still there, folding by
  * click and by key, a running chat's dot on its folded workspace's own row
  * and on its folded category (and gone when the turn ends), a workspace
- * dragged onto another category's header and back, the Categories page on
- * its glass card, find, the chip at the top of a chat, light and
- * dark, 760 px and contrast, and switched off
- * in Plugins it leaves no header, mark, class or style sheet behind; on
- * again, one of everything. Pictures go to SHOTS (default
- * .e2e/shots/categories/<DSH version>/). Last, its row in the profile at
+ * dragged onto another category's header and back, Add a workspace's
+ * submenu with a name on every row, each dialog by the keyboard giving the
+ * keyboard back to its header (or, after a delete, the one in its place), a
+ * name in use refused, a long name cut at a word with DSH's tooltip, the
+ * Categories page on its glass card, find, a change that can't be saved
+ * refused with the page's note until the next change saves, a page row's
+ * dialog, the chip at the top of a chat, light and dark, 760 px and
+ * contrast, and switched off in Plugins it leaves no header, mark, class or
+ * style sheet behind; on again, one of everything. DSH's first-run notices
+ * are dismissed before each check. Pictures go to SHOTS (default
+ * .e2e/shots/categories/<DSH version>/). Then its row in the profile at
  * DSH's next start: values of the wrong type count as their defaults, each
- * warned in its log and named for the page, and enabled: false says off,
- * refuses changes in words and writes nothing; and a store that can't be
- * used starts it with none, said in its log, the file kept beside the new
- * store at the first change. Without Playwright the run fails,
- * unless NO_WINDOW=1 says to run without the window.
+ * warned in its log and named for the page, enabled: "no" counts as off,
+ * and enabled: false says off, refuses changes in words and writes nothing;
+ * and a store that can't be used starts it with none, said in its log and
+ * on the page, the file kept beside the new store at the first change (made
+ * on the page, which names it). Last, beside the Wallpaper plugin (its
+ * commit copied read only, see wallpaperCopy): the page's root unpainted,
+ * one glass card, one blur. Without Playwright the run fails, unless
+ * NO_WINDOW=1 says to run without the window.
  *
  * With COORDINATOR=1 the coordinator plugin runs beside it: neither answers
  * for the other, the projects store stays as it was (rollback data), the
