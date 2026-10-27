@@ -49,8 +49,9 @@ look.*). Nor does any offer when the reply's last sentence says what the
 agent does next (*Next: the CLI.*, *Moving on to the docs.*, *I will carry
 on with the remaining todos.*), unless that sentence waits on you itself
 (*Let me know if this looks good, and I'll move on to the tests.*). The row
-quotes the words that held it (*Waits for you: its last reply leaves the
-next step to you (“Let me know if you want me to continue with steps 2 and
+says which held it: *Waits for you: its last reply asks you something*, or,
+for an offer, its words (*Waits for you: its last reply leaves the next
+step to you (“Let me know if you want me to continue with steps 2 and
 3.”).*).
 
 Measured on 30 endings written after the rule was frozen and read once
@@ -111,8 +112,9 @@ note, or read it on Autopilot's page under *What it sent*.
   carry on.*, *Its last turn failed with nothing left open (no todos, no
   goal), so Autopilot leaves it to you.*), its last action as it ended (*DSH refused to start its
   goal*, *its note was not delivered*) with the time it ended, and its own
-  rule. *Open work* lists the ones it could act on; *All* lists every
-  recent session.
+  rule. *Open work* lists the ones with todos or a goal open or a look
+  coming, and every one cut off, failed, given up or backed off on; *All*
+  lists every recent session.
 - **What Autopilot did**: every action, every question, every settings
   change and every time it held back for a reason you would want to know,
   each with a *Why* line that says who acted (Autopilot, or you), its
