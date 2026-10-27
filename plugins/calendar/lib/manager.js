@@ -1442,7 +1442,55 @@ export class CalendarManager {
             : undefined;
         if (plan === undefined) throw new CalendarError(`"${kind}" isn't a change.`);
         if (plan.move) this.checkHalfMove(plan.at, plan.target);
-        return { mail: plan.mail, ...(plan.move ? { move: true } : {}) };
+        const shape = this.shapeOf(kind, plan);
+        return { mail: plan.mail, ...(plan.move ? { move: true } : {}), ...(shape ? { shape } : {}) };
+    }
+
+    /**
+     * What a planned change does, for the approval prompt's words, worked
+     * out as the change itself is: the calendar (and, for a move, the one it
+     * goes to); the event's time as it is (`before`: the occurrence the call
+     * names, or the event) and, for a new time or a new event, as it will be
+     * (`after`: recordFrom on that occurrence, as the write does); the new
+     * title, the repeat rule in words, and whether a series is reached.
+     * Undefined when it can't be told (the prompt then goes by the call).
+     * Never throws.
+     */
+    shapeOf(kind, plan) {
+        try {
+            const zone = this.zone();
+            const repeats = (rule) => describeRule(rule, untilWords(rule, zone));
+            if (kind === 'create') {
+                return { calendar: this.calendarName(plan.calendar), after: this.spanOf(plan.record), ...(plan.record.rrule ? { repeats: repeats(plan.record.rrule) } : {}) };
+            }
+            const at = plan.at;
+            const seen = at.recurrenceId ? this.occurrenceRecord(at) : (at.override ?? at.master);
+            const shape = { calendar: this.calendarName(at.calendar), title: seen.title || '(No title)', before: this.spanOf(seen), series: at.series || at.instance };
+            if (plan.move) return { ...shape, target: this.calendarName(plan.target) };
+            if (kind === 'update') {
+                const f = plan.fields;
+                if (['start', 'end', 'allDay', 'timeZone'].some((k) => f[k] !== undefined)) {
+                    shape.after = this.spanOf(this.recordFrom({ start: f.start, end: f.end, allDay: f.allDay, timeZone: f.timeZone }, seen));
+                }
+                if (f.title !== undefined && f.title !== null) shape.newTitle = String(f.title).trim();
+                if (typeof f.repeat === 'string' && f.repeat.trim() !== '') shape.repeats = repeats(f.repeat.trim().replace(/^RRULE:/i, '').toUpperCase());
+            }
+            return shape;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * A record's time as the prompt says it: {allDay: true, startDay,
+     * lastDay}, or {start, end} in epoch ms with `tz`, the event's own zone
+     * (null for a floating or UTC event, which shows on the user's clock).
+     */
+    spanOf(record) {
+        if (record.allDay) return { allDay: true, startDay: record.start.date, lastDay: addDays(record.end.date, -1) };
+        const zone = this.zone();
+        const own = record.start.tz;
+        return { allDay: false, start: instantOf(record.start, zone), end: instantOf(record.end, zone), tz: own && own !== 'UTC' && isZone(own) ? own : null };
     }
 
     /** A new event: its calendar, its record, and who it emails or reaches. */

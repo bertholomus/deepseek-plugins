@@ -585,25 +585,36 @@ try {
     const prompts = await approvalsOf(asking);
     const titleNow = async () => (await webApi(asking, 'dsh-plugin-calendar/search', { query: 'haircut' })).value?.occurrences?.[0]?.title;
     try {
-        const ofRename = (from) => (q) => q.toolName === 'calendar_update_event' && String(q.reason ?? '').includes(`Change “${from}” (2026-10-16 17:00, Personal): title?`);
+        // The question says what the change does, in words: the event as it is, and the new title or time.
+        const when = 'Fri, Oct 16(?:, 2026)?, 5:00 – 5:45 PM';
+        const asks = (pattern) => (q) => q.toolName === 'calendar_update_event' && new RegExp(pattern).test(String(q.reason ?? ''));
+        const ofRename = (from, to) => asks(`Rename “${from}” \\(${when}, Personal\\) to “${to}”\\?$`);
         let pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', title: 'Haircut at 5' });
-        let prompt = await prompts.next('the rename prompt', ofRename('Haircut')).catch(() => undefined);
+        let prompt = await prompts.next('the rename prompt', ofRename('Haircut', 'Haircut at 5')).catch(() => undefined);
         const allowed = prompt ? await prompts.answer(prompt, 'allowed-once') : undefined;
         call = await pending;
         check('allowed, the change is made', allowed?.ok === true && /^TOOL-RESULT: Changed:/.test(call.result) && await titleNow() === 'Haircut at 5',
             `${JSON.stringify(prompt?.request)} ${JSON.stringify(allowed)} ${call.result}`);
         pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', title: 'Haircut, cancelled' });
-        prompt = await prompts.next('the second rename prompt', ofRename('Haircut at 5')).catch(() => undefined);
+        prompt = await prompts.next('the second rename prompt', ofRename('Haircut at 5', 'Haircut, cancelled')).catch(() => undefined);
         const rejected = prompt ? await prompts.answer(prompt, 'rejected') : undefined;
         call = await pending;
         check('rejected, it isn\'t, and the model hears so', rejected?.ok === true && !/^TOOL-RESULT: Changed:/.test(call.result) && await titleNow() === 'Haircut at 5',
             `${JSON.stringify(rejected)} ${call.result}`);
+        // A new time: from when to when, on the user's clock.
+        pending = agentCall('calendar_update_event', { id: haircut?.id ?? 'missing', start: '2026-10-16T18:00' });
+        prompt = await prompts.next('the move prompt', asks(`Move “Haircut at 5” \\(Personal\\) from ${when} to 6:00 – 6:45 PM\\?$`)).catch(() => undefined);
+        const notMoved = prompt ? await prompts.answer(prompt, 'rejected') : undefined;
+        call = await pending;
+        const startNow = (await webApi(asking, 'dsh-plugin-calendar/search', { query: 'haircut' })).value?.occurrences?.[0]?.startLocal;
+        check('a new time asks from when to when (Fri, Oct 16, 5:00 – 5:45 PM to 6:00 – 6:45 PM); rejected, it stays', prompt !== undefined && notMoved?.ok === true && startNow === '2026-10-16T17:00',
+            `${JSON.stringify(prompt?.request ?? prompt)} ${startNow}`);
     } finally {
         prompts.close();
     }
     await stopDsh(child);
     const reason = sessionEvents(askingSession).find((e) => e.type === 'approval/asked')?.data?.reason ?? '';
-    check('the question says what would change', reason === 'Calendar: Delete “Haircut” (2026-10-16 17:00, Personal)?', reason);
+    check('the question says what would change', /^Calendar: Delete “Haircut” \(Fri, Oct 16(?:, 2026)?, 5:00 – 5:45 PM, Personal\)\?$/.test(reason), reason);
 
     // 4. agentChanges: off, even on Full access; and the restart kept everything.
     writeProfile(model.port, { agentChanges: 'off' });

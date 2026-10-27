@@ -23,7 +23,7 @@ register(`data:text/javascript,${encodeURIComponent(`export async function resol
     return specifier === '@deepseek-ai/dsh-tools' ? { shortCircuit: true, url: ${JSON.stringify(TOOLS_STANDIN)} } : next(specifier, context);
 }`)}`);
 const { calendarTools } = await import('../lib/tools.js');
-const { ShownPlans, changeGate, planOf } = await import('../lib/policy.js');
+const { ShownPlans, changeGate, describeChange, planOf } = await import('../lib/policy.js');
 
 const ZONE = 'Europe/Berlin';
 const NOW = Date.parse('2026-10-11T10:00:00Z');
@@ -1182,7 +1182,7 @@ test('Google: guests are put on or taken off their calendars without email; that
         const c1 = { callId: 'c1', name: 'calendar_create_event', arguments: dinner, agent: { session: {} } };
         const asked = await gate(workspace, 'ask')(c1, allow);
         assert.equal(asked.kind, 'ask');
-        assert.match(asked.displayReason.en, /^Add “Dinner” \(2026-10-16T19:00\) to Me, and put it on the calendars of ann@example\.com without emailing them\?$/);
+        assert.match(asked.displayReason.en, /^Add “Dinner” \(Fri, Oct 16, 7:00 – 8:00 PM\) to Me, and put it on the calendars of ann@example\.com without emailing them\?$/);
         const refused = await gate(full, 'never')({ callId: 'c2', name: 'calendar_create_event', arguments: dinner, agent: { session: {} } }, allow);
         assert.equal(refused.kind, 'deny');
         assert.match(refused.reason, /^This would put it on the calendars of ann@example\.com \(Google does that without emailing them\), and the user is asked before a change reaches other people\./);
@@ -1243,6 +1243,83 @@ test('the approval prompt and the change share one check: what the change refuse
     } finally {
         m.dispose();
         done();
+    }
+});
+
+test('the approval prompt says what a chat\'s change does: the old and new time on the user\'s clock and the event\'s own, the new title, how far a series is reached', async () => {
+    // The user is in Los Angeles; the change is worked out as the tool will make it (manager.planChange).
+    const dir = mkdtempSync(join(tmpdir(), 'calendar-words-'));
+    const vault = new Map();
+    const secrets = { async get(id) { return vault.get(id); }, async set(id, v) { vault.set(id, v); }, async clear(id) { vault.delete(id); } };
+    const m = new CalendarManager({ config: { storeFile: join(dir, 'calendar.json'), logFile: join(dir, 'calendar.log'), syncMinutes: 15, timeZone: 'America/Los_Angeles' },
+        secrets, now: () => Date.parse('2026-10-26T17:00:00Z') });
+    try {
+        await m.start();
+        const work = await m.createCalendar({ name: 'Work' });
+        await m.setDefaultCalendar(work.id);
+        const sam = await m.createEvent({ title: '1:1 with Sam', start: '2026-10-26T10:00', end: '2026-10-26T10:30', repeat: 'FREQ=WEEKLY;BYDAY=MO' });
+        const sync = await m.createEvent({ title: 'Team sync', start: '2026-10-27T10:00', end: '2026-10-27T10:30' });
+        const trip = await m.createEvent({ title: 'Trip', start: '2026-10-30', end: '2026-11-01' });
+        const berlin = await m.createEvent({ title: 'Standup Berlin', start: '2026-10-28T09:00', end: '2026-10-28T09:15', timeZone: 'Europe/Berlin' });
+        const nov2 = m.events({ from: Date.parse('2026-11-02T08:00:00Z'), to: Date.parse('2026-11-03T08:00:00Z') }).occurrences.find((o) => o.eventId === sam.eventId);
+        const say = (name, args) => describeChange(m, name, args);
+
+        // A new event: its day and times in words, on the user's clock; one kept in another zone on both clocks.
+        assert.equal(say('calendar_create_event', { title: 'Dentist', start: '2026-10-27T15:00', end: '2026-10-27T15:45' }), 'Add “Dentist” (Tue, Oct 27, 3:00 – 3:45 PM) to Work?');
+        assert.equal(say('calendar_create_event', { title: 'Call with Berlin', start: '2026-10-27T09:00', time_zone: 'Europe/Berlin' }),
+            'Add “Call with Berlin” (Tue, Oct 27, 9:00 – 10:00 AM Berlin time, 1:00 – 2:00 AM your time) to Work?');
+        assert.equal(say('calendar_create_event', { title: 'Late', start: '2026-10-27T23:30', end: '2026-10-28T00:30', repeat: 'FREQ=WEEKLY;BYDAY=TU;UNTIL=20261201T000000Z' }),
+            'Add “Late” (Tue, Oct 27, 11:30 PM – Wed, Oct 28, 12:30 AM, repeating every week on Tuesday, until Nov 30, 2026) to Work?');
+        assert.equal(say('calendar_create_event', { title: 'Offsite', start: '2027-01-12', end: '2027-01-13' }), 'Add “Offsite” (Tue, Jan 12, 2027 – Wed, Jan 13, 2027, all day) to Work?');
+
+        // A new time: from when to when, and how far into a series it reaches.
+        assert.equal(say('calendar_update_event', { id: nov2.id, scope: 'one', start: '2026-11-02T11:00' }),
+            'Move only this occurrence of “1:1 with Sam” (Work) from Mon, Nov 2, 10:00 – 10:30 AM to 11:00 – 11:30 AM?');
+        assert.equal(say('calendar_update_event', { id: nov2.id, scope: 'all', start: '2026-11-02T11:00', end: '2026-11-02T12:00' }),
+            'Move every occurrence of “1:1 with Sam” (Work) from Mon, Nov 2, 10:00 – 10:30 AM to 11:00 AM – 12:00 PM?');
+        assert.equal(say('calendar_update_event', { id: nov2.id, scope: 'following', start: '2026-11-03T11:00' }),
+            'Move this and the following occurrences of “1:1 with Sam” (Work) from Mon, Nov 2, 10:00 – 10:30 AM to Tue, Nov 3, 11:00 – 11:30 AM?');
+        assert.equal(say('calendar_update_event', { id: trip.id, start: '2026-11-06', end: '2026-11-08' }),
+            'Move “Trip” (Work) from Fri, Oct 30 – Sun, Nov 1, all day to Fri, Nov 6 – Sun, Nov 8, all day?');
+        assert.equal(say('calendar_update_event', { id: sync.id, start: '2027-01-05T10:00' }), 'Move “Team sync” (Work) from Tue, Oct 27, 10:00 – 10:30 AM to Tue, Jan 5, 2027, 10:00 – 10:30 AM?');
+        // A wall clock the call gives is the user's: 10:00 here is 6:00 PM in Berlin, and the prompt says both.
+        assert.equal(say('calendar_update_event', { id: berlin.id, start: '2026-10-28T10:00' }),
+            'Move “Standup Berlin” (Work) from Wed, Oct 28, 9:00 – 9:15 AM Berlin time (1:00 – 1:15 AM your time) to 6:00 – 6:15 PM Berlin time (10:00 – 10:15 AM your time)?');
+        // Another zone for the same wall clock is another moment.
+        assert.equal(say('calendar_update_event', { id: sync.id, time_zone: 'Europe/Berlin' }),
+            'Move “Team sync” (Work) from Tue, Oct 27, 10:00 – 10:30 AM to Tue, Oct 27, 10:00 – 10:30 AM Berlin time (2:00 – 2:30 AM your time)?');
+
+        // A new title, and every other field, say what they will be; past three, the rest by name.
+        assert.equal(say('calendar_update_event', { id: sync.id, title: 'Team standup' }), 'Rename “Team sync” (Tue, Oct 27, 10:00 – 10:30 AM, Work) to “Team standup”?');
+        assert.equal(say('calendar_update_event', { id: sync.id, start: '2026-10-27T11:00', title: 'Team standup', location: 'Room 4', reminders: [10, 60], description: 'x', private: true }),
+            'Change “Team sync” (Tue, Oct 27, 10:00 – 10:30 AM, Work): move it to 11:00 – 11:30 AM; rename it “Team standup”; set the place to “Room 4”; and also its notes, its reminders and its privacy?');
+        assert.equal(say('calendar_update_event', { id: berlin.id, reminders: [0, 15], busy: false }),
+            'Change “Standup Berlin” (Wed, Oct 28, 9:00 – 9:15 AM Berlin time, 1:00 – 1:15 AM your time, Work): reminders 15 minutes before and at the start; show as free?');
+        assert.equal(say('calendar_update_event', { id: sync.id, repeat: 'FREQ=WEEKLY;BYDAY=TU,TH' }), 'Change “Team sync” (Tue, Oct 27, 10:00 – 10:30 AM, Work): repeat every week on Tuesday and Thursday?');
+        // A move to another calendar, and a calendar_id naming its own calendar, which moves nothing.
+        const personal = m.state().calendars.find((c) => c.name === 'Personal');
+        assert.equal(say('calendar_update_event', { id: trip.id, calendar_id: personal.id }), 'Move “Trip” (Fri, Oct 30 – Sun, Nov 1, all day) from Work to Personal?');
+        assert.doesNotMatch(say('calendar_update_event', { id: trip.id, calendar_id: work.id, title: 'Trip to Rome' }), /^Move/);
+
+        // Deletes and answers name the occurrence the call names, and a whole series says so.
+        assert.equal(say('calendar_delete_event', { id: nov2.id, scope: 'one' }), 'Delete only this occurrence of “1:1 with Sam” (Mon, Nov 2, 10:00 – 10:30 AM, Work)?');
+        assert.equal(say('calendar_delete_event', { id: nov2.id, scope: 'all' }), 'Delete every occurrence of “1:1 with Sam” (Mon, Nov 2, 10:00 – 10:30 AM, Work)?');
+        assert.equal(say('calendar_delete_event', { id: berlin.id }), 'Delete “Standup Berlin” (Wed, Oct 28, 9:00 – 9:15 AM Berlin time, 1:00 – 1:15 AM your time, Work)?');
+
+        // DSH's prompt is these words: the gate asks with them on Workspace Write.
+        const presets = { current: () => 'workspace-write', resolve: () => ({ sandbox: 'workspace-write' }) };
+        const gate = changeGate({ presets: () => presets, approval: () => ({ effectivePolicy: () => 'on-request' }), manager: m, mode: () => 'preset', log: () => {} });
+        const asked = await gate({ name: 'calendar_update_event', arguments: { id: nov2.id, scope: 'one', start: '2026-11-02T11:00' }, agent: { session: {} } }, async () => ({ kind: 'allow' }));
+        assert.deepEqual(asked, { kind: 'ask', reason: 'Calendar: Move only this occurrence of “1:1 with Sam” (Work) from Mon, Nov 2, 10:00 – 10:30 AM to 11:00 – 11:30 AM?',
+            displayReason: { en: 'Move only this occurrence of “1:1 with Sam” (Work) from Mon, Nov 2, 10:00 – 10:30 AM to 11:00 – 11:30 AM?' } });
+        // And what it says is what the tool then does.
+        const moved = await m.updateEvent(nov2.id, { start: '2026-11-02T11:00' }, 'one', 'agent');
+        assert.equal(`${moved.startLocal} ${moved.endLocal}`, '2026-11-02T11:00 2026-11-02T11:30');
+        const oct26 = m.events({ from: Date.parse('2026-10-26T07:00:00Z'), to: Date.parse('2026-10-27T07:00:00Z') }).occurrences.find((o) => o.eventId === sam.eventId);
+        assert.equal(oct26.startLocal, '2026-10-26T10:00', 'the other occurrences stay where they were');
+    } finally {
+        m.dispose();
+        rmSync(dir, { recursive: true, force: true });
     }
 });
 
