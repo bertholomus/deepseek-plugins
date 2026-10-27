@@ -24,7 +24,8 @@
  *   Questions in a coding model's shapes keep their words: a plain question
  *   with a dot in a file name or a version, and a decision line with
  *   `__init__.py` in code, on the card, in its lines, its pick and its log,
- *   and in the answer the session reads back.
+ *   and in the answer the session reads back; a DECISION NEEDED line quoted
+ *   in a fenced code block is no card (the question after it is).
  * - Dismiss and bring back.
  * - Approvals: Decisions holds the request and passes it on at once (the
  *   window's prompt shows too); Allow once from Decisions lets the tool run
@@ -93,7 +94,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
-import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
+import { DshRun, checks, dismissNotices, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
 import { startFakeModel } from '../../../../test/e2e/fake-model.mjs';
 
 const bin = dshBin();
@@ -199,6 +200,18 @@ const state = async () => {
     return r.value;
 };
 const cardFor = async (sessionId, kind) => (await state()).waiting.find((c) => c.sessionId === sessionId && (!kind || c.kind === kind));
+/**
+ * Decisions' page from DSH's sidebar. DSH's first-run notice can come after the window's watch for it ended (on a
+ * busy machine it came 30 s late and covered the click): it is moved out of the way first, and again if it covers it.
+ */
+async function openPage(page, timeout = 15000) {
+    const entry = page.getByRole('button', { name: 'Decisions', exact: true }).first();
+    await dismissNotices(page);
+    await entry.click({ timeout: 5000 }).catch(async () => {
+        await dismissNotices(page);
+        await entry.click({ timeout });
+    });
+}
 const waitCard = (sessionId, kind, timeout = 30000) => waitFor(() => cardFor(sessionId, kind), `a ${kind} card for ${sessionId}`, timeout, 300);
 const leaves = (cardId, timeout = 30000) => waitFor(async () => !(await state()).waiting.some((c) => c.id === cardId), `${cardId} to leave the list`, timeout, 300);
 /** Decisions' newest log entry about a card, of a kind (and a state). */
@@ -536,29 +549,39 @@ try {
     ids.parser = await run.newSession('E2E:say I found two failing tests in the parser suite. Should I fix the bug in `parser.py` first?', 'Parser fix');
     ids.version = await run.newSession('E2E:say Both builds pass. Which do you want to release: `v1.2` or `v1.3`?', 'Version pick');
     ids.entry = await run.newSession('E2E:say Two entry points exist.\\nDECISION NEEDED: Should I rename `__init__.py` to main.py? — recommend: keep `__init__.py`', 'Entry point');
-    await step('questions in a coding model\'s shapes keep their words: a dot in a file name or a version, and dunders in code', async () => {
+    // A rule quoted in a fenced code block is shown, not asked: the card is the question after it.
+    ids.rules = await run.newSession('E2E:say I added the rule to AGENTS.md:\\n```\\nDECISION NEEDED: <question> — recommend: <pick>\\n```\\nShould I add it to the README too?', 'Rules note');
+    await step('questions in a coding model\'s shapes keep their words: a dot in a file name or a version, dunders in code, a rule quoted in a code block', async () => {
         cards.parser = await waitCard(ids.parser, 'reply');
         check('a plain question with a file name in it is the whole question, with the sentence before it', cards.parser.question === 'Should I fix the bug in parser.py first?' && cards.parser.context === 'I found two failing tests in the parser suite.', json(cards.parser));
         cards.version = await waitCard(ids.version, 'reply');
         check('one with versions in it too', cards.version.question === 'Which do you want to release: v1.2 or v1.3?' && cards.version.context === 'Both builds pass.', json(cards.version));
         cards.entry = await waitCard(ids.entry, 'decision');
         check('a decision line keeps __init__.py whole in its question, its pick and its lines', cards.entry.question === 'Should I rename __init__.py to main.py?' && cards.entry.recommendation === 'keep __init__.py' && cards.entry.context === 'Two entry points exist.', json(cards.entry));
-        const mine = [cards.parser, cards.version, cards.entry];
+        cards.rules = await waitCard(ids.rules, 'reply');
+        const rulesCards = (await state()).waiting.filter((c) => c.sessionId === ids.rules);
+        check('a DECISION NEEDED line quoted in a code block is no card: the card is the question after it', rulesCards.length === 1 && cards.rules.question === 'Should I add it to the README too?' && !cards.rules.recommendation, json(rulesCards));
+        const mine = [cards.parser, cards.version, cards.entry, cards.rules];
         const told = await waitFor(async () => {
             const fresh = (await state()).history.filter((e) => e.kind === 'new' && mine.some((c) => c.id === e.cardId));
-            return fresh.length === 3 ? fresh : null;
-        }, 'the three new lines', 15000, 300).catch(() => []);
-        check('each is logged once, with its whole question', told.length === 3 && mine.every((c) => told.filter((e) => e.cardId === c.id && e.question === c.question).length === 1), json(told));
+            return fresh.length === 4 ? fresh : null;
+        }, 'the four new lines', 15000, 300).catch(() => []);
+        check('each is logged once, with its whole question', told.length === 4 && mine.every((c) => told.filter((e) => e.cardId === c.id && e.question === c.question).length === 1), json(told));
         const words = await api('answer', { id: cards.parser.id, answer: { text: 'Yes, fix it first.' } });
         check('answered in words, the session reads the whole question back', words.ok
             && await waitFor(() => readIntoTurn(ids.parser, '[Decisions] The person answered your question (“Should I fix the bug in parser.py first?”):\n\nYes, fix it first.'), 'the answer in the parser session\'s log', 30000, 300).catch(() => false), json(words));
         const went = await api('answer', { id: cards.entry.id, answer: { recommended: true } });
         check('Go with the recommendation sends __init__.py whole', went.ok
             && await waitFor(() => readIntoTurn(ids.entry, '[Decisions] The person answered your DECISION NEEDED line (“Should I rename __init__.py to main.py?”): go with your recommendation (keep __init__.py).'), 'the answer in the entry session\'s log', 30000, 300).catch(() => false), json(went));
+        const rules = await api('answer', { id: cards.rules.id, answer: { text: 'No, AGENTS.md is enough.' } });
+        check('and it is answered as that question', rules.ok
+            && await waitFor(() => readIntoTurn(ids.rules, '[Decisions] The person answered your question (“Should I add it to the README too?”):\n\nNo, AGENTS.md is enough.'), 'the answer in the rules session\'s log', 30000, 300).catch(() => false), json(rules));
         await leaves(cards.parser.id).catch(() => {});
         await leaves(cards.entry.id).catch(() => {});
+        await leaves(cards.rules.id).catch(() => {});
         await idle(ids.parser).catch(() => {});
         await idle(ids.entry).catch(() => {});
+        await idle(ids.rules).catch(() => {});
     });
 
     // ── The page ───────────────────────────────────────────────────────
@@ -569,7 +592,7 @@ try {
         await step('the page', async () => {
             window = await openWindow(run, pw, { entry: 'Decisions' });
             const { page } = window;
-            await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+            await openPage(page);
             await page.locator('[data-decisions-page]').waitFor({ state: 'visible', timeout: 20000 });
             await page.locator('[data-decisions-card]').first().waitFor({ state: 'visible' });
             const s = await state();
@@ -705,7 +728,7 @@ try {
             check('What happened notes the address was set, naming its key and never the address', Boolean(setLine) && setLine.why === 'Kept in DSH\'s key store under DECISIONS_WEBHOOK_URL, never in the settings file.' && !json(setLine).includes(TOKEN), json(setLine));
             await shot(page, shots, 'settings-webhook-light');
             // Back on Decisions' page: where new cards go, and a test.
-            await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+            await openPage(page);
             const mirror = page.locator('[data-decisions-mirror]');
             await mirror.waitFor({ state: 'visible', timeout: 20000 });
             check('the page says where new cards also go, by host only', new RegExp(`New cards also go to the webhook at ${pattern(hookHost)}: 0 of 30 this hour\\.`).test(await mirror.innerText()), await mirror.innerText());
@@ -763,7 +786,7 @@ try {
             await waitFor(async () => (await page.locator('[data-suite-setting="webhookAddress"]').getAttribute('data-suite-secret')) === 'unset', 'the address to be removed', 15000, 300);
             const removedLine = await waitFor(async () => (await state()).history.find((e) => e.kind === 'settings' && e.text === 'Webhook address removed'), 'What happened to note the removal', 15000, 300).catch(() => undefined);
             check('What happened notes the address was removed', Boolean(removedLine), json((await state()).history.slice(0, 3)));
-            await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+            await openPage(page);
             const missing = page.locator('[data-decisions-mirror="problem"]');
             await missing.waitFor({ state: 'visible', timeout: 20000 });
             check('with the address removed, the page says what is missing, with the way to the settings', /New cards cannot go elsewhere: No webhook address is set yet: add it in Decisions' settings in Plugins\./.test(await missing.innerText())
@@ -786,8 +809,10 @@ try {
             const whileOff = await nest();
             const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-decisions', enabled: true });
             await waitFor(async () => (await api('state')).ok, 'Decisions to run again', 30000, 300);
-            await page.getByRole('button', { name: 'Decisions', exact: true }).first().click({ timeout: 20000 });
+            await openPage(page, 20000);
             await page.locator('[data-decisions-page]').waitFor({ state: 'visible', timeout: 20000 });
+            // The header is drawn once the page has read Decisions' state again (it first says it is reading).
+            await page.locator('[data-decisions-header]').waitFor({ state: 'visible', timeout: 20000 });
             await page.waitForTimeout(500);
             const look = await page.evaluate(() => ({
                 sr: getComputedStyle(document.querySelector('[data-decisions-page] .dshdc-sr') ?? document.body).position,
@@ -872,7 +897,7 @@ try {
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Decisions' });
         const { page } = window;
-        await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+        await openPage(page);
         await page.locator('[data-suite-trouble="setting"]').waitFor({ state: 'visible', timeout: 20000 });
         await page.getByRole('button', { name: 'Open Decisions\' settings' }).click();
         const form = page.locator('[data-suite-settings="dsh-plugin-decisions"]');
@@ -922,7 +947,7 @@ try {
         await step('a wrong setting, in the window: the page says what to change, and saving a good value fixes it', async () => {
             window = await openWindow(run, pw, { entry: 'Decisions' });
             const { page } = window;
-            await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+            await openPage(page);
             const problem = page.locator('[data-suite-trouble="setting"]');
             await problem.waitFor({ state: 'visible', timeout: 20000 });
             const words = (await problem.innerText()).replace(/\n+/g, ' ');
@@ -969,7 +994,7 @@ try {
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Decisions' });
         const { page } = window;
-        await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+        await openPage(page);
         const note = page.locator('[data-decisions-header] [data-decisions-watch-problem]');
         await note.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await note.innerText()).replace(/\n+/g, ' ');
@@ -1036,7 +1061,7 @@ try {
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Decisions' });
         const { page } = window;
-        await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+        await openPage(page);
         const trouble = page.locator('[data-suite-trouble="watch-off"]');
         await trouble.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await trouble.innerText()).replace(/\n+/g, ' ');
@@ -1077,7 +1102,7 @@ try {
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Decisions' });
         const { page } = window;
-        await page.getByRole('button', { name: 'Decisions', exact: true }).first().click();
+        await openPage(page);
         const header = page.locator('[data-decisions-header="off"]');
         await header.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await header.innerText()).replace(/\n+/g, ' ');

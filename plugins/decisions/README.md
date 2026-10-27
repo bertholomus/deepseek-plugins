@@ -69,11 +69,13 @@ number or a heading mark (bold and code marks are dropped first; what a
 code span holds stays as written, so `__init__.py`, `my__var` and `a**b`
 keep their marks in the question, the pick and the lines, and a dash in
 one, as in `--force`, is not the dash before the pick; a marker line
-written whole in code counts as one). In the
-reply's last six lines it also counts right after the end of a sentence:
-"…so I cannot go on without valid credentials. BLOCKED: working staging
-credentials." A marker inside a sentence ("the request was BLOCKED: by
-policy") is not one. `DECISION NEEDED` is read in any case, `BLOCKED` only
+written whole in code counts as one). In the reply's last six lines it
+also counts right after the end of a sentence: "…so I cannot go on
+without valid credentials. BLOCKED: working staging credentials." A
+marker inside a sentence ("the request was BLOCKED: by policy") is not
+one, and a line inside a fenced code block (```` ``` ```` or `~~~`) is
+shown, not said: a marker or a question there counts for nothing, so a
+rule quoted from a rules file makes no card. `DECISION NEEDED` is read in any case, `BLOCKED` only
 in capitals; with both, the decision wins. The recommendation follows the
 question after a dash (`— recommend: …`, or `— recommend …` without the
 colon), in a sentence of its own (`Recommend: …`, `I'd recommend …`, `My
@@ -362,7 +364,8 @@ a coding model's shapes keep their words: a plain question with a file
 name in it, one with versions, and a decision line with `__init__.py` in
 code, on the card, in its lines, its pick and its log, and in the answer
 the session reads back (in words, and through Go with the
-recommendation).
+recommendation); a DECISION NEEDED line quoted in a fenced code block
+makes no card, and the question after it does.
 Notifications are covered by the unit tests over a stand-in DSH.
 
 In a browser, the real-DSH test drives the page and its settings in
