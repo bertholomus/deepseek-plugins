@@ -1774,6 +1774,33 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return `${title} ${lead} · ${shortWhen(o, zone)}${where}`;
         }
 
+        /**
+         * The line under the page's header for accounts that couldn't sync: {id (the account's, '' for several), text,
+         * fix: 'retry' | 'accounts'}; null when every account is fine. One account: its name, why, and when it last
+         * synced; several: how many and which. One that needs signing in again is fixed in Accounts, the rest by Retry.
+         */
+        function troubleWords(attention) {
+            const list = (Array.isArray(attention) ? attention : []).filter((a) => isObject(a) && typeof a.name === 'string');
+            if (list.length === 0) return null;
+            const fix = list.some((a) => a.status === 'signin') ? 'accounts' : 'retry';
+            if (list.length > 1) return { id: '', text: `${plural(list.length, 'account')} couldn't sync: ${andList(list.map((a) => a.name))}.`, fix };
+            const [a] = list;
+            const why = stopped(a.error || (a.status === 'signin' ? 'it needs signing in again' : 'the last sync failed'));
+            return { id: String(a.id ?? ''), text: `${a.name}: ${why}${Number.isFinite(a.syncedAt) ? ` Last synced ${relativeText(a.syncedAt)}.` : ''}`, fix };
+        }
+
+        /** The wrong settings in one box: {head, lines: [{key, text}]}, or null when none is wrong. */
+        function settingsWords(problems) {
+            const lines = (Array.isArray(problems) ? problems : []).filter((p) => isObject(p) && typeof p.key === 'string' && typeof p.text === 'string')
+                .map((p) => ({ key: p.key, text: p.text }));
+            if (lines.length === 0) return null;
+            const one = lines.length === 1;
+            return {
+                head: `${one ? 'A setting of the calendar plugin is wrong' : `${lines.length} settings of the calendar plugin are wrong`}; change ${one ? 'it' : 'them'} in its entry (id: calendar) in this profile's cordis.patch.yml:`,
+                lines,
+            };
+        }
+
         /** A web address opened outside DSH's window, as the Agenda pane's Join link opens it. */
         function openLink(url) {
             try {
@@ -5430,6 +5457,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [, setClosed] = React.useState(0);
             const issues = storeIssues(state).filter((i) => !closedIssues.has(i.key));
             const wrongSettings = (Array.isArray(state?.settingsProblems) ? state.settingsProblems : EMPTY).filter((p) => isObject(p) && typeof p.text === 'string' && typeof p.key === 'string');
+            const wrongBox = settingsWords(wrongSettings);
+            const trouble = troubleWords(attention);
             // What a change did in part, and what is left to do (a move that stopped halfway): until the user closes it.
             const kept = store.notices();
             // The small month marks the days Week, Day and Agenda show; Month shows the small month's own month, so it marks none.
@@ -5785,22 +5814,20 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
                 // An account that couldn't sync: which, why and how old what's shown is, under the header, with Retry
                 // (Accounts, for one that needs signing in again).
-                attention.length && !stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-trouble': attention.length === 1 ? attention[0].id : '' },
+                trouble && !stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-trouble': trouble.id },
                     icon('IconWarningOutlineRegular'),
-                    h('span', null, attention.length === 1
-                        ? `${attention[0].name}: ${stopped(attention[0].error || (attention[0].status === 'signin' ? 'it needs signing in again' : 'the last sync failed'))}${attention[0].syncedAt ? ` Last synced ${relativeText(attention[0].syncedAt)}.` : ''}`
-                        : `${plural(attention.length, 'account')} couldn't sync: ${andList(attention.map((a) => a.name))}.`),
-                    attention.some((a) => a.status === 'signin')
+                    h('span', null, trouble.text),
+                    trouble.fix === 'accounts'
                         ? h(Btn, { size: 'sm', kind: 'ghost', onClick: () => setDialog({ kind: 'accounts' }), 'data-calendar-trouble-accounts': '' }, 'Accounts')
-                        : h(Btn, { size: 'sm', kind: 'ghost', disabled: syncBusy, onClick: () => void syncNow(attention.length === 1 ? attention[0].id : ''), 'data-calendar-trouble-retry': '' }, TEXT.retry)) : null,
+                        : h(Btn, { size: 'sm', kind: 'ghost', disabled: syncBusy, onClick: () => void syncNow(trouble.id), 'data-calendar-trouble-retry': '' }, TEXT.retry)) : null,
                 issues.length || kept.length || wrongSettings.length ? h('div', { className: 'dshcal-notes' },
                     // Settings in the profile that are wrong, in one box: where to change them, then each one, what it must be
                     // and what the plugin does meanwhile.
-                    wrongSettings.length ? h('div', { key: 'settings', className: 'dshcal-notice', role: 'status', 'data-tone': 'warn', 'data-calendar-settings-problem': String(wrongSettings.length) },
+                    wrongBox ? h('div', { key: 'settings', className: 'dshcal-notice', role: 'status', 'data-tone': 'warn', 'data-calendar-settings-problem': String(wrongBox.lines.length) },
                         icon('IconWarningOutlineRegular'),
                         h('div', { className: 'dshcal-notice-body' },
-                            h('span', null, `${wrongSettings.length === 1 ? 'A setting of the calendar plugin is wrong' : `${wrongSettings.length} settings of the calendar plugin are wrong`}; change ${wrongSettings.length === 1 ? 'it' : 'them'} in its entry (id: calendar) in this profile's cordis.patch.yml:`),
-                            h('ul', { className: 'dshcal-notice-list' }, wrongSettings.map((p) => h('li', { key: p.key, 'data-calendar-setting-problem': p.key }, p.text))))) : null,
+                            h('span', null, wrongBox.head),
+                            h('ul', { className: 'dshcal-notice-list' }, wrongBox.lines.map((l) => h('li', { key: l.key, 'data-calendar-setting-problem': l.key }, l.text))))) : null,
                     kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-notice', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
                         icon('IconWarningOutlineRegular'),
                         h('span', null, n.text),
@@ -6417,7 +6444,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             draftFrom, draftProblems, createInput, changePatch, draftChanged, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, refusedEmailText, saysNotDone, saysPartly, NOT_DONE,
-            CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog, ToastHost, toastProps, toastHold,
+            CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog, ToastHost, toastProps, toastHold, troubleWords, settingsWords,
             ReminderHost, reminderText, REMINDER_STEP, REMINDER_HOLD,
         };
         return module.exports;

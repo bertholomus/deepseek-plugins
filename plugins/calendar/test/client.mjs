@@ -1119,3 +1119,54 @@ test('the default calendar moved without the user choosing it (an account added)
     await new Promise((resolve) => setTimeout(resolve, 5));
     assert.equal(store.currentToast(), null, 'the user\'s own choice');
 });
+
+test('an account that couldn\'t sync: one line names it, says why and when it last synced, and offers Retry (Accounts for a sign-in)', () => {
+    const hours = (n) => Date.now() - n * 3600_000;
+    assert.equal(I.troubleWords([]), null, 'every account fine: no line');
+    const down = I.troubleWords([{ id: 'acct-1', name: 'alice', status: 'error', error: 'Couldn\'t reach dav.example.com: the connection was refused', syncedAt: hours(2) }]);
+    assert.deepEqual(plain(down), { id: 'acct-1', text: 'alice: Couldn\'t reach dav.example.com: the connection was refused. Last synced 2 hours ago.', fix: 'retry' });
+    const named = I.troubleWords([{ id: 'acct-2', name: 'Team feed', status: 'error', error: 'Team: Reading the calendar at feeds.example.com: the server answered HTTP 500.' }]);
+    assert.equal(named.text, 'Team feed: Team: Reading the calendar at feeds.example.com: the server answered HTTP 500.', 'its own stop kept; never synced: no time');
+    const signin = I.troubleWords([{ id: 'acct-3', name: 'Sam', status: 'signin' }]);
+    assert.deepEqual(plain(signin), { id: 'acct-3', text: 'Sam: it needs signing in again.', fix: 'accounts' });
+    const several = I.troubleWords([{ id: 'a', name: 'alice', status: 'error' }, { id: 'b', name: 'Team feed', status: 'error' }, { id: 'c', name: 'Sam', status: 'signin' }]);
+    assert.deepEqual(plain(several), { id: '', text: '3 accounts couldn\'t sync: alice, Team feed and Sam.', fix: 'accounts' });
+});
+
+test('wrong settings: one box, where to change them once, then a line each', () => {
+    assert.equal(I.settingsWords([]), null);
+    const one = I.settingsWords([{ key: 'syncMinutes', text: 'syncMinutes must be a number of minutes, 5 to 1440 (it is "15"); 15 is used until it\'s fixed.' }]);
+    assert.equal(one.head, 'A setting of the calendar plugin is wrong; change it in its entry (id: calendar) in this profile\'s cordis.patch.yml:');
+    assert.equal(one.lines.length, 1);
+    const five = I.settingsWords(['timeZone', 'syncMinutes', 'tools', 'agentChanges', 'askBeforeEmails'].map((key) => ({ key, text: `${key} must be …` })).concat([{ key: 1 }, null]));
+    assert.equal(five.head, '5 settings of the calendar plugin are wrong; change them in its entry (id: calendar) in this profile\'s cordis.patch.yml:');
+    assert.deepEqual(plain(five.lines.map((l) => l.key)), ['timeZone', 'syncMinutes', 'tools', 'agentChanges', 'askBeforeEmails']);
+    assert.ok(five.lines.every((l) => !l.text.includes('cordis.patch.yml')), 'where to change them is said once, in the head');
+});
+
+test('switched off is the owner\'s choice: the store says so, forgets what it showed, and comes back by itself', async () => {
+    let off = false;
+    const value = { version: 1, defaultCalendar: 'cal-personal', calendars: [{ id: 'cal-personal', name: 'Personal' }], accounts: [] };
+    const store = I.calendarStore({
+        async call(method) {
+            if (off) return { ok: false, error: { code: 'calendar/off', message: 'The calendar is switched off: enabled is false in its entry (id: calendar) in this profile\'s cordis.patch.yml. Set it to true to use it again.' } };
+            return method === 'state' ? { ok: true, value } : { ok: true, value: { occurrences: [], more: false } };
+        },
+    });
+    await store.loadState();
+    assert.equal(store.stateOff(), false);
+    assert.ok(store.state());
+    off = true;
+    await store.loadState();
+    assert.equal(store.stateOff(), true, 'off, not a failure');
+    assert.equal(store.state(), undefined, 'what it showed goes');
+    assert.match(store.stateError(), /^The calendar is switched off: enabled is false/);
+    off = false;
+    await store.loadState();
+    assert.equal(store.stateOff(), false);
+    assert.equal(store.state()?.version, 1, 'on again by itself');
+    // A failure that isn't off stays a failure (an error with Retry on the page).
+    const broken = I.calendarStore({ async call() { return { ok: false, error: { code: 'calendar/unreachable', message: '' } }; } });
+    await broken.loadState();
+    assert.equal(broken.stateOff(), false);
+});
