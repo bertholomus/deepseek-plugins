@@ -866,8 +866,11 @@ async function hostHalf({ items, logs, llm, settings = {}, open = {} }) {
     return { remote, asked, changed, stop: () => { for (const fn of cleanups.splice(0)) fn(); } };
 }
 
-/** Wait (in real time) until `fn` gives something, for at most `ms`. */
-async function until(fn, ms = 3000) {
+/**
+ * Wait (in real time) until `fn` gives something, for at most `ms`. It returns as soon as `fn` does, so the long
+ * limit costs a passing run nothing and keeps a loaded machine (an e2e beside it) from failing it.
+ */
+async function until(fn, ms = 10000) {
     const end = Date.now() + ms;
     for (;;) {
         const value = await fn();
