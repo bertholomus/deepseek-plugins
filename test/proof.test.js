@@ -1294,3 +1294,18 @@ test('judge: a definition list, "as soon as" and a released lock describe; a sta
     assert.equal(claimsIn('The new build is released to the beta channel.')[0]?.kind, 'deployed');
     assert.deepEqual(verdicts('Is the health check up?', 'The health endpoint returns 200 as soon as the process is up.', look), ['unbacked']);
 });
+
+test('judge: a habit ("on retry", "automatically"), a generic subject ("each shard") and a fix in a later release describe', () => {
+    const verdicts = (prompt, text, items) => claimsIn(text).map((c) => judge(c, items, { prompt }).verdict).filter((v) => v !== 'none');
+    const look = [read('src/indexer.py')];
+    const why = 'Why does this happen? Just explain, do not change anything.';
+    assert.deepEqual(verdicts(why, 'The test passes on retry because the second run finds the cache the first one filled.', look), []);
+    assert.deepEqual(verdicts(why, 'Changes to `main` are deployed automatically; changes to other branches only build.', look), []);
+    assert.deepEqual(verdicts(why, 'Each shard is merged into the index after it finishes, and the index is swapped in atomically at the end.', look), []);
+    assert.deepEqual(verdicts(why, 'That warning is harmless: it comes from a deprecated option in a dependency and is fixed in its next major.', look), []);
+    // Controls: a status question, a count of the turn's run, work asked for.
+    assert.deepEqual(verdicts('Did every test pass?', 'Every test passes on retry.', look), ['unbacked']);
+    assert.deepEqual(verdicts(why, 'Every test passes.', look), ['unbacked']);
+    assert.deepEqual(verdicts('Is it deployed?', 'Changes to main are deployed automatically.', look), ['unbacked']);
+    assert.ok(verdicts('Fix the flaky test.', 'Fixed: the test passes on retry now.', look).length >= 1);
+});
