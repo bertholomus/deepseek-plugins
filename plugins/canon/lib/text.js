@@ -479,6 +479,30 @@ export function isDecision(prompt) {
     return !asksForWork(text.replace(new RegExp(RECORD_ASK.source, 'gi'), ' '));
 }
 
+/**
+ * How to save a decision, said in its statement: which tool ("with the
+ * canon_capture tool", "use the capture tool"), as what ("as a draft
+ * decision note", "as a decision draft", "kind decision"), and what not to
+ * do ("do not edit any files", "don't touch the repo", "no code changes",
+ * "nothing else").
+ */
+const HOW_TO_SAVE = /\bcanon_capture\b|\bcapture\s+tool\b|\b(?:as|in)\s+an?\s+(?:draft|decision)\b|\bdraft\s+(?:decision\s+)?note\b|\bdecision\s+draft\b|\bdraft\s+decision\b|\bkind\s*[:=]?\s*decision\b|\b(?:do\s+not|don['’]?t|never)\s+(?:edit|touch|change|modify)\b|\bno\s+code\s+changes\b|\bnothing\s+else\b/i;
+
+/**
+ * What a decision statement is about: its sentences and clauses (a clause
+ * ends at a colon, "Record this as a decision draft (canon_capture): we
+ * decided …") without the ones that say how to save it (HOW_TO_SAVE), so
+ * "Save that as a draft decision note with the canon_capture tool. Do not
+ * edit any files yourself." weighs nothing in what the decision is about.
+ * The whole statement when every part says how to save it.
+ * @param {string} prompt
+ */
+export function decisionSubject(prompt) {
+    const parts = String(prompt ?? '').split(/(?<=[.!?;])\s+|\n+|:\s+/).map((part) => part.trim()).filter(Boolean);
+    const kept = parts.filter((part) => !HOW_TO_SAVE.test(part));
+    return kept.length ? kept.join('\n') : String(prompt ?? '');
+}
+
 /** The words of a decision statement that say it was decided and should be recorded, as terms. */
 export const RECORDING = new Set(`
 decide decided decision decisions agree agreed choose chose chosen settle settled pick picked lesson lessons learn

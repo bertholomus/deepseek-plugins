@@ -33,7 +33,7 @@ import { asksForWork, isDecision } from '../plugins/canon/lib/text.js';
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 595, inBlock: 610, extra: 159, noBlock: 533, coding: 432 });
+const DEV_REACHED = Object.freeze({ first: 603, inBlock: 618, extra: 159, noBlock: 537, coding: 432 });
 
 /** Round 5's probe sets' figures as reached (probes.json, tuned on): held like the dev set's. */
 const PROBES_REACHED = Object.freeze({ first: 71, inBlock: 76, extra: 30, noBlock: 113, coding: 101 });
@@ -136,6 +136,11 @@ test('dev set: every prompt has a kind; the round-2 judge\'s two sets, and quest
     const decided = set.filter((e) => /^d[dv]\d+$/.test(e.id));
     assert.ok(decided.length >= 12 && decided.every((e) => isDecision(e.prompt)), `${decided.length} statements of a decision or a lesson`);
     assert.ok(decided.filter((e) => e.kind === 'answers').length >= 6 && decided.filter((e) => e.kind === 'vault').length >= 6, 'half with a note on the same subject, half without');
+    // Pass 2 (ds01, …): decisions that also say how to save them ("Save that as a draft decision note with the
+    // canon_capture tool. Do not edit any files yourself.", the round-4 judge's rm2), 8 with a note in force, 4 without.
+    const saving = set.filter((e) => /^ds\d+$/.test(e.id));
+    assert.ok(saving.length >= 12 && saving.every((e) => isDecision(e.prompt)), `${saving.length} decisions that say how to save them`);
+    assert.ok(saving.filter((e) => e.kind === 'answers').length >= 8 && saving.filter((e) => e.kind === 'vault').length >= 4, 'with a note in force and without');
     // No prompt twice in one folder.
     const keys = set.map((e) => `${e.folder}\n${said(e.prompt)}`);
     assert.equal(new Set(keys).size, keys.length, 'a prompt repeats in its folder');

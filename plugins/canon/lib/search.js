@@ -26,7 +26,7 @@
  *
  * @module dsh-plugin-canon/search
  */
-import { CODE_TERMS, COMMON, EVERYDAY, RECORDING, asksForWork, counts, isCodingRequest, isDecision, nameKey, promptTerms, proseOf, terms, wordsOf, workObject } from './text.js';
+import { CODE_TERMS, COMMON, EVERYDAY, RECORDING, asksForWork, counts, decisionSubject, isCodingRequest, isDecision, nameKey, promptTerms, proseOf, terms, wordsOf, workObject } from './text.js';
 
 /** BM25's saturation and length weight. */
 const K1 = 1.2;
@@ -469,9 +469,12 @@ export class Index {
      * @param {string} prompt
      * @param {{ folder?: { repo: string, parent: string }, limit?: number }} [options]
      */
-    search(prompt, { folder = { repo: '', parent: '' }, limit = 10 } = {}) {
-        const coding = isCodingRequest(prompt) || isDecision(prompt);
-        const { query, scored } = this.rank(prompt, folder, coding);
+    search(asked, { folder = { repo: '', parent: '' }, limit = 10 } = {}) {
+        const decision = isDecision(asked);
+        const coding = isCodingRequest(asked) || decision;
+        // A decision statement is about its subject, not about how to save it ("…with the canon_capture tool").
+        const prompt = decision ? decisionSubject(asked) : asked;
+        const { query, scored } = this.rank(prompt, folder, coding, decision);
         const best = scored.find((r) => r.fits)?.score ?? 0;
         const leads = new Set();
         const questions = questionsOf(prompt);
@@ -487,7 +490,7 @@ export class Index {
         }
         if (questions.length > 1) {
             for (const question of questions.slice(0, MAX_QUESTIONS)) {
-                const lead = this.rank(question, folder, coding).scored.find((r) => r.fits && r.score >= MIN_SCORE);
+                const lead = this.rank(question, folder, coding, decision).scored.find((r) => r.fits && r.score >= MIN_SCORE);
                 if (lead) leads.add(lead.path);
             }
         }
@@ -569,11 +572,12 @@ export class Index {
      * @param {string} prompt
      * @param {{ repo: string, parent: string }} folder
      * @param {boolean} [coding] - the prompt is a coding request (text.js isCodingRequest).
+     * @param {boolean} [decision] - the prompt states a decision to record (text.js isDecision).
      */
-    rank(prompt, folder, coding = isCodingRequest(prompt)) {
+    rank(prompt, folder, coding = isCodingRequest(prompt), decision = isDecision(prompt)) {
         // A coding request leaves its everyday request words out of the words in common; a question keeps them.
         // A decision statement's words that say it was decided and should be recorded say nothing of what about.
-        const recording = isDecision(prompt) ? RECORDING : new Set();
+        const recording = decision ? RECORDING : new Set();
         // A coding request only for its code-shaped words ("what does `fatal: refusing to merge…` mean?") asks no work.
         const shaped = coding && recording.size === 0 && !asksForWork(prompt);
         let query = promptTerms(prompt, { max: 400, everyday: !coding }).filter((t) => !recording.has(t)).slice(0, MAX_QUERY_TERMS);

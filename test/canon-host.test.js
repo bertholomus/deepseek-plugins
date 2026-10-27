@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACCESS_CHOICES, DEFAULTS, LIVE_SETTINGS, RANGES, SETTING_TITLES, alsoWrong, checkConfig, displayPath, folderIn, resolved, savedEntry, sessionFolder, unquoted, vaultPath } from '../plugins/canon/lib/config.js';
-import { ABOUT_THE_VAULT, EVERYDAY, asksForWork, codeShaped, distinctTerms, isCodingRequest, isDecision, promptTerms, proseOf, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
+import { ABOUT_THE_VAULT, EVERYDAY, asksForWork, codeShaped, decisionSubject, distinctTerms, isCodingRequest, isDecision, promptTerms, proseOf, stem, terms, wordsOf } from '../plugins/canon/lib/text.js';
 import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/canon/lib/frontmatter.js';
 import { Index, MANY_DISTINCT, MIN_SCORE, SHARE_BODY, SHARE_TITLED, asksOf, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, addressedLines, addressedToAgents, bestPassage, closedEntry, closedText, closedWhat, cut, folderProblem, paragraphs, plainText, quotedLength, unaddressed } from '../plugins/canon/lib/vault.js';
@@ -955,6 +955,22 @@ test('search: a folder inside a project\'s folder is that project\'s, and "this 
     // A coding request that works on what a note of the project it names is titled for fits it, from any folder.
     assert.deepEqual(paths('Write a migration for the ledger that drops the old entries index.'), ['Projects/tide-ledger/Schema migrations.md']);
 });
+test('search: a decision that says how to save it is about its subject, so it gets the note it changes (the round-4 judge\'s rm2)', async () => {
+    const rm2 = 'We just agreed in standup: quartz-cache client reads now time out after 80 ms instead of 50 ms. Save that as a draft decision note with the canon_capture tool, kind decision, with a short title. Do not edit any files yourself.';
+    assert.equal(isDecision(rm2), true);
+    assert.equal(decisionSubject(rm2), 'We just agreed in standup\nquartz-cache client reads now time out after 80 ms instead of 50 ms.');
+    assert.equal(decisionSubject('Record this as a decision draft (canon_capture): we decided the nightly ledger backup runs at 03:00 UTC from now on.'), 'we decided the nightly ledger backup runs at 03:00 UTC from now on.', 'a colon inside a time is no clause\'s end');
+    assert.equal(decisionSubject('Use the capture tool to file this as a decision draft.'), 'Use the capture tool to file this as a decision draft.', 'nothing else to go on: the whole statement');
+    assert.equal(decisionSubject('we decided to keep v1 for a year, put that in the notes'), 'we decided to keep v1 for a year, put that in the notes', 'no saving instruction: as it was');
+    const vault = await readVault(vaultCopy());
+    const found = vault.search(rm2, { folder: '/work/Projects/quartz-cache' });
+    assert.equal(found.results[0]?.path, 'Projects/quartz-cache/Client settings.md', JSON.stringify(found.others.map((o) => [o.path, o.why, o.share])));
+    const gateway = vault.search('Use the capture tool to file this as a decision draft: we agreed the gateway\'s health check moves from 8080 to 8081 next week.', { folder: '/work/src/harbor-gateway' });
+    assert.equal(gateway.results[0]?.path, 'Projects/harbor-gateway/Gateway ports.md');
+    // A decision no note covers, said the same way, gets nothing.
+    assert.deepEqual(vault.search('We agreed every new endpoint gets an OpenAPI example before review. Save that as a draft decision note with canon_capture, and do not edit any files.', { folder: '/work/Projects/lantern-api' }).results, []);
+});
+
 test('search: a coding request says what a note is about or finds most of what it asks in it; a decision brings the note in force; one project\'s tag says whose a note is', async () => {
     const vault = await readVault(vaultCopy());
     const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });

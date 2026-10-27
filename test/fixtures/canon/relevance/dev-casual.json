@@ -692,5 +692,105 @@
     "folder": "~/work/quartz-cache",
     "prompt": "we chose prometheus histograms over summaries for latency metrics, record that decision",
     "answers": []
+  },
+  {
+    "id": "ds01",
+    "kind": "answers",
+    "folder": "~/Projects/quartz-cache",
+    "prompt": "We just agreed in standup: quartz-cache client reads now time out after 80 ms instead of 50 ms. Save that as a draft decision note with the canon_capture tool, kind decision, with a short title. Do not edit any files yourself.",
+    "answers": [
+      "Projects/quartz-cache/Client settings.md"
+    ]
+  },
+  {
+    "id": "ds02",
+    "kind": "answers",
+    "folder": "~/src/harbor-gateway",
+    "prompt": "Use the capture tool to file this as a decision draft: we agreed the gateway's health check moves from 8080 to 8081 next week.",
+    "answers": [
+      "Projects/harbor-gateway/Gateway ports.md"
+    ]
+  },
+  {
+    "id": "ds03",
+    "kind": "answers",
+    "folder": "",
+    "prompt": "decision: lantern-api releases may also go out on thursdays, still before 15:00 pacific. please capture this as a draft note, kind decision, and don't touch any files",
+    "answers": [
+      "Projects/lantern-api/Release checklist.md"
+    ]
+  },
+  {
+    "id": "ds04",
+    "kind": "answers",
+    "folder": "~/code/tide-ledger",
+    "prompt": "Record this as a decision draft (canon_capture): we decided the nightly ledger backup runs at 03:00 UTC from now on, not 02:00.",
+    "answers": [
+      "Projects/tide-ledger/Ledger backups.md"
+    ]
+  },
+  {
+    "id": "ds05",
+    "kind": "answers",
+    "folder": "~/Projects/lantern-api",
+    "prompt": "fyi we agreed to raise the per-key limit to 150 requests a second, bursts stay at 200. save it with canon_capture as a decision draft, nothing else",
+    "answers": [
+      "Projects/lantern-api/Rate limits.md"
+    ]
+  },
+  {
+    "id": "ds06",
+    "kind": "answers",
+    "folder": "~/Projects/lantern-web",
+    "prompt": "We decided flags that have been on everywhere for 14 days get removed, instead of waiting 30. Capture that as a decision draft via the canon_capture tool; don't edit flags.ts or anything else.",
+    "answers": [
+      "Projects/lantern-web/Feature flags.md"
+    ]
+  },
+  {
+    "id": "ds07",
+    "kind": "answers",
+    "folder": "",
+    "prompt": "Please use canon_capture to save a draft decision: we agreed the platform on-call now hands over on Fridays at 09:00 Pacific instead of Thursdays.",
+    "answers": [
+      "People/On-call.md"
+    ]
+  },
+  {
+    "id": "ds08",
+    "kind": "answers",
+    "folder": "~/src/lantern-api",
+    "prompt": "Team decided old API versions keep working for 12 months after the next one ships, not 6. Draft a decision note for it with the capture tool (kind decision). No code changes.",
+    "answers": [
+      "Decisions/2026-04 Lantern API versioning.md"
+    ]
+  },
+  {
+    "id": "ds09",
+    "kind": "vault",
+    "folder": "~/Projects/lantern-api",
+    "prompt": "We agreed every new endpoint gets an OpenAPI example before review. Save that as a draft decision note with canon_capture, and do not edit any files.",
+    "answers": []
+  },
+  {
+    "id": "ds10",
+    "kind": "vault",
+    "folder": "",
+    "prompt": "decision: design reviews move to tuesday afternoons. capture it as a decision draft with the canon_capture tool please",
+    "answers": []
+  },
+  {
+    "id": "ds11",
+    "kind": "vault",
+    "folder": "~/code/tide-ledger",
+    "prompt": "Record this as a decision draft (canon_capture): we decided invoices are shown in the customer's own currency, converted at the day's ECB rate.",
+    "answers": []
+  },
+  {
+    "id": "ds12",
+    "kind": "vault",
+    "folder": "~/src/harbor-gateway",
+    "prompt": "Use the capture tool to file a draft decision: we chose Go 1.24 for every service from next quarter. Don't touch the repo.",
+    "answers": []
   }
 ]
