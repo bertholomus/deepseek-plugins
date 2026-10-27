@@ -298,14 +298,25 @@ const SENTENCE_BREAK = /(?<=[.!?。！？]["'”’)\]*_]*)\s+(?=[\p{Lu}\p{Lt}"'
 /** Words that end in a dot without ending a sentence: "e.g. Postgres", "Dr. Lee". */
 const ABBREVIATION = /(?:^|[\s(])(?:e\.g|i\.e|vs|cf|approx|incl|resp|fig|mr|mrs|ms|dr|prof)\.["'”’)\]*_]*$/i;
 
-/** The last sentence of a line that asks (it has a question mark), up to its last question mark. */
+/** A question that leans on the one before it ("Or should I wait?", "If so, …?"): read with that one. */
+const LEANS_BACK = /^["'“‘(\[*_]*(?:or|and|if (?:so|not)|otherwise|else|also)\b/i;
+
+/**
+ * The last sentence of a line that asks (it has a question mark), up to its
+ * last question mark; with the question before it when it leans on that one
+ * ("Should I fix it now? Or wait for the review?").
+ */
 function lastQuestion(line) {
     const parts = [];
     for (const part of line.split(SENTENCE_BREAK)) {
         if (parts.length && ABBREVIATION.test(parts.at(-1))) parts[parts.length - 1] += ` ${part}`;
         else parts.push(part);
     }
-    const asking = parts.findLast((part) => part.includes('?')) ?? line;
+    const last = parts.findLastIndex((part) => part.includes('?'));
+    if (last < 0) return line.trim();
+    let first = last;
+    while (first > 0 && LEANS_BACK.test(parts[first]) && parts[first - 1].includes('?')) first -= 1;
+    const asking = parts.slice(first, last + 1).join(' ');
     const end = /\?["'”’)\]*_]*(?!.*\?)/.exec(asking);
     return (end ? asking.slice(0, end.index + end[0].length) : asking).trim();
 }

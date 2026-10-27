@@ -181,6 +181,11 @@ test('words: a question keeps its words when a dot sits in it (a file, a version
     assert.equal(asked('Did the tests pass? No. Should I fix them?'), 'Should I fix them?');
     assert.equal(asked('The parser is done. Tests pass. Should I also write the docs? I can start now.'), 'Should I also write the docs?');
     assert.equal(asked('"Use v2." Should I follow that note?'), 'Should I follow that note?');
+    // A question that leans on the one before it is read with that one, or it would not stand alone.
+    assert.equal(asked('Both pass. Should I merge `fix/parser` now? Or wait for the review?'), 'Should I merge `fix/parser` now? Or wait for the review?');
+    assert.equal(asked('Are both builds green? If so, should I tag v1.2?'), 'Are both builds green? If so, should I tag v1.2?');
+    assert.equal(asked('Is the cache warm? Should I deploy?'), 'Should I deploy?', 'a question that stands alone is read alone');
+    assert.equal(asked('Ready. Or not?'), 'Or not?', 'only a question leans on a question');
     // Nothing inside a code span ends a sentence or asks.
     assert.equal(asked('Should I run `make build. Then deploy` again?'), 'Should I run `make build. Then deploy` again?');
     assert.equal(asked('I added `cache?.get()`. Should I keep the old path too?'), 'Should I keep the old path too?');
