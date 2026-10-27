@@ -22,7 +22,7 @@ export const NAMESPACE = 'dsh-plugin-categories';
 export const SERVICE = 'dshPluginCategoriesRemote';
 
 /** What a change answers while the plugin is switched off in its settings. */
-export const OFF_TEXT = 'Categories are switched off in the plugin\'s settings (enabled: false in its row of the profile\'s cordis.patch.yml).';
+export const OFF_TEXT = 'Categories are switched off in the plugin\'s settings: set enabled: true in its row of the profile\'s cordis.patch.yml to switch them on.';
 
 export class CategoriesRemote {
     /**
@@ -58,20 +58,27 @@ export class CategoriesRemote {
 
     /**
      * Every category in its order, with the workspaces it holds in DSH's
-     * order: `{categories: [{id, name, source, importedFrom?, workspaces: [{id, path, title}]}], problems}`.
-     * `source` is 'import' for one the old sidebar's import made; `problems`
-     * names the settings that were wrong (each counts as its default).
-     * Switched off in its settings: `{categories: [], off: true, problems}`.
+     * order: `{categories: [{id, name, source, importedFrom?, imported?, workspaces: [{id, path, title}]}], problems, store}`.
+     * `imported` marks one this plugin's import of the old sidebar made;
+     * `problems` names the settings that were wrong (each counts as its
+     * default); `store` says what is wrong with the store, in words (a save
+     * that failed, a file that couldn't be used), else null.
+     * Switched off in its settings: `{categories: [], off: true, problems, store: null}`.
      */
     async list() {
         try {
-            if (!this.manager) return { categories: [], off: true, problems: this.problems };
+            if (!this.manager) return { categories: [], off: true, problems: this.problems, store: null };
             // A workspace DSH added since (it lists a new one first) goes back among those in none.
             this.manager.syncWorkspaceOrder().catch(() => {});
-            return { categories: this.manager.listCategories(), problems: this.problems };
+            return { categories: this.manager.listCategories(), problems: this.problems, store: this.manager.storeNote() };
         } catch (error) {
             throw this.failure(error);
         }
+    }
+
+    /** What a change answers: the categories as they are now, and the store's note (list). */
+    answer(extra = {}) {
+        return { ...extra, categories: this.manager.listCategories(), store: this.manager.storeNote() };
     }
 
     /**
@@ -83,7 +90,7 @@ export class CategoriesRemote {
     async createCategory(name, workspace) {
         try {
             const id = await this.running().createCategory(name, typeof workspace === 'string' && workspace !== '' ? workspace : undefined);
-            return { category: id, categories: this.manager.listCategories() };
+            return this.answer({ category: id });
         } catch (error) {
             throw error instanceof RemoteError ? error : this.failure(error);
         }
@@ -93,7 +100,7 @@ export class CategoriesRemote {
     async renameCategory(category, name) {
         try {
             this.running().renameCategory(category, name);
-            return { categories: this.manager.listCategories() };
+            return this.answer();
         } catch (error) {
             throw error instanceof RemoteError ? error : this.failure(error);
         }
@@ -103,7 +110,7 @@ export class CategoriesRemote {
     async removeCategory(category) {
         try {
             await this.running().removeCategory(category);
-            return { categories: this.manager.listCategories() };
+            return this.answer();
         } catch (error) {
             throw error instanceof RemoteError ? error : this.failure(error);
         }
@@ -113,7 +120,7 @@ export class CategoriesRemote {
     async moveCategory(category, before) {
         try {
             await this.running().moveCategory(category, typeof before === 'string' ? before : null);
-            return { categories: this.manager.listCategories() };
+            return this.answer();
         } catch (error) {
             throw error instanceof RemoteError ? error : this.failure(error);
         }
@@ -128,7 +135,7 @@ export class CategoriesRemote {
         try {
             if (typeof workspace !== 'string' || workspace === '') throw new CategoryError('workspace is required');
             await this.running().fileWorkspace(workspace, typeof category === 'string' && category !== '' ? category : null, typeof before === 'string' ? before : null);
-            return { categories: this.manager.listCategories() };
+            return this.answer();
         } catch (error) {
             throw error instanceof RemoteError ? error : this.failure(error);
         }

@@ -139,14 +139,14 @@ test('categories: the window\'s endpoints, as DSH\'s gateway finds them', async 
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-categories');
     assert.equal(remote.typertRemote.serviceKey, 'dshPluginCategoriesRemote');
     assert.deepEqual(remoteMethods(remote).map((m) => m.method), ['list', 'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace']);
-    assert.deepEqual(plain(await remote.list()), { categories: [], problems: [] });
+    assert.deepEqual(plain(await remote.list()), { categories: [], problems: [], store: null });
     // Off in its settings: the list says so (the window draws DSH's list as it is, and the page says why), a change is
     // refused in words, and nothing is written.
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
     const off = setup({ enabled: false }, dir);
-    assert.deepEqual(plain(await off.remote.list()), { categories: [], off: true, problems: [] });
+    assert.deepEqual(plain(await off.remote.list()), { categories: [], off: true, problems: [], store: null });
     await assert.rejects(off.remote.createCategory('Lab'), (error) => error.code === 'categories/off'
-        && error.message === 'Categories are switched off in the plugin\'s settings (enabled: false in its row of the profile\'s cordis.patch.yml).');
+        && error.message === 'Categories are switched off in the plugin\'s settings: set enabled: true in its row of the profile\'s cordis.patch.yml to switch them on.');
     await assert.rejects(off.remote.fileWorkspace('ws:/work/a', 'lab'), (error) => error.code === 'categories/off');
     await tick();
     assert.equal(existsSync(join(dir, 'categories')), false);
@@ -156,11 +156,17 @@ test('settings: a wrong type never stops the plugin; it counts as its default, t
     const { checkConfig } = await import('../lib/config.js');
     const { DEFAULTS } = plugin;
     assert.deepEqual({ ...DEFAULTS }, { enabled: true, storeFile: '~/.dsh/categories/categories.json', logFile: '~/.dsh/categories/categories.log', projectsStoreFile: '~/.dsh/projects/projects.json' });
-    // Each wrong value in words: the key, what it must be, what it was, and what it counts as meanwhile.
+    // Each wrong value in words: the key, what it must be, what it was, and what it counts as meanwhile. A word or a
+    // number that plainly means off counts as off (YAML 1.2 reads an unquoted `no` as the text "no"); anything else as on.
     const { config, problems } = checkConfig({ enabled: 'no', storeFile: 12, logFile: '', projectsStoreFile: ['x'] }, DEFAULTS);
-    assert.deepEqual(config, { ...DEFAULTS, logFile: '' });
+    assert.deepEqual(config, { ...DEFAULTS, enabled: false, logFile: '' });
     assert.deepEqual(problems.map((p) => p.key), ['enabled', 'storeFile', 'projectsStoreFile']);
-    assert.equal(problems[0].text, 'enabled must be true or false, but it is "no"; it counts as true until you change it');
+    assert.equal(problems[0].text, 'enabled must be true or false, but it is "no"; it counts as false until you change it');
+    for (const [value, counts] of [['Off', false], [' FALSE ', false], [0, false], ['0', false], ['yes', true], ['on', true], [1, true], ['maybe', true], [{}, true], [[], true]]) {
+        const checked = checkConfig({ enabled: value }, DEFAULTS);
+        assert.equal(checked.config.enabled, counts, `enabled: ${JSON.stringify(value)} counts as ${counts}`);
+        assert.match(checked.problems[0]?.text ?? '', new RegExp(`; it counts as ${counts} until you change it$`));
+    }
     assert.equal(problems[1].text, 'storeFile must be a file path, but it is 12; ~/.dsh/categories/categories.json is used until you change it');
     assert.equal(problems[2].text, 'projectsStoreFile must be a file path, or empty to skip the move from the projects plugin, but it is ["x"]; ~/.dsh/projects/projects.json is used until you change it');
     assert.equal(checkConfig({ storeFile: '  ' }, DEFAULTS).problems[0]?.text, 'storeFile must be a file path, but it is "  "; ~/.dsh/categories/categories.json is used until you change it');
@@ -182,6 +188,19 @@ test('settings: a wrong type never stops the plugin; it counts as its default, t
     const list = plain(await remote.list());
     assert.deepEqual(list.problems, [{ key: 'enabled', text: 'enabled must be true or false, but it is "yes"; it counts as true until you change it' }]);
     assert.equal((await remote.createCategory('Lab')).category, 'lab');
+    // "no" counts as off: the list says off and names the setting, a change is refused, and the log warns once (the one
+    // line it writes; enabled: false writes nothing at all, above).
+    const dirNo = mkdtempSync(join(tmpdir(), 'categories-'));
+    const hostNo = fakeHost();
+    plugin.apply(hostNo, plugin.Config({ enabled: 'no', storeFile: join(dirNo, 'categories', 'categories.json'), logFile: join(dirNo, 'categories', 'categories.log'), projectsStoreFile: '' }));
+    const remoteNo = hostNo.provided.get('dshPluginCategoriesRemote');
+    await tick();
+    assert.deepEqual(plain(await remoteNo.list()), { categories: [], off: true, problems: [{ key: 'enabled', text: 'enabled must be true or false, but it is "no"; it counts as false until you change it' }], store: null });
+    await assert.rejects(remoteNo.createCategory('Lab'), (error) => error.code === 'categories/off');
+    const linesNo = readFileSync(join(dirNo, 'categories', 'categories.log'), 'utf8').split('\n').filter(Boolean);
+    assert.equal(linesNo.length, 1);
+    assert.match(linesNo[0], / warn a setting is wrong: enabled must be true or false, but it is "no"; it counts as false until you change it$/);
+    assert.equal(existsSync(join(dirNo, 'categories', 'categories.json')), false, 'and no store is written');
 });
 
 test('endpoints: a failure that is not a refusal is answered in words and logged, never thrown as it came', async () => {
@@ -256,20 +275,76 @@ test('store: a file that can\'t be used never stops the plugin; the log says so,
     });
 });
 
-test('store: a save that fails is said in the log; the change holds, and the next change saves it', async () => {
+test('store: a change that can\'t be saved is undone and refused in words, the list says why, and the next change saves', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'categories-'));
-    const { remote, raw } = setup({}, dir);
+    const { remote, raw, host } = setup({}, dir, { workspaces: ['/work/a', '/work/b'] });
     await tick();
-    // The atomic write's temporary file can't be made (a folder in its place).
-    mkdirSync(`${raw.storeFile}.tmp`, { recursive: true });
-    assert.equal((await remote.createCategory('Lab')).category, 'lab');
-    assert.match(logOf(raw.logFile), new RegExp(`warn could not save the categories in .*categories\\.json \\(EISDIR\\): the change holds until DSH restarts, and the next change tries again\n`));
-    assert.deepEqual(tree(await remote.list()), [['lab', 'Lab', []]], 'the change holds');
-    assert.ok(!existsSync(raw.storeFile) || !readFileSync(raw.storeFile, 'utf8').includes('"lab"'), 'and is not on disk yet');
-    rmSync(`${raw.storeFile}.tmp`, { recursive: true });
+    await remote.createCategory('Lab', 'ws:/work/a');
     await remote.createCategory('Shop');
-    const stored = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
-    assert.deepEqual(Object.keys(stored.categories).sort(), ['lab', 'shop'], 'the next change saves both');
+    const saved = readFileSync(raw.storeFile, 'utf8');
+    const listed = plain(await remote.list());
+    const orderBefore = host.workspaceRegistry.list().map((ws) => ws.id);
+    // The atomic write's temporary file can't be made (a folder in its place): every kind of change is undone, refused
+    // with the reason in words, and nothing reaches the file or DSH's order.
+    mkdirSync(`${raw.storeFile}.tmp`, { recursive: true });
+    const notSaved = /^not saved: .*categories\.json can't be written \(a folder is in the way\), so nothing changed\. Try again once it can be$/;
+    await refused(remote.createCategory('Ops', 'ws:/work/b'), notSaved);
+    await refused(remote.renameCategory('lab', 'Research'), notSaved);
+    await refused(remote.removeCategory('lab'), notSaved);
+    await refused(remote.moveCategory('shop', 'lab'), notSaved);
+    await refused(remote.fileWorkspace('ws:/work/b', 'shop'), notSaved);
+    await refused(remote.fileWorkspace('ws:/work/a', ''), notSaved);
+    const now = plain(await remote.list());
+    assert.deepEqual(now.categories, listed.categories, 'each change is undone: the list is as it was');
+    assert.equal(readFileSync(raw.storeFile, 'utf8'), saved, 'and so is the file');
+    assert.deepEqual(host.workspaceRegistry.list().map((ws) => ws.id), orderBefore, 'and DSH\'s order');
+    assert.equal(now.store.problem, 'unsaved');
+    assert.match(now.store.text, /^The categories can't be saved in .*categories\.json \(a folder is in the way\), so a change made now is undone\. Each change tries again\.$/);
+    const lines = logOf(raw.logFile).split('\n').filter((line) => line.includes(' warn could not save '));
+    assert.equal(lines.length, 6, 'each failed save is logged once');
+    assert.match(lines[0], /warn could not save the categories in .*categories\.json \(EISDIR\): the change is undone, and the next change tries again$/);
+    assert.doesNotMatch(logOf(raw.logFile), /category-new ops|category-rename|category-delete|category-move|workspace ws:\/work\/b/, 'nothing undone is logged as done');
+    // Once the file can be written, the next change saves, and the list's note goes.
+    rmSync(`${raw.storeFile}.tmp`, { recursive: true });
+    const renamed = plain(await remote.renameCategory('lab', 'Research'));
+    assert.equal(renamed.store, null, 'a change\'s answer says the store is well again');
+    assert.equal(JSON.parse(readFileSync(raw.storeFile, 'utf8')).categories.lab.name, 'Research');
+    assert.equal(plain(await remote.list()).store, null);
+    // Restarted, it has what was saved: nothing undone comes back.
+    const again = await restart(host, raw);
+    assert.deepEqual(tree(await again.list()), [['lab', 'Research', ['a']], ['shop', 'Shop', []]]);
+});
+
+test('store: the list names a file that couldn\'t be used, and where the first change kept it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'categories-'));
+    const storeFile = join(dir, 'categories', 'categories.json');
+    mkdirSync(join(dir, 'categories'));
+    writeFileSync(storeFile, '{"version": 1, "categories": {');
+    const { remote } = setup({ storeFile }, dir);
+    await tick();
+    const first = plain(await remote.list()).store;
+    assert.equal(first.problem, 'unusable');
+    assert.match(first.text, /^.*categories\.json is not JSON, so the categories started empty\. The file is left as it is: the first change keeps it beside the new store, to put back by hand\.$/);
+    const made = plain(await remote.createCategory('Lab'));
+    assert.equal(made.store.problem, 'kept');
+    assert.match(made.store.text, /^.*categories\.json is not JSON at the start, so the categories started empty\. It is kept as categories\.json\.unreadable-[\dTZ-]+ in the same folder: put it back by hand, with DSH stopped, to bring them back\.$/);
+    assert.ok(existsSync(join(dir, 'categories', /kept as (\S+) in/.exec(made.store.text)[1])), 'the file it names is there');
+});
+
+test('names: no two categories share a name, in any case; a category may change its own name\'s case', async () => {
+    const { remote } = setup();
+    await tick();
+    await remote.createCategory('Alpha');
+    await refused(remote.createCategory('alpha'), /^there is a category named Alpha already$/);
+    await refused(remote.createCategory('  ALPHA  '), /^there is a category named Alpha already$/);
+    await remote.createCategory('Beta');
+    await refused(remote.renameCategory('beta', 'alpha'), /^there is a category named Alpha already$/);
+    await remote.renameCategory('alpha', 'ALPHA');
+    assert.deepEqual(tree(await remote.list()).map(([, name]) => name), ['ALPHA', 'Beta']);
+    // Names in other scripts compare as they read too.
+    await remote.createCategory('Café');
+    await refused(remote.createCategory('CAFÉ'), /^there is a category named Café already$/);
+    await refused(remote.createCategory('Cafe\u0301'), /^there is a category named Café already$/);
 });
 
 test('categories: named sets of workspaces in their order, kept in step with DSH\'s own workspace order', async () => {
@@ -430,6 +505,9 @@ test('move: at the first start, the projects plugin\'s categories come over exac
             ['fleet-services', 'Fleet Services', 'import', 'p3', ['ops']],
             ['experimentation', 'Experimentation', 'import', 'p2', ['lab']],
         ]);
+        // The projects plugin imported these from the old sidebar long ago: none is named as this plugin's import, so
+        // the page has no note about them.
+        assert.ok(plain(list.categories).every((c) => c.imported === undefined), JSON.stringify(plain(list.categories)));
         const store = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
         // Each category as it was, field for field; a placement DSH no longer lists is kept too; the one without a name isn't.
         assert.deepEqual(store.categories, Object.fromEntries(Object.entries(source.categories).filter(([id]) => id !== 'broken')));
@@ -539,7 +617,7 @@ test('move: no projects store is nothing to move, done once; one that can\'t be 
         const dir = mkdtempSync(join(tmpdir(), 'categories-'));
         const { host, raw, remote } = setup({}, dir);
         await tick();
-        assert.deepEqual(plain(await remote.list()), { categories: [], problems: [] });
+        assert.deepEqual(plain(await remote.list()), { categories: [], problems: [], store: null });
         const store = JSON.parse(readFileSync(raw.storeFile, 'utf8'));
         assert.deepEqual({ ...store.imports.projects, at: 'x' }, { at: 'x', file: raw.projectsStoreFile, from: 'none', categories: 0, workspaces: 0 });
         assert.equal(existsSync(join(dir, 'categories', 'from-projects.json')), false);
@@ -547,7 +625,7 @@ test('move: no projects store is nothing to move, done once; one that can\'t be 
         // A projects store that turns up later doesn't move anything: the move ran.
         mkdirSync(join(dir, 'projects'));
         writeFileSync(raw.projectsStoreFile, JSON.stringify(projectsStoreWithCategories()));
-        assert.deepEqual(plain(await (await restart(host, raw)).list()), { categories: [], problems: [] });
+        assert.deepEqual(plain(await (await restart(host, raw)).list()), { categories: [], problems: [], store: null });
 
         // Unreadable (not JSON): logged, nothing written, tried again at the next start.
         const dir2 = mkdtempSync(join(tmpdir(), 'categories-'));
@@ -559,7 +637,11 @@ test('move: no projects store is nothing to move, done once; one that can\'t be 
         assert.equal(existsSync(second.raw.storeFile), false);
         writeFileSync(join(dir2, 'projects', 'projects.json'), JSON.stringify(projectsStoreWithCategories()));
         const later = await restart(second.host, second.raw);
-        assert.equal((await later.list()).categories.length, 4);
+        const moved = plain(await later.list()).categories;
+        assert.equal(moved.length, 4);
+        // With the projects plugin's record of its own import of the old sidebar carried over: still none named as ours.
+        assert.ok(JSON.parse(readFileSync(second.raw.storeFile, 'utf8')).imports.fleetShell?.projects === 5);
+        assert.ok(moved.every((c) => c.imported === undefined));
     });
 });
 
@@ -609,17 +691,19 @@ test('import: the old sidebar\'s projects come in once, as categories in their o
         const { host, raw, remote } = setup({ storeFile: '~/.dsh/categories/categories.json', logFile: '~/.dsh/categories/categories.log' }, dir, options);
         await tick();
         const list = await remote.list();
-        assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.importedFrom, c.workspaces.map((w) => w.id.slice(9))]), [
-            ['local-model-recipe', 'Local Model Recipe', 'import', 'p4', ['dsh', 'a']],
-            ['fleet-services', 'Fleet Services', 'import', 'p3', ['b']],
-            ['dsh-plugins', 'dsh plugins', 'import', 'p1', ['d']],
-            ['security', 'Security', 'import', 'p9', []],
+        // Each marked as this plugin's own import, for the page's note.
+        assert.deepEqual(plain(list.categories).map((c) => [c.id, c.name, c.source, c.importedFrom, c.imported, c.workspaces.map((w) => w.id.slice(9))]), [
+            ['local-model-recipe', 'Local Model Recipe', 'import', 'p4', true, ['dsh', 'a']],
+            ['fleet-services', 'Fleet Services', 'import', 'p3', true, ['b']],
+            ['dsh-plugins', 'dsh plugins', 'import', 'p1', true, ['d']],
+            ['security', 'Security', 'import', 'p9', true, []],
         ]);
         // Its data lives in DSH's data folder, as DSH_HOME says.
         assert.equal(raw.storeFile, '~/.dsh/categories/categories.json');
         const storeFile = join(home, 'categories', 'categories.json');
         const store = JSON.parse(readFileSync(storeFile, 'utf8'));
-        assert.deepEqual({ ...store.imports.fleetShell, at: 'x' }, { at: 'x', file, categories: 4, joined: 0, workspaces: 4, skipped: 1 });
+        assert.deepEqual({ ...store.imports.fleetShell, at: 'x' }, { at: 'x', file, categories: 4, joined: 0, workspaces: 4, skipped: 1, made: ['local-model-recipe', 'fleet-services', 'dsh-plugins', 'security'] });
+        assert.equal(logOf(join(home, 'categories', 'categories.log')).split('\n').filter((line) => / category-new \S+ import$/.test(line)).length, 4, 'each category it made is logged');
         assert.doesNotMatch(JSON.stringify(store), /lane|agentOverride|instructions/);
         assert.match(readFileSync(join(home, 'categories', 'categories.log'), 'utf8'), /import fleet-shell categories=4 joined=0 workspaces=4 skipped=1/);
         assert.equal(readFileSync(file, 'utf8'), text, 'the old file is unchanged');
@@ -728,9 +812,11 @@ test('import preview: says what the move from the projects store and the import 
     assert.match(out.stdout, /at the first start:\n\n1\. Lab\n {5}Vulnerability Lab \(\/work\/lab\)\n\nThese were groups of workspaces, from before categories\.\nProjects with a coordinator in their own workspace stay projects only: dsh-plugins\n/);
     assert.match(out.stdout, /1\. Fleet Services, a new category\n {5}fleet-ops \(\/work\/fleet-ops\)\n {5}deepseek-plugins \(\/work\/plugins\)\n2\. Security, a new category\n {5}\(no workspaces\)\n/);
     assert.match(out.stdout, /names and workspaces only; its instructions, files and defaults stay behind/);
-    assert.match(out.stdout, /Already in a category here, stays there: Vulnerability Lab \(\/work\/lab\) in "lab"/);
+    assert.match(out.stdout, /Already in a category here, stays there: Vulnerability Lab \(\/work\/lab\) in "Lab"/);
     assert.match(out.stdout, /Ungrouped in the old sidebar, goes to Other workspaces: DSH Discord \(\/work\/discord\)/);
-    assert.match(out.stdout, /Gone from DSH, skipped: w9/);
+    // A workspace DSH no longer has is said in words, never by its id.
+    assert.match(out.stdout, /Gone from DSH, skipped: a workspace DSH no longer has\n/);
+    assert.doesNotMatch(out.stdout, /w9/);
     assert.match(out.stdout, /Result: 2 new categories, 0 joined, 2 workspaces placed, 1 skipped\./);
     unchanged(before);
 

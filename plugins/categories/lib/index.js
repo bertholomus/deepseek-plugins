@@ -30,7 +30,7 @@ export const inject = ['workspaceRegistry'];
  * at start, and the Categories page names it (config.js).
  */
 export const Config = z.object({
-    /** Master switch. Off: no headers, no chip; the page says so; the store is kept as it is. */
+    /** Master switch. Off: no headers, no chip; the page says so; the store is kept as it is. "no", "off", 0 count as off. */
     enabled: z.any().default(true),
     /** The categories and which workspaces each holds (a path under ~/.dsh is one under DSH_HOME). */
     storeFile: z.any().default('~/.dsh/categories/categories.json'),
@@ -50,9 +50,11 @@ export const DEFAULTS = Object.freeze(Config({}));
 export function apply(ctx, raw) {
     const { config, problems } = checkConfig(raw, DEFAULTS);
     // Every warning goes to DSH's logger (kept in memory by DSH 0.2) and to the plugin's own log file, where it can be
-    // read; switched off in its settings, the plugin writes nothing, its log included.
+    // read. Switched off by `enabled: false`, the plugin writes nothing, its log included; a wrong value that counts
+    // as off (`enabled: "no"`) is still warned in its log, once.
+    const quiet = !config.enabled && !problems.some((problem) => problem.key === 'enabled');
     let logFile = '';
-    try { logFile = config.enabled && config.logFile ? dataPath(config.logFile) : ''; } catch { /* no home to put it in: no log */ }
+    try { logFile = !quiet && config.logFile ? dataPath(config.logFile) : ''; } catch { /* no home to put it in: no log */ }
     const warn = (text) => {
         try { ctx.logger?.warn?.('%s', text); } catch { /* the log never fails the plugin */ }
         appendLog(logFile, `warn ${String(text).replace(/^categories: /, '')}`);

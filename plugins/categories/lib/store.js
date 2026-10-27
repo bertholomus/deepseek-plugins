@@ -15,7 +15,9 @@
  * whether that start (and its one-time move) has happened. A file that is
  * there but can't be used (not JSON, another version, unreadable) counts as
  * there: the categories start empty, the log says so, and the file as it
- * was is kept beside the store before a change writes a new one.
+ * was is kept beside the store before a change writes a new one. Its
+ * methods change the categories in memory; `save` writes them, and a change
+ * that can't be written is undone by the manager (categories.js `commit`).
  *
  * @module dsh-plugin-categories/store
  */
@@ -95,8 +97,15 @@ export class CategoryStore {
     constructor(file, { warn = () => {} } = {}) {
         this.file = dataPath(file);
         this.warn = warn;
-        /** A file that was there but couldn't be used: {text} as read (undefined when it couldn't be read), else null. */
+        /**
+         * A file that was there but couldn't be used: {what: why, in words; text: as read (undefined when it couldn't
+         * be read)}, else null.
+         */
         this.unusable = null;
+        /** Where that file was kept beside the store by the first change after it ({file, what}), else null. */
+        this.kept = null;
+        /** The last save that failed ({at, reason}: a code such as EACCES, else a message), null since one succeeded. */
+        this.unsaved = null;
         /** @type {Record<string, object>} category id → its definition */
         this.categories = {};
         /** @type {Record<string, string>} workspace id → category id */
@@ -139,7 +148,7 @@ export class CategoryStore {
      * before a change writes a new store over it, the file as it was is kept beside it (save).
      */
     unusableFile(what, text) {
-        this.unusable = { text };
+        this.unusable = { what, text };
         this.imports = { unusable: { at: new Date().toISOString() } };
         this.warn(`the store ${this.file} ${what}: the categories start empty${text === undefined ? ', and a change writes a new store over it' : ', and the file as it was is kept beside it before a change writes a new one'}`);
     }
@@ -147,24 +156,40 @@ export class CategoryStore {
     /**
      * Persist atomically; the store must survive crashes mid-write. A file that couldn't be used is first kept beside
      * the store as it was (`<store>.unreadable-<time>`); if that copy can't be made, the store isn't written over it.
-     * A write that fails is logged; the change holds in memory and the next change tries again.
+     * A write that fails is logged and kept in `unsaved` (for the window); `after` says in the log what happens to the
+     * change (the manager undoes a change it can't write; a one-time move runs again at the next start).
      * @returns whether the store was written.
      */
-    save() {
+    save(after = 'the next start tries again') {
         try {
             if (this.unusable?.text !== undefined) {
                 const copy = `${this.file}.unreadable-${new Date().toISOString().replace(/[:.]/g, '-')}`;
                 writePrivate(copy, this.unusable.text);
+                this.kept = { file: copy, what: this.unusable.what };
                 this.warn(`the store that couldn't be used is kept in ${copy}`);
             }
             this.unusable = null;
             writePrivate(this.file, `${JSON.stringify({ version: 1, categories: this.categories, categoryOf: this.categoryOf, imports: this.imports }, null, 2)}\n`);
             this.exists = true;
+            this.unsaved = null;
             return true;
         } catch (error) {
-            this.warn(`could not save the categories in ${this.file} (${reason(error)}): the change holds until DSH restarts, and the next change tries again`);
+            this.unsaved = { at: new Date().toISOString(), reason: reason(error) };
+            this.warn(`could not save the categories in ${this.file} (${reason(error)}): ${after}`);
             return false;
         }
+    }
+
+    /** What is in memory now, to put back when a change can't be written (`restore`). */
+    snapshot() {
+        return structuredClone({ categories: this.categories, categoryOf: this.categoryOf, imports: this.imports });
+    }
+
+    /** Put back what `snapshot` took. */
+    restore({ categories, categoryOf, imports }) {
+        this.categories = categories;
+        this.categoryOf = categoryOf;
+        this.imports = imports;
     }
 
     /** The workspaces in a category, in the order they were filed. */
@@ -172,31 +197,28 @@ export class CategoryStore {
         return Object.keys(this.categoryOf).filter((id) => this.categoryOf[id] === categoryId);
     }
 
-    /** Merge fields into a category, made on first use, and persist. */
+    /** Merge fields into a category, made on first use (in memory: `save` writes it). */
     putCategory(categoryId, fields) {
         this.categories[categoryId] = { ...this.categories[categoryId], ...fields };
-        this.save();
         return this.categories[categoryId];
     }
 
-    /** Forget a category; its workspaces go back to none. */
+    /** Forget a category; its workspaces go back to none (in memory). */
     removeCategory(categoryId) {
         delete this.categories[categoryId];
         for (const id of this.workspacesInCategory(categoryId)) delete this.categoryOf[id];
-        this.save();
     }
 
-    /** Put a workspace in a category, or (categoryId null) in none. A workspace is in one category at most. */
+    /** Put a workspace in a category, or (categoryId null) in none (in memory). A workspace is in one category at most. */
     fileWorkspace(workspaceId, categoryId) {
         if (categoryId === null) delete this.categoryOf[workspaceId];
         else this.categoryOf[workspaceId] = categoryId;
-        this.save();
     }
 
-    /** Record a one-time import or move as made. */
+    /** Record a one-time import or move as made, and persist it with what it brought (a failure: the next start runs it again). */
     putImport(key, record) {
         this.imports[key] = record;
-        this.save();
+        return this.save();
     }
 }
 

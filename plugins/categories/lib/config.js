@@ -1,8 +1,10 @@
 /**
  * The plugin's settings, checked in words. Each key takes any value in the
  * profile, so a wrong type (`enabled: "no"`, a number for a path) never
- * stops the plugin: that key counts as its default, the plugin's log warns
- * once at start, and the Categories page names it until it is fixed.
+ * stops the plugin: that key counts as its default (for `enabled`, a word
+ * or number that plainly means off, such as "no" or 0, counts as off), the
+ * plugin's log warns once at start, and the Categories page names it until
+ * it is fixed.
  *
  * @module dsh-plugin-categories/config
  */
@@ -25,6 +27,15 @@ const shown = (value) => {
     }
 };
 
+/** Words that plainly mean off (YAML 1.2 reads an unquoted `no` as this text): such a value counts as off. */
+const OFF = new Set(['no', 'off', 'false', '0']);
+
+/** What a value for `enabled` that isn't true or false counts as: off for a word or number that means off, else on (its default). */
+function enabledOf(value) {
+    const word = typeof value === 'string' || typeof value === 'number' ? String(value).trim().toLowerCase() : '';
+    return !OFF.has(word);
+}
+
 /**
  * The settings to run with, and what was wrong with the ones given.
  * @param raw - the row's config as DSH hands it (defaults already filled in for missing keys).
@@ -44,7 +55,10 @@ export function checkConfig(raw, defaults) {
         if (value === undefined || value === null) continue;
         if (key === 'enabled') {
             if (typeof value === 'boolean') config.enabled = value;
-            else wrong(key, value, 'it counts as true');
+            else {
+                config.enabled = enabledOf(value);
+                wrong(key, value, `it counts as ${config.enabled}`);
+            }
             continue;
         }
         // A path: text, empty only where empty means "none".
