@@ -59,7 +59,7 @@ import { NetTexts, changedPath, canonicalPath, notKept, expectedAfter, NET_SWEEP
 import { sendOf, codeSendOf, described, withoutCredentials } from './sends.js';
 import { grantsIn, asksFor as asksToDo, doing } from './grants.js';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf, isSame, bornOf, CLOCK_SLACK_MS } from './deletes.js';
-import { SHELL_TOOLS, MUTATING_TOOLS, snapshotFolder, diffFolder, Mutations } from './shell.js';
+import { SHELL_TOOLS, MUTATING_TOOLS, BIRTH_TIMES, snapshotFolder, diffFolder, ownWrite, Mutations } from './shell.js';
 import { guardedToolsOf, textSettingProblem, trustedHostsOf } from './config.js';
 
 /** Order of the project section in the assembled system prompt (after first-party guidance). */
@@ -2684,8 +2684,9 @@ export class ProjectManager {
             if (was && was.turn === turn) return;
             const root = this.shellFolder(thread);
             if (root === undefined) return;
+            const started = Date.now();
             const files = await snapshotFolder(resolve(expand(root)));
-            this.shellSnaps.set(thread, { turn, root: resolve(expand(root)), at: Date.now(), files, edits: null });
+            this.shellSnaps.set(thread, { turn, root: resolve(expand(root)), started, at: Date.now(), files, edits: null });
             for (const key of [...this.shellSnaps.keys()].slice(0, -200)) this.shellSnaps.delete(key);
         } catch (error) {
             this.log(`error shell-snap ${String(error?.message ?? error).slice(0, 200)}`);
@@ -2707,25 +2708,48 @@ export class ProjectManager {
 
     /**
      * A turn's shell-command edits (shell.js diffFolder): the folder now
-     * against the snapshot its first shell command took, counted only when
+     * against the snapshot its first shell command took, counted whole when
      * no other session's mutating call ran in the window, and the thread's
-     * own in no turn but this one. Computed once per turn; a turn without a
-     * snapshot (no shell command, or a restart) has none.
+     * own in no turn but this one. When one did (round-1 finding 7: threads
+     * that share a folder and run at once), the turn keeps the files only
+     * its own calls could have written (shell.js ownWrite): a file's last
+     * change inside one of its calls, and no other call between the earliest
+     * the file could have changed (the snapshot's start, or a new file's
+     * birth) and then. A file gone in such a window, or one another call
+     * could have touched, counts nothing; a change stamped in the future
+     * makes the file times untrustworthy, and the turn counts nothing.
+     * Computed once per turn; a turn without a snapshot (no shell command,
+     * or a restart) has none.
      * @returns {Promise<Array<{path: string, added: number, deleted: number, created?: true, binary?: true, oversized?: true}>>}
      */
     shellEdits(thread, turn) {
         const snap = this.shellSnaps.get(thread);
         if (!snap || snap.turn !== turn) return Promise.resolve([]);
         if (snap.edits === null) {
-            const { root, at, turn: countedTurn } = snap;
+            const { root, at, started = at, turn: countedTurn } = snap;
             snap.edits = (async () => {
                 try {
                     const before = snap.files;
                     snap.files = null;
-                    const edits = await diffFolder(root, before);
-                    if (!this.mutations.overlapped(thread, at, Date.now(), countedTurn)) return edits;
-                    this.log(`shell-window ${thread} turn=${countedTurn} shared`);
-                    return [];
+                    const times = new Map();
+                    const edits = await diffFolder(root, before, times);
+                    const end = Date.now();
+                    if (!this.mutations.overlapped(thread, at, end, countedTurn)) return edits;
+                    const slack = this.mutations.slack;
+                    if (edits.some((e) => (times.get(e.path)?.changed ?? 0) > end + slack)) {
+                        this.log(`shell-window ${thread} turn=${countedTurn} shared kept=0/${edits.length} future-times`);
+                        return [];
+                    }
+                    const spans = this.mutations.spansIn(started, end);
+                    const kept = edits.filter((e) => {
+                        const t = times.get(e.path);
+                        // Gone now: nothing says whose command removed it.
+                        if (t === undefined) return false;
+                        const born = e.created === true && BIRTH_TIMES && t.born >= started - slack && t.born <= t.changed;
+                        return ownWrite(spans, thread, countedTurn, born ? t.born : started, t.changed, slack);
+                    });
+                    this.log(`shell-window ${thread} turn=${countedTurn} shared kept=${kept.length}/${edits.length}`);
+                    return kept;
                 } catch (error) {
                     this.log(`error shell-diff ${thread} ${String(error?.message ?? error).slice(0, 200)}`);
                     return [];

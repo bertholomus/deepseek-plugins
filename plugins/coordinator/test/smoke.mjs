@@ -23,6 +23,7 @@ import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { NetTexts, canonicalPath } from '../lib/net.js';
 import { grantsIn, asksFor } from '../lib/grants.js';
 import { deletesOf, codeDeletesOf, isFree, identityOf, CLOCK_SLACK_MS } from '../lib/deletes.js';
+import { ownWrite, Mutations } from '../lib/shell.js';
 
 // No test reads or writes the real ~/.dsh: DSH's data folder is this run's own, as a DSH
 // started with DSH_HOME has. Set before anything resolves a default path; removed at exit.
@@ -3494,6 +3495,103 @@ test('changes: a turn counts its shell edits only when no other session was chan
     assert.equal(await of(t1), null, 'its window held another session\'s writes');
     const read = plain(await of(t2));
     assert.deepEqual([read.added, read.deleted, read.files, read.turns], [2, 0, 1, 1], 'only what its own command wrote, alone');
+});
+
+test('changes: a turn whose window another thread shares still counts the files only its own commands wrote (round-1 finding 7)', async () => {
+    const { host, dir } = setup({}, undefined, { ...SELECTING, gateway: true });
+    await tick();
+    const coord = coordinatorOf(host);
+    const remote = host.provided.get('dshPluginCoordinatorRemote');
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'First', brief: 'Go.' });
+    const t1 = threadOf(host, coord);
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Second', brief: 'Go.' });
+    const t2 = [...host.live.values()].find((a) => a.id !== coord.id && a.id !== t1.id);
+    const work = mkdtempSync(join(tmpdir(), 'shell-own-'));
+    writeFileSync(join(work, 'old.txt'), 'o\n');
+    writeFileSync(join(work, 'gone.txt'), 'g\nh\n');
+    for (const t of [t1, t2]) {
+        host.sessions.get(t.id).folder = work;
+        t.session.header = { cwd: work };
+    }
+    // Calls 80 ms apart are told apart here; DSH's runs keep two seconds of slack.
+    remote.manager.mutations.slack = 15;
+    const apart = () => new Promise((r) => setTimeout(r, 80));
+    const events = (id) => host.sessions.get(id).events;
+    const push = (t, type, data) => { const e = { seq: events(t.id).length + 1, type, data }; events(t.id).push(e); t.ctx.sessionEvent(e); return e; };
+    let calls = 0;
+    const shell = (agent, body) => host.waterfall('tools/execute', { name: 'bash', arguments: { command: 'the command' }, agent, callId: `own-${++calls}`, signal: new AbortController().signal }, body);
+    const until = async (probe, what) => {
+        for (let i = 0; i < 500; i++) {
+            if (await probe()) return;
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        assert.fail(`never settled: ${what}`);
+    };
+    const of = async (t) => (await remote.describe(coord.id)).threads.find((x) => x.session === t.id)?.changes ?? null;
+    const log = () => readFileSync(join(dir, 'coordinator.log'), 'utf8');
+    // Both threads' turns run at once, their commands one after another, as two threads on one model do.
+    t1.ctx.emitStatus(t1, 'running');
+    push(t1, 'turn/start', { turn: 1 });
+    t2.ctx.emitStatus(t2, 'running');
+    push(t2, 'turn/start', { turn: 1 });
+    await shell(t1, () => { writeFileSync(join(work, 'one.txt'), '1\n'); return { content: [] }; });
+    await apart();
+    // t2 makes a file of three lines in one command, as the judge's t2 made notes/reversed.txt while t1 ran.
+    await shell(t2, () => { mkdirSync(join(work, 'notes')); writeFileSync(join(work, 'notes', 'reversed.txt'), 'c\nb\na\n'); return { content: [] }; });
+    await apart();
+    // t1 changes a file both snapshots hold and removes another; then t2 changes the first one too.
+    await shell(t1, () => { writeFileSync(join(work, 'old.txt'), 'o\nt1\n'); rmSync(join(work, 'gone.txt')); return { content: [] }; });
+    await apart();
+    await shell(t2, () => { writeFileSync(join(work, 'old.txt'), 'o\nt1\nt2\n'); return { content: [] }; });
+    await apart();
+    for (const t of [t1, t2]) {
+        push(t, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+        t.ctx.emitStatus(t, 'idle');
+    }
+    await until(async () => (await of(t1)) !== null && (await of(t2)) !== null, 'both turns\' own files');
+    // t2: its new file, born and written in its own command with no other call near. Not old.txt (t1 wrote it after
+    // t2's snapshot), not gone.txt (nothing says whose command removed it), not one.txt (made before its snapshot).
+    const second = plain(await of(t2));
+    assert.deepEqual([second.added, second.deleted, second.files, second.turns], [3, 0, 1, 1], 'only notes/reversed.txt');
+    // t1: one.txt, born and last written in its first command. Not old.txt (last written in t2's command), not gone.txt,
+    // not t2's file.
+    const first = plain(await of(t1));
+    assert.deepEqual([first.added, first.deleted, first.files, first.turns], [1, 0, 1, 1], 'only one.txt');
+    assert.match(log(), new RegExp(` shell-window ${t1.id} turn=1 shared kept=1/4\n`));
+    assert.match(log(), new RegExp(` shell-window ${t2.id} turn=1 shared kept=1/3\n`));
+});
+
+test('changes: a file in a shared window is the thread\'s own only when no other call came near its life (shell.js ownWrite)', () => {
+    const spans = [
+        { owner: 't1', from: 1000, to: 1100, turn: 1 },
+        { owner: 't2', from: 1300, to: 1400, turn: 1 },
+        { owner: 't1', from: 1600, to: 1700, turn: 1 },
+        { owner: 't1', from: 2600, to: 2700, turn: 2 },
+    ];
+    const own = (since, at) => ownWrite(spans, 't1', 1, since, at, 50);
+    assert.equal(own(1050, 1060), true, 'born and written in its own call');
+    assert.equal(own(1050, 1650), false, 'another thread\'s call ran between its birth and its last change');
+    assert.equal(own(1620, 1650), true, 'born after the other call, in its own');
+    assert.equal(own(1250, 1260), false, 'written outside every call of its own');
+    assert.equal(own(1360, 1380), false, 'inside the other thread\'s call');
+    assert.equal(own(1430, 1450), false, 'too near the other call\'s end to tell');
+    assert.equal(own(1700, 1740), true, 'just past its own call\'s end, inside the slack');
+    assert.equal(own(2620, 2650), false, 'its own call of another turn is not this turn\'s');
+    assert.equal(own(Number.NaN, 1050), false, 'no time, no claim');
+    assert.equal(ownWrite([], 't1', 1, 0, 10), false, 'no call at all');
+    // A window's spans: every owner's calls near it, a running one's until now.
+    const m = new Mutations();
+    m.slack = 10;
+    m.begin('a', 1);
+    m.end('a');
+    m.begin('b', null);
+    const near = m.spansIn(Date.now() - 1000, Date.now());
+    assert.deepEqual(near.map((s) => s.owner).sort(), ['a', 'b']);
+    assert.equal(near.find((s) => s.owner === 'a').turn, 1);
+    assert.equal(m.spansIn(Date.now() - 10000, Date.now() - 5000).length, 0, 'a window before both calls holds neither');
+    assert.equal(m.slack, 10);
+    assert.equal(new Mutations().slack, CLOCK_SLACK_MS, 'two seconds unless a test says otherwise');
+    m.end('b');
 });
 
 test('changes: own edits count lines as a diff does', () => {
