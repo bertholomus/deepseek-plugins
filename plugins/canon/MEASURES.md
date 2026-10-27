@@ -70,9 +70,9 @@ answers, 566 none does).
 
 | Probe sets (tuned on) | Round 3 | Round 4 | Now |
 | --- | --- | --- | --- |
-| The block's first note answers | 74 of 96 (77.1%) | 71 (74.0%) | 71 (74.0%) |
-| An answering note is in the block | 81 (84.4%) | 76 (79.2%) | 76 (79.2%) |
-| Notes per block that do not answer | 0.59 (49 in 83 blocks) | 0.38 (30 in 78) | 0.40 (31 in 78) |
+| The block's first note answers | 74 of 96 (77.1%) | 71 (74.0%) | 73 (76.0%) |
+| An answering note is in the block | 81 (84.4%) | 76 (79.2%) | 78 (81.3%) |
+| Notes per block that do not answer | 0.59 (49 in 83 blocks) | 0.38 (30 in 78) | 0.39 (31 in 80) |
 | No block, for a prompt no note answers | 74 of 124 (59.7%) | 113 (91.1%) | 113 (91.1%) |
 | No block, for an everyday coding request | 71 of 110 (64.5%) | 101 (91.8%) | 101 (91.8%) |
 
@@ -97,9 +97,11 @@ do not answer, from reading everyday operations words as the notes' own
 live" and "ship a new build" as deploy); the probe sets gained one note
 that does not answer from the same change ("do i need to bounce the
 gateway" after the TLS certificates are renewed now also gets Gateway
-ports). The twelve decisions that say how to save them each get the note
-they change, or no block when no note covers them, and no other prompt's
-block changed with that rule.
+ports), and two first notes from leaving a decision's "last night" or
+"today" out of what it is about ("fyi we moved the health check to 8081
+last night, update the notes" gets Gateway ports). The twelve decisions
+that say how to save them each get the note they change, or no block when
+no note covers them, and no other prompt's block changed with that rule.
 
 Round 4's rules keep notes off everyday coding requests (on the probe sets
 about one in three got a block with round 3's rules, one in twelve since),

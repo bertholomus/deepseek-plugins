@@ -525,8 +525,12 @@ const HOW_TO_SAVE = /\bcanon_capture\b|\bcapture\s+tool\b|\b(?:as|in)\s+an?\s+(?
 export function decisionSubject(prompt) {
     const parts = String(prompt ?? '').split(/(?<=[.!?;])\s+|\n+|:\s+/).map((part) => part.trim()).filter(Boolean);
     const kept = parts.filter((part) => !HOW_TO_SAVE.test(part));
-    return kept.length ? kept.join('\n') : String(prompt ?? '');
+    // When it changed says nothing of what changed: "we moved the health check to 8081 last night".
+    return (kept.length ? kept.join('\n') : String(prompt ?? '')).replace(WHEN_IT_CHANGED, ' ');
 }
+
+/** The words of a decision statement that say when it was made, not what about. */
+const WHEN_IT_CHANGED = /\b(?:(?:last|this|tomorrow|yesterday)\s+(?:night|morning|afternoon|evening)|(?:last|this)\s+(?:week|month)|yesterday|tonight|today|earlier\s+today)\b/gi;
 
 /** The words of a decision statement that say it was decided and should be recorded, as terms. */
 export const RECORDING = new Set(`

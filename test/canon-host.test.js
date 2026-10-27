@@ -965,11 +965,15 @@ test('search: a decision that says how to save it is about its subject, so it ge
     assert.equal(decisionSubject('Record this as a decision draft (canon_capture): we decided the nightly ledger backup runs at 03:00 UTC from now on.'), 'we decided the nightly ledger backup runs at 03:00 UTC from now on.', 'a colon inside a time is no clause\'s end');
     assert.equal(decisionSubject('Use the capture tool to file this as a decision draft.'), 'Use the capture tool to file this as a decision draft.', 'nothing else to go on: the whole statement');
     assert.equal(decisionSubject('we decided to keep v1 for a year, put that in the notes'), 'we decided to keep v1 for a year, put that in the notes', 'no saving instruction: as it was');
+    // When it changed is not what changed: "last night", "today", "this morning" weigh nothing; "nightly" stays.
+    assert.equal(decisionSubject('fyi we moved the health check to 8081 last night, update the notes').replace(/\s+/g, ' '), 'fyi we moved the health check to 8081 , update the notes');
+    assert.equal(decisionSubject('We decided today that the nightly backup runs at 04:00.').replace(/\s+/g, ' '), 'We decided that the nightly backup runs at 04:00.');
     const vault = await readVault(vaultCopy());
     const found = vault.search(rm2, { folder: '/work/Projects/quartz-cache' });
     assert.equal(found.results[0]?.path, 'Projects/quartz-cache/Client settings.md', JSON.stringify(found.others.map((o) => [o.path, o.why, o.share])));
     const gateway = vault.search('Use the capture tool to file this as a decision draft: we agreed the gateway\'s health check moves from 8080 to 8081 next week.', { folder: '/work/src/harbor-gateway' });
     assert.equal(gateway.results[0]?.path, 'Projects/harbor-gateway/Gateway ports.md');
+    assert.equal(vault.search('fyi we moved the gateway health check to 8081 last night, update the notes', { folder: '/work/src/harbor-gateway' }).results[0]?.path, 'Projects/harbor-gateway/Gateway ports.md', 'a decision that says when it changed');
     // A decision no note covers, said the same way, gets nothing.
     assert.deepEqual(vault.search('We agreed every new endpoint gets an OpenAPI example before review. Save that as a draft decision note with canon_capture, and do not edit any files.', { folder: '/work/Projects/lantern-api' }).results, []);
 });

@@ -40,8 +40,10 @@ const DEV_REACHED = Object.freeze({ first: 605, inBlock: 620, extra: 156, noBloc
  * Extra 31, one more than round 5's 30: reading "bounce" as restart (pass 2) brings Gateway ports
  * in after Rotating TLS certificates for w1-096 ("do i need to bounce the gateway"), while the
  * dev set gains two first notes and loses three notes that do not answer.
+ * First 73 and in the block 78 (from 71 and 76): a decision's "last night" or "today" says when, not
+ * what (w1-008, w3-082).
  */
-const PROBES_REACHED = Object.freeze({ first: 71, inBlock: 76, extra: 31, noBlock: 113, coding: 101 });
+const PROBES_REACHED = Object.freeze({ first: 73, inBlock: 78, extra: 31, noBlock: 113, coding: 101 });
 
 /**
  * The first hold-out's figures as measured with round 4's rules (53646c8,

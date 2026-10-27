@@ -113,7 +113,10 @@ code changes" are left out first, so "We just agreed in standup:
 quartz-cache client reads now time out after 80 ms instead of 50 ms. Save
 that as a draft decision note with the canon_capture tool, kind decision,
 with a short title. Do not edit any files yourself." in quartz-cache's
-folder gets Client settings, the note that says 50 ms.
+folder gets Client settings, the note that says 50 ms. When it changed
+("last night", "this morning", "today") is left out too: "fyi we moved
+the health check to 8081 last night, update the notes" in harbor-gateway's
+folder gets Gateway ports.
 
 ### When a note fits a question
 
@@ -316,9 +319,9 @@ answers and 90% of the everyday coding requests. Now:
 
 | | Dev set (tuned on) | Probe sets (tuned on) | Second hold-out | First hold-out (guard) |
 | --- | --- | --- | --- | --- |
-| The block's first note answers | 605 of 655 (92.4%) | 71 of 96 (74.0%): missed | 20 of 24 (83.3%) | 18 of 24 (75.0%): missed |
-| An answering note is in the block | 620 (94.7%) | 76 (79.2%): missed | 20 (83.3%): missed | 19 (79.2%): missed |
-| Notes per block that do not answer | 0.25 | 0.40 | 0.15 | 0.37 |
+| The block's first note answers | 605 of 655 (92.4%) | 73 of 96 (76.0%): missed | 20 of 24 (83.3%) | 18 of 24 (75.0%): missed |
+| An answering note is in the block | 620 (94.7%) | 78 (81.3%): missed | 20 (83.3%): missed | 19 (79.2%): missed |
+| Notes per block that do not answer | 0.25 | 0.39 | 0.15 | 0.37 |
 | No block, for a prompt no note answers | 537 of 570 (94.2%) | 113 of 124 (91.1%) | 48 of 48 (100%) | 21 of 24 (87.5%) |
 | No block, for an everyday coding request | 432 of 445 (97.1%) | 101 of 110 (91.8%) | 40 of 40 (100%) | (not labelled) |
 
