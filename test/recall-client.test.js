@@ -651,7 +651,7 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     const { react, mount } = statefulReact();
     const { client } = loadClient(CLIENT, { react });
     const { kit, ReadingView, finder, views, jump, endJump } = client.internals;
-    const TURN = { ...OWN, path: `${HOME}/.dsh/sessions/w/sess-own-1/session.v4.jsonl.zstd`, prompt: 'please deploy the gateway to staging', reply: 'Deployed: 3 pods ready.', tools: 'bash: make deploy ENV=staging', prev: 3, next: 5, count: 9 };
+    const TURN = { ...OWN, path: `${HOME}/.dsh/sessions/w/sess-own-1/session.v4.jsonl.zstd`, prompt: 'please deploy the gateway to staging', reply: 'Deployed: **3 pods** ready, see `make status`.', tools: 'bash: make deploy ENV=staging', prev: 3, next: 5, count: 9 };
     const turns = {
         '3.4': TURN,
         '3.6': { ...TURN, id: '3.6', turn: 6, reply: '', tools: '', state: 'cut-off' },
@@ -669,7 +669,13 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     let text = textIn(view.tree);
     assert.deepEqual(calls[0], ['turn', { id: '3.4' }]);
     assert.match(text, /^Back to the resultsFix the gatewaySession · ~\/work\/gateway · glm-5\.3 · turn 4 of 9 · 1 h ago/);
-    assert.match(text, /Askedplease deploy the gateway to stagingReplyDeployed: 3 pods ready\.Commands and files it usedbash: make deploy ENV=staging/);
+    // The reply in DSH's own Markdown, as the chat draws it (round 3: its ** and backticks shown raw); the request plain.
+    assert.match(text, /Askedplease deploy the gateway to stagingReplyCommands and files it usedbash: make deploy ENV=staging/);
+    const md = elementsOf(view.tree).filter((e) => e.type === 'MarkdownText');
+    assert.equal(md.length, 1);
+    assert.equal(md[0].props.text, 'Deployed: **3 pods** ready, see `make status`.');
+    assert.deepEqual(plain(md[0].props.labels.code.toolbarLabels), { codeLabel: 'Code', wrapLabel: 'Wrap lines', unwrapLabel: 'Don\'t wrap lines' });
+    assert.equal(withAttr(view.tree, 'data-recall-markdown').length, 1);
     assert.doesNotMatch(text, /sess-own-1|session\.v4/, 'no ids or log files where people read');
     finder.read('3.4', '[data-recall-peek="3.4"]');
     button(view.tree, 'Turn after').props.onClick();
@@ -702,7 +708,8 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     assert.match(text, /ReplyNo reply yet\./);
     view.update({ id: '3.7' });
     await settle(5);
-    assert.match(textIn(view.tree), /turn 7 of 9 · failed · 1 h agoThis turn failed: The model provider did not answer \(503\)\.Asked.*ReplyHalf an answer/);
+    assert.match(textIn(view.tree), /turn 7 of 9 · failed · 1 h agoThis turn failed: The model provider did not answer \(503\)\.Asked/);
+    assert.equal(elementsOf(view.tree).find((e) => e.type === 'MarkdownText')?.props.text, 'Half an answer');
     view.update({ id: '3.4' });
     await settle(5);
     assert.equal(withAttr(view.tree, 'data-recall-state').length, 0, 'a turn that ended as it should says nothing more');
@@ -716,6 +723,34 @@ test('reading view: the turn in full, the turns beside it, the way into its sess
     view.update({ id: '99.1' });
     await settle(5);
     assert.match(textIn(view.tree), /Couldn't read it: That result is no longer in the index \(its file changed or went\)\. Search again\./);
+});
+
+test('reading view: a reply and a note\'s section in DSH\'s Markdown; plain words where a DSH has no Markdown part, and for an empty one', async (t) => {
+    for (const markdown of [true, false]) {
+        const { react, mount } = statefulReact();
+        const { client } = loadClient(CLIENT, { react, ui: markdown ? {} : { MarkdownText: undefined } });
+        const { kit, ReadingView, endJump } = client.internals;
+        const section = { ...NOTE, prompt: 'Next steps', reply: '1. Ship **the parser**\n2. Read `~/notes/plan.md`', tools: '', prev: 2, next: 4, count: 5 };
+        const empty = { ...NOTE, id: '12.4', turn: 4, prompt: 'Gotchas', reply: '', tools: '', prev: 3, next: undefined, count: 5 };
+        connect(kit, { turn: ({ id }) => (id === '12.4' ? empty : section) });
+        t.after(() => { kit.setConnection(undefined); endJump(); });
+        const view = mount(ReadingView, { id: '12.3', home: HOME, onBack: () => {} });
+        t.after(() => view.unmount());
+        await settle(5);
+        const md = elementsOf(view.tree).filter((e) => e.type === 'MarkdownText');
+        if (markdown) {
+            assert.equal(md.length, 1);
+            assert.equal(md[0].props.text, section.reply);
+            assert.doesNotMatch(textIn(view.tree), /\*\*/);
+        } else {
+            assert.equal(md.length, 0);
+            assert.match(textIn(view.tree), /Section “Next steps”1\. Ship \*\*the parser\*\*\n2\. Read `~\/notes\/plan\.md`/, 'the words as they are');
+        }
+        view.update({ id: '12.4' });
+        await settle(5);
+        assert.match(textIn(view.tree), /Section “Next steps”This section has no text\./);
+        assert.equal(elementsOf(view.tree).filter((e) => e.type === 'MarkdownText').length, 0);
+    }
 });
 
 test('reading view: Back puts the focus on the button that opened it, even after Turn before or after; else on its row, else the search box', async () => {
@@ -899,6 +934,43 @@ test('the tool\'s card: running, what it found (each a press from its turn), not
     assert.equal(elementsOf(tree).find((e) => e.type === 'DisclosureRow').props.title, 'Didn\'t read the past turn: stopped before it finished.');
     tree = RecallToolView({ phase: 'result', block: { isError: false, content: [], call: { argsRaw: '{"query":"deploy"}' } } });
     assert.equal(elementsOf(tree).find((e) => e.type === 'DisclosureRow').props.title, 'Searched past work for “deploy”', 'an older result with no card: its line');
+});
+
+test('the tool\'s card: a time range the Time menu has no choice for (today, a date, an end) comes to the page as a choice of its own, named in words and sent as the agent sent it; Clear the filters takes it off', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { RecallToolView, Filters, finder, views, endJump, kit, rangeLabel } = client.internals;
+    const calls = connect(kit, { search: FOUND, facets: { folders: [], models: [], kinds: [] } });
+    t.after(() => { endJump(); kit.setConnection(undefined); });
+    views.openPage = () => {};
+    const results = { kind: 'results', query: 'tapir', total: 1, totalMore: false, sessions: 1, results: [TRANSCRIPT] };
+    const card = mount(RecallToolView, { phase: 'result', home: HOME, sessionId: 'sess-chat', useDisclosure: () => ({ expanded: true, toggle() {} }), block: { isError: false, meta: results, call: { argsRaw: '{"query":"tapir","since":"today"}' } } });
+    t.after(() => card.unmount());
+    // Round 3: the page took the words with Any time, so Back to the results showed more than the agent found.
+    withAttr(card.tree, 'data-recall-tool-page')[0].props.onClick();
+    await settle(5);
+    assert.deepEqual(plain(finder.store.get().query), { text: 'tapir', kind: 'any', when: 'range', range: { since: 'today' }, folder: '', model: '', sort: 'best' });
+    assert.deepEqual(calls.at(-1), ['search', { query: { text: 'tapir', since: 'today', sort: 'best', limit: 20, offset: 0, prefix: true } }]);
+    const filters = mount(Filters, { q: finder.store.get().query, kinds: 3, home: HOME });
+    t.after(() => filters.unmount());
+    const time = elementsOf(filters.tree).find((e) => e.type === 'Menu' && e.props.anchor?.props?.['data-recall-filter'] === 'when');
+    assert.equal(time.props.anchor.props['aria-label'], 'Time: Since today', 'the Time filter names the range');
+    assert.deepEqual(plain(time.props.items.map((i) => i.label)), ['Since today', 'Any time', 'Past day', 'Past week', 'Past month', 'Past year'], 'a choice of its own, before the usual ones');
+    assert.equal(time.props.selectedId, 'range');
+    assert.ok(withAttr(filters.tree, 'data-recall-clear').length === 1, 'and it counts as a filter: Clear the filters is offered');
+    // A start and an end, as the agent gave them.
+    const both = mount(RecallToolView, { phase: 'result', home: HOME, sessionId: 'sess-chat', useDisclosure: () => ({ expanded: true, toggle() {} }), block: { isError: false, meta: results, call: { argsRaw: '{"query":"tapir","since":"2026-10-01","until":"yesterday"}' } } });
+    t.after(() => both.unmount());
+    withAttr(both.tree, 'data-recall-tool-page')[0].props.onClick();
+    await settle(5);
+    assert.deepEqual(calls.at(-1)[1].query, { text: 'tapir', since: '2026-10-01', until: 'yesterday', sort: 'best', limit: 20, offset: 0, prefix: true });
+    assert.deepEqual([rangeLabel({ since: 'today' }), rangeLabel({ since: '7d' }), rangeLabel({ since: '1d' }), rangeLabel({ since: '2026-10-01', until: 'yesterday' }), rangeLabel({ until: '2026-10-15' }), rangeLabel({})],
+        ['Since today', 'The past 7 days', 'The past day', 'Since 2026-10-01, until yesterday', 'Until 2026-10-15', 'Any time']);
+    // The menu's own choices still come through as before; Clear the filters takes the range off.
+    finder.clearFilters();
+    await settle(5);
+    assert.deepEqual([finder.store.get().query.when, finder.store.get().query.range], ['any', undefined]);
+    assert.deepEqual(calls.at(-1)[1].query, { text: 'tapir', sort: 'best', limit: 20, offset: 0, prefix: true });
 });
 
 test('the tool\'s card: Open puts the card\'s search on the page first, so Back shows what the agent found; the chat the card is in is a way back too', async (t) => {

@@ -1144,6 +1144,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-read-label{margin:14px 0 4px;font:var(--dsw-font-xs-strong-13);color:var(--${P}-text-2)}`,
             `.${P}-read-text{margin:0;padding:10px 12px;border-radius:var(--dsw-radius-sm);background:var(--${P}-fill);font:var(--dsw-font-xs-13);line-height:1.55;color:var(--dsw-alias-label-primary);white-space:pre-wrap;overflow-wrap:anywhere}`,
             `.${P}-code{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Menlo,monospace);font-size:.95em}`,
+            // A reply in DSH's own Markdown: the same ground as the plain text; a wide code block or table scrolls inside it.
+            `.${P}-read-md{margin:0;padding:2px 12px;border-radius:var(--dsw-radius-sm);background:var(--${P}-fill);color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;min-width:0;max-width:100%;overflow-x:auto}`,
             `.${P}-read-nav{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}`,
             // The index and the log.
             `.${P}-status{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
@@ -1158,7 +1160,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-mark-text{flex:1 1 200px;min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}`,
             `.${P}-mark-strong{font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-primary)}`,
             `.${P}-mark-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}`,
-            `.${P}-dock{margin:0 0 6px}`,
+            // The line above the composer: as wide as DSH's own bars there (its goal bar), inside the composer's width.
+            `.${P}-mark.${P}-dock{width:calc(100% - 2 * var(--dsh-composer-side-clearance,0px) - 4 * var(--dsh-composer-dock-inset,0px));max-width:calc(var(--dsh-composer-card-max-width,100%) - 4 * var(--dsh-composer-dock-inset,0px));margin:0 auto 6px}`,
             // The turn a result opened at: a line down the left of its rows (DSH's rows that carry Recall's own mark), a
             // little apart from their text; a row DSH positions itself keeps the line inside its edge instead.
             `[data-recall-found="line"]{position:relative}`,
@@ -1227,8 +1230,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return Number.isFinite(r.turn) ? `turn ${r.turn}` : '';
         }
         /** A turn's state in a word or two, for its meta line ('' when it ended as it should): one word everywhere. */
-        const STATE_WORD = Object.freeze({ running: 'still running', stopped: 'stopped', failed: 'failed', 'cut-off': 'cut off by a restart', 'cut-short': 'cut short', blocked: 'blocked' });
+        const STATE_WORD = Object.freeze({ running: 'still running', ending: 'ending', stopped: 'stopped', failed: 'failed', 'cut-off': 'cut off by a restart', 'cut-short': 'cut short', blocked: 'blocked' });
         const stateOf = (r) => (typeof r?.state === 'string' ? r.state : r?.running === true ? 'running' : '');
+        /** A turn whose state is still to move: running, or ending (DSH said it stopped; its end is read a moment later). */
+        const moving = (r) => stateOf(r) === 'running' || stateOf(r) === 'ending';
         /** A stopped turn in a sentence, from DSH's cause ("user", "parent", "disposed", "hook: why"). */
         function stoppedSentence(why) {
             const text = String(why ?? '');
@@ -1243,6 +1248,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         function stateSentence(t) {
             switch (stateOf(t)) {
                 case 'running': return 'This turn is still running.';
+                case 'ending': return 'This turn is ending: DSH says it stopped, and how it ended shows here in a moment.';
                 case 'stopped': return stoppedSentence(t.why);
                 case 'failed': return t.why ? `This turn failed: ${sentence(cut(t.why, 300))}` : 'This turn failed.';
                 case 'cut-off': return 'This turn was cut off by a restart: DSH stopped before it finished.';
@@ -1365,7 +1371,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 ...(q.kind !== 'any' ? { kind: q.kind } : {}),
                 ...(q.folder ? { folder: q.folder } : {}),
                 ...(q.model ? { model: q.model } : {}),
-                ...(q.when !== 'any' ? { since: q.when } : {}),
+                ...(q.when === 'range' ? { ...(q.range?.since ? { since: q.range.since } : {}), ...(q.range?.until ? { until: q.range.until } : {}) } : q.when !== 'any' ? { since: q.when } : {}),
                 sort: q.sort,
                 limit: PAGE_SIZE,
                 offset,
@@ -1425,7 +1431,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     if (shown.length === 0 || store.get().loading) return false;
                     const mine = seq;
                     // Running rows first (they are the ones that move), then the rest, 100 to a call as the index takes them.
-                    const ids = [...shown.filter((r) => stateOf(r) === 'running'), ...shown.filter((r) => stateOf(r) !== 'running')].map((r) => `${r.file}.${r.turn}`);
+                    const ids = [...shown.filter(moving), ...shown.filter((r) => !moving(r))].map((r) => `${r.file}.${r.turn}`);
                     const states = new Map();
                     try {
                         for (let at = 0; at < ids.length; at += 100) {
@@ -1960,7 +1966,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const open = () => { void finder.loadFacets(); };
             return h('div', { className: `${P}-filters`, role: 'group', 'aria-label': 'Filters', 'data-recall-filters': '' },
                 kinds > 1 ? h(kit.Choice, { id: `${P}-kind`, label: 'Kind', value: q.kind, options: KIND_CHOICES, onChoose: (kind) => finder.choose({ kind }) }) : null,
-                h(FilterMenu, { name: 'when', label: 'Time', value: q.when, items: WHEN_CHOICES, onChoose: (when) => finder.choose({ when }) }),
+                h(FilterMenu, { name: 'when', label: 'Time', value: q.when, items: q.when === 'range' ? [{ id: 'range', label: rangeLabel(q.range) }, ...WHEN_CHOICES] : WHEN_CHOICES, onChoose: (when) => finder.choose(when === 'range' ? { when } : { when, range: undefined }) }),
                 h(FilterMenu, {
                     name: 'folder', label: 'Folder', value: q.folder ? `v:${q.folder}` : 'any', onOpen: open,
                     items: facetItems({ facets, key: 'folder', chosen: q.folder, any: 'Any folder', home }),
@@ -2011,6 +2017,43 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': `Read ${turnName(r)} here`, onClick: () => finder.read(id, `[data-recall-peek="${id}"]`), 'data-recall-peek': id }, 'Read here')) : null);
         }
 
+        /**
+         * A part of DSH's that throws on text it did not expect never takes the page down: what it was drawing shows
+         * as plain text instead (`fallback`). Without React's class parts (the tests' stand-in), it is the part itself.
+         */
+        const Guard = typeof React.Component === 'function'
+            ? class RecallGuard extends React.Component {
+                constructor(props) {
+                    super(props);
+                    this.state = { failed: false };
+                }
+
+                static getDerivedStateFromError() {
+                    return { failed: true };
+                }
+
+                componentDidCatch(error) {
+                    console?.warn?.('dsh-plugin-recall: DSH\'s Markdown could not draw this text; it is shown as plain text.', error);
+                }
+
+                render() {
+                    return this.state.failed ? this.props.fallback : this.props.children;
+                }
+            }
+            : ({ children }) => children;
+        /** The words DSH's Markdown puts on a code block's controls. */
+        const MARKDOWN_LABELS = Object.freeze({ code: { copyLabel: 'Copy', copiedLabel: 'Copied', toolbarLabels: { codeLabel: 'Code', wrapLabel: 'Wrap lines', unwrapLabel: 'Don\'t wrap lines' } }, footnotes: 'Footnotes' });
+        /**
+         * A reply or a note's section as DSH's chat draws it: DSH's own Markdown (bold, code, lists, links, headings),
+         * so it reads as it did in the chat. A DSH without that part, or text it cannot draw, shows the words plain.
+         */
+        function Prose({ text, empty }) {
+            const plainText = h('div', { className: `${P}-read-text` }, text || empty);
+            if (!text || !ui.MarkdownText) return plainText;
+            return h(Guard, { fallback: plainText },
+                h('div', { className: `${P}-read-md`, 'data-recall-markdown': '' }, h(ui.MarkdownText, { text, labels: MARKDOWN_LABELS })));
+        }
+
         /** One turn or note section in full, with the turns beside it, and the way into its session. */
         function ReadingView({ id, home, onBack, version, ways }) {
             const [state, setState] = React.useState({ loading: true, id });
@@ -2026,7 +2069,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             }, [id]);
             // A turn still running is read again when the index moves, and every few seconds, so its reply and its
             // end show here as they come (in place: the focus stays where it is).
-            const runningNow = stateOf(state.t) === 'running' && state.id === id;
+            const runningNow = moving(state.t) && state.id === id;
             React.useEffect(() => {
                 if (!runningNow) return undefined;
                 let alive = true;
@@ -2064,12 +2107,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 stateSentence(t) ? h('p', { className: `${P}-note`, 'data-recall-state': stateOf(t) }, stateSentence(t)) : null,
                 note ? [
                     h('h4', { key: 'l', className: `${P}-read-label` }, t.label ? `Section ${quoted(t.label, 80)}` : 'The note'),
-                    h('div', { key: 't', className: `${P}-read-text` }, tilded(t.reply, home) || 'This section has no text.'),
+                    h(Prose, { key: 't', text: tilded(t.reply, home), empty: 'This section has no text.' }),
                 ] : [
                     h('h4', { key: 'al', className: `${P}-read-label` }, 'Asked'),
                     h('div', { key: 'at', className: `${P}-read-text` }, tilded(t.prompt, home) || 'No words were kept for this request.'),
                     h('h4', { key: 'rl', className: `${P}-read-label` }, 'Reply'),
-                    h('div', { key: 'rt', className: `${P}-read-text` }, tilded(t.reply, home) || (stateOf(t) === 'running' ? 'No reply yet.' : 'This turn has no reply text.')),
+                    h(Prose, { key: 'rt', text: tilded(t.reply, home), empty: stateOf(t) === 'running' ? 'No reply yet.' : 'This turn has no reply text.' }),
                     t.tools ? h('h4', { key: 'tl', className: `${P}-read-label` }, 'Commands and files it used') : null,
                     t.tools ? h('div', { key: 'tt', className: `${P}-read-text ${P}-code` }, tilded(t.tools, home)) : null,
                 ],
@@ -2125,7 +2168,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             // stopped), and every few seconds while one of them still runs, they take their state as it is now.
             const version = data.index?.version;
             React.useEffect(() => { void finder.refreshStates(); }, [version]);
-            const anyRunning = state.results.some((r) => r.state === 'running' || (r.state === undefined && r.running === true));
+            const anyRunning = state.results.some((r) => moving(r));
             React.useEffect(() => {
                 if (!anyRunning) return undefined;
                 const timer = setInterval(() => {
@@ -2467,10 +2510,32 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 open ? children : null);
         }
 
-        /** The page's search for what an agent's call searched: its words and the filters the page has. */
+        /** A time range an agent gave (`since`, `until`: a date, today, yesterday, 7d…), in the Time filter's words. */
+        function rangeLabel({ since, until } = {}) {
+            const UNITS = { h: 'hour', d: 'day', w: 'week', m: 'month', y: 'year' };
+            const word = (t) => {
+                const text = String(t).trim();
+                const back = /^(\d{1,4})\s*(h|d|w|m|y)$/i.exec(text);
+                if (back) return { back: Number(back[1]) === 1 ? `the past ${UNITS[back[2].toLowerCase()]}` : `the past ${back[1]} ${UNITS[back[2].toLowerCase()]}s` };
+                if (/^(?:today|yesterday)$/i.test(text)) return { at: text.toLowerCase() };
+                return { at: cut(text, 24) };
+            };
+            const from = since ? word(since) : undefined;
+            const to = until ? word(until) : undefined;
+            const what = [from ? (from.back ?? `since ${from.at}`) : '', to ? `until ${to.back ?? to.at}` : ''].filter(Boolean).join(', ');
+            return what ? `${what[0].toUpperCase()}${what.slice(1)}` : 'Any time';
+        }
+        /**
+         * The page's search for what an agent's call searched: its words and filters, its time range included. A range
+         * the Time menu has no choice for (today, a date, an end) comes as a choice of its own, named in words.
+         */
         function cardQuery(view, args) {
-            const since = ['day', 'week', 'month', 'year'].includes(args.since) ? args.since : 'any';
-            return { text: view.query || args.query || '', kind: ['session', 'transcript', 'handoff'].includes(args.kind) ? args.kind : 'any', folder: args.folder || '', model: args.model || '', when: since };
+            const kind = ['session', 'transcript', 'handoff'].includes(args.kind) ? args.kind : 'any';
+            const base = { text: view.query || args.query || '', kind, folder: args.folder || '', model: args.model || '' };
+            const since = typeof args.since === 'string' && args.since.trim() ? args.since.trim() : '';
+            const until = typeof args.until === 'string' && args.until.trim() ? args.until.trim() : '';
+            if (!until && (since === '' || ['day', 'week', 'month', 'year'].includes(since))) return { ...base, when: since || 'any' };
+            return { ...base, when: 'range', range: { ...(since ? { since } : {}), ...(until ? { until } : {}) } };
         }
 
         /** The results a search gave the agent, each a press from its turn. */
@@ -2651,7 +2716,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, TONE, finder, jump, views,
-            folderList, folderSpec, specOf, homeless, cutPath, folderLabel, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle,
+            folderList, folderSpec, specOf, homeless, cutPath, folderLabel, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle, Prose, Guard, cardQuery, rangeLabel,
             openAt, openResult, endJump, land, landWithoutMark, applySettings,
             RecallPage, RecallMark, RecallDock, RecallIcon, RecallToolView, SettledToolView, PreparingToolView, SearchCard, ResultRow, ReadingView, IndexCard, HistoryCard, HeaderCard, ThreadState, Filters, FilterMenu, NoResults,
         };
