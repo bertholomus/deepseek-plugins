@@ -381,15 +381,16 @@ export class Store {
         return id;
     }
 
-    /** Take out a file's rows but these (by turn): a note that got shorter, or whose middle is no longer kept. */
-    keepTurns(fileId, turns) {
+    /** The ids of a file's rows but these (by turn): what a note that got shorter, or whose middle is no longer kept, takes out. */
+    rowsBut(fileId, turns) {
         const keep = new Set(turns);
-        for (const { id, turn } of this.sql('SELECT id, turn FROM docs WHERE file = ?').all(fileId)) {
-            if (keep.has(turn)) continue;
-            this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
-            this.sql('DELETE FROM docs WHERE id = ?').run(id);
-            this.taken += 1;
-        }
+        return this.sql('SELECT id, turn FROM docs WHERE file = ?').all(fileId).filter((r) => !keep.has(r.turn)).map((r) => r.id);
+    }
+
+    /** Take out one row and its words. */
+    dropRow(id) {
+        this.sql('DELETE FROM fts WHERE rowid = ?').run(id);
+        if (this.sql('DELETE FROM docs WHERE id = ?').run(id).changes > 0) this.taken += 1;
     }
 
     // ── Reading ───────────────────────────────────────────────────────

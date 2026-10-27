@@ -450,6 +450,61 @@ test('notes: every section of a note up to 4 MB is searched, past 400 too; past 
     e.close();
 });
 
+test('notes: a big note is read a slice at a time: its middle counted a part a slice, and the rows a shrunk note no longer has taken out a few hundred a slice', () => {
+    const home = tempDir('recall-note-slices');
+    const notes = join(home, 'notes');
+    mkdirSync(notes);
+    // A 9 MB log: its first 1 MB and last 3 MB are read, and the 5 MB between counted for its lines, 2 MB a slice.
+    const log = join(notes, 'run-log.md');
+    const lines = ['# Run log', '', '## Start', 'okapi early', ''];
+    let bytes = lines.join('\n').length;
+    while (bytes < 9 * 1048576) {
+        const line = `step ${lines.length} of the run went fine`;
+        lines.push(line);
+        bytes += line.length + 1;
+    }
+    const endLine = lines.length + 2;
+    lines.push('', '## Newest', 'tapir at the end', '');
+    writeFileSync(log, lines.join('\n'));
+    // A clock that moves a millisecond each time it is read: a slice of 2 ms does one piece of work.
+    let clock = 0;
+    const { e, drain } = engineAt(home, { now: () => (clock += 1) });
+    e.handle('configure', { sources: [{ kind: 'handoff', root: notes, own: false }] });
+    let started = -1;
+    let rowsIn = -1;
+    for (let i = 0; i < 10_000 && rowsIn < 0; i += 1) {
+        const r = e.work(2);
+        const f = e.store.fileByPath(log);
+        if (f && started < 0) started = i;
+        if (f && e.store.rowCount(f.id) > 0) rowsIn = i;
+        if (!r.more) break;
+    }
+    assert.ok(started >= 0 && rowsIn - started >= 3, `its middle counted across slices before its rows went in (${rowsIn - started} slices)`);
+    drain();
+    const found = e.search({ text: 'tapir' });
+    assert.deepEqual([found.total, found.results[0]?.label, found.results[0]?.line], [1, 'Newest', endLine], 'its newest section at its line in the file');
+    // A note of 20,000 sections rewritten to two: the rows it no longer has go out 200 a slice.
+    const many = join(notes, 'many.md');
+    writeFileSync(many, Array.from({ length: 20000 }, (_, i) => `## S${i}\nword${i}\n`).join(''));
+    e.handle('rescan');
+    drain();
+    const id = e.store.fileByPath(many).id;
+    assert.equal(e.store.rowCount(id), 20000);
+    writeFileSync(many, '## S0\nword0\n## S1\nword1\n');
+    e.handle('rescan');
+    let slices = 0;
+    while (e.store.rowCount(id) > 2 && slices < 10_000) {
+        e.work(2);
+        slices += 1;
+    }
+    assert.ok(slices >= 50, `rows taken out across slices (${slices})`);
+    assert.equal(e.store.rowCount(id), 2);
+    drain();
+    assert.equal(e.search({ text: 'word19999' }).total, 0);
+    assert.equal(e.search({ text: 'word1' }).total, 1);
+    e.close();
+});
+
 test('index: an index of the version before is brought up in place: its notes are read again (it kept 400 sections), its sessions are not', () => {
     const home = tempDir('recall-migrate');
     writeCorpus(join(home, 'sessions'), { sessions: 3, seed: 11 });

@@ -40,13 +40,19 @@ const PART_BYTES = 2 << 20;
 /** Past this many bytes of a big note's middle, its lines are not counted (its last part's lines are not given). */
 const COUNT_LINES_BYTES = 512 << 20;
 
+const breaksIn = (buf) => {
+    let n = 0;
+    for (let at = buf.indexOf(10); at >= 0; at = buf.indexOf(10, at + 1)) n += 1;
+    return n;
+};
+
 /**
- * A note's text: the whole file up to `NOTE_LIMITS.fileBytes`. Past that, its first `headBytes` and the rest of
- * the cap from its end (`tail`), each cut at a line break, with the line the last part starts on (its middle's
- * line breaks counted a part at a time, never held whole).
- * @returns {{ text: string, tail?: { text: string, line: number } }}
+ * A note's ends: the whole file up to `NOTE_LIMITS.fileBytes`. Past that, its first `headBytes` and the rest of
+ * the cap from its end (`tail`), each cut at a line break, and its middle (`middle`), whose line breaks
+ * `countMiddle` counts for the line the last part starts on (none past `COUNT_LINES_BYTES`: its line is 0).
+ * @returns {{ text: string, tail?: { text: string, line: number }, middle?: { from: number, to: number, breaks: number } }}
  */
-export function noteText(path, size) {
+export function noteEnds(path, size) {
     const fd = openSync(path, 'r');
     try {
         const read = (from, bytes) => {
@@ -63,23 +69,46 @@ export function noteText(path, size) {
         const tailCut = tail.indexOf(10);
         const tailStart = tailFrom + (tailCut >= 0 ? tailCut + 1 : 0);
         if (tailCut >= 0) tail = tail.subarray(tailCut + 1);
-        // Line breaks before the last part: the first part's, then the middle's, a part at a time.
-        let breaks = 0;
-        for (let at = head.indexOf(10); at >= 0; at = head.indexOf(10, at + 1)) breaks += 1;
-        let line = 0;
-        if (tailStart - head.length <= COUNT_LINES_BYTES) {
-            for (let from = head.length; from < tailStart;) {
-                const part = read(from, Math.min(PART_BYTES, tailStart - from));
-                if (part.length === 0) break;
-                for (let at = part.indexOf(10); at >= 0; at = part.indexOf(10, at + 1)) breaks += 1;
-                from += part.length;
-            }
-            line = breaks + 1;
-        }
-        return { text: head.toString('utf8'), tail: { text: tail.toString('utf8'), line } };
+        const out = { text: head.toString('utf8'), tail: { text: tail.toString('utf8'), line: 0 } };
+        if (tailStart - head.length <= COUNT_LINES_BYTES) out.middle = { from: head.length, to: tailStart, breaks: breaksIn(head) };
+        return out;
     } finally {
         closeSync(fd);
     }
+}
+
+/**
+ * Count the line breaks of a big note's middle a part (`PART_BYTES`) at a time, never holding it whole, until
+ * `until`: so a note of hundreds of megabytes never holds a search up.
+ * @returns {boolean} whether all of it is counted (then `middle.line` is the line its last part starts on).
+ */
+export function countMiddle(path, middle, until = Infinity, now = Date.now) {
+    if (middle.from < middle.to) {
+        const fd = openSync(path, 'r');
+        try {
+            while (middle.from < middle.to) {
+                const buf = Buffer.alloc(Math.min(PART_BYTES, middle.to - middle.from));
+                const got = readSync(fd, buf, 0, buf.length, middle.from);
+                // Shorter than it was: the next look reads the changed note again.
+                if (got === 0) break;
+                middle.breaks += breaksIn(got < buf.length ? buf.subarray(0, got) : buf);
+                middle.from += got;
+                if (middle.from < middle.to && now() >= until) return false;
+            }
+        } finally {
+            closeSync(fd);
+        }
+    }
+    middle.from = middle.to;
+    middle.line = middle.breaks + 1;
+    return true;
+}
+
+/** A note's text, as `noteEnds` gives it, with its middle counted in one go. */
+export function noteText(path, size) {
+    const { middle, ...ends } = noteEnds(path, size);
+    if (middle && countMiddle(path, middle)) ends.tail.line = middle.line;
+    return ends;
 }
 
 const errorWords = (error) => {
@@ -499,14 +528,23 @@ export class Indexer {
     }
 
     /**
-     * A note: read whole (its two ends past 4 MB, see `noteText`), and its rows put a slice at a time, so a note of
-     * thousands of sections never holds a search up. Its place is saved once every row is in: a restart reads it
-     * again whole.
+     * A note: read whole (its two ends past 4 MB, see `noteEnds`), a slice at a time: a big note's middle counted
+     * for its lines, its rows put, and the rows it no longer has taken out, so a note of hundreds of megabytes or
+     * thousands of sections never holds a search up. Its place is saved once all of that is done: a restart reads
+     * it again whole.
      */
     readHandoff(job, until) {
         if (!job.note) {
-            const st = statSync(job.path);
-            const { text, tail } = noteText(job.path, st.size);
+            if (!job.ends) {
+                const st = statSync(job.path);
+                job.ends = { st, ...noteEnds(job.path, st.size) };
+            }
+            const { st, text, tail, middle } = job.ends;
+            if (middle) {
+                if (!countMiddle(job.path, middle, until, this.now)) return true;
+                tail.line = middle.line;
+            }
+            job.ends = undefined;
             job.note = { ...readNote(text, { name: basename(job.path), mtime: st.mtimeMs, tail }), st, at: 0, cutBytes: tail ? st.size : 0 };
         }
         const n = job.note;
@@ -518,11 +556,15 @@ export class Indexer {
             this.sectionsPut += 1;
             if (n.at % 100 === 0 && n.at < n.rows.length && this.now() >= until) return true;
         }
+        // Rows no longer in it: past its end when it got shorter, and those of the middle when only its ends are kept.
+        n.drop ??= this.store.rowsBut(job.id, n.rows.map((r) => r.turn));
+        while (n.drop.length > 0) {
+            this.store.dropRow(n.drop.pop());
+            if (n.drop.length % 200 === 0 && n.drop.length > 0 && this.now() >= until) return true;
+        }
         const st = n.st;
         const meta = { session: '', title: n.title, folder: dirname(job.path), model: '', created: Math.round(st.birthtimeMs || st.ctimeMs), updated: Math.round(st.mtimeMs), turns: n.rows.length, subagent: false };
         this.store.saveFile(job.id, { size: st.size, mtime: st.mtimeMs, ino: st.ino, offset: st.size, state: undefined, ...meta, skip: '', error: cutWords({ bytes: n.cutBytes, rows: n.cut?.rows }) });
-        // Rows no longer in it: past its end when it got shorter, and those of the middle when only its ends are kept.
-        this.store.keepTurns(job.id, n.rows.map((r) => r.turn));
         return false;
     }
 
