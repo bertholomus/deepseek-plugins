@@ -4,7 +4,7 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95 PASS 2: one more pass for every plugin but Reasoning Pill (branches goal95/*)
 
-Updated: 2026-10-26 8:35 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 11:39 PM PDT by A (gmail), thread "Goal 9.5 builder"
 Goal: `briefs/GOAL-95-PASS2.md` (Albert 6:35 PM PDT via MiniMe: "Promote reasoning pill - Give all other plugins one more pass"). Reasoning Pill is done (MiniMe merged d24800a into claude/split-plugins as 909ac14). The other 19: one builder each from the RESULT commit (fix the top remaining finding plus the rest of the latest scorecard), one hand-over, then ONE fresh judge; no second fix round. Then `review/GOAL95-PASS2.md` (score before, score after, commit, branch, verdict, top remaining finding), commit, push, stop. Nothing deploys to live.
 
 ## Doing now (PASS 2)
@@ -12,6 +12,8 @@ Goal: `briefs/GOAL-95-PASS2.md` (Albert 6:35 PM PDT via MiniMe: "Promote reasoni
 - 6:50 PM PDT: all 19 pass-2 builders running (ids in `~/Projects/goal95/agents.txt`, "pass2-builder" lines; hand over by 9:30 PM PDT). Judges start per hand-over with `~/Projects/goal95/bin/pass2-assign.py <slug> <sha>` and the short prompt in PASS2-PLAN.md ("How to start a pass-2 judge").
 
 - 8:35 PM PDT: judged so far (rows in `review/SCOREBOARD.md` under "GOAL95 PASS 2", and in `~/Projects/goal95/pass2-results.tsv`): dsh-site r3 9.0 (48739d4, scorecard local), Hermes Bridge r2 9.0 (a9cbff7), Discord r3 8.5 (e2d04a4, scorecard local), all NOT YET. Focus handed over 8478288 at 8:30 PM; its judge r2 runs to 10:06 PM. The other 15 builders hand over by 9:30 PM PDT.
+
+- 11:39 PM PDT: the account's usage limit stopped 14 pass-2 agents at about 9:01 PM (builders Agent Terminals, Fleet, Proof, Calendar, Recall; judges DNA Studio, Wallpaper, Coordinator, Canon, Categories, Session Bridge, Notifications, Session Watch, Autopilot). It reset at 11:30 PM; all 14 are resumed (ids in `~/Projects/goal95/agents.txt`): judges finish 1:00-1:15 AM, builders hand over by 12:30 AM. Judged so far: dsh-site 9.0, Hermes Bridge 9.0, Discord 8.5, Focus 9.3 (all NOT YET). Decisions handed over 2ccbfb3; its judge r6 runs to 1:12 AM. If the limit stops agents again: resume each by its id once it resets (`get_usage` shows when).
 
 ## Next steps (PASS 2, in order)
 1. As each builder hands over (`COMMIT <sha>`): check the push, then start its judge from `~/Projects/goal95/briefs/judge-prompt-template.md` with the round and instance in PASS2-PLAN.md (Discord and dsh-site: no instance, throwaway homes, scorecards stay local).
