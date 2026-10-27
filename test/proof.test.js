@@ -1227,3 +1227,27 @@ test('judge: a fix is held against the failures that name it; a deploy and its h
     // Alone, a deploy after which the service answers 502 is still not up.
     assert.deepEqual(claimsIn('Deployed to production.').map((c) => judge(c, [deploy, down], { prompt: 'Deploy to production.' }).verdict), ['contradicted']);
 });
+
+test('judge: look-only answers that say what code did, what a plan does, or what a status read printed claim nothing', () => {
+    // A 'none' verdict drops the claim (it claims nothing); the rest are what a card would show.
+    const verdicts = (prompt, text, items) => claimsIn(text).map((c) => judge(c, items, { prompt }).verdict).filter((v) => v !== 'none');
+    const look = [read('src/headers.py')];
+    // Code as the subject: what it did or does; "datetime.now()" in code is not the word "now".
+    assert.deepEqual(verdicts('Why does the header check fail now and then? Just look, do not change anything.', '`parse_header` built its pattern with `datetime.now()` before the loop, so a header stamped a second later is missed.', look), []);
+    // A run of the tests asked for is a look; an earlier commit that fixed it is history, not this turn's claim.
+    assert.deepEqual(verdicts('Why is test_import_rows flaky? Run the import tests once so I can see where they stand.', 'Already fixed — `a1c9e07` ("tests: pin the clock in import tests") switches the test to a pinned clock fixture.', [bash('pytest tests/import -q', '9 passed in 0.52s')]), []);
+    // A plan's items in a review: what the plan does to each resource.
+    const plan = bash('terraform plan -no-color', 'Plan: 1 to add, 1 to change, 1 to destroy.');
+    assert.deepEqual(verdicts('What would this plan do to the logs bucket?', '1. `aws_s3_bucket.logs` — replaced along with the rename\n2. `aws_cloudfront_distribution.web` — updated in place to point at the new bucket', [plan]), []);
+    // "Left sorted" describes the data; "can still reach" is a possibility.
+    assert.deepEqual(claimsIn('The input slice is left sorted afterwards.'), []);
+    assert.deepEqual(claimsIn('A request that already passed the check can still reach the handler after the drain.'), []);
+    assert.equal(claimsIn('Sorted it out: the cron runs at 02:00 now.')[0]?.kind, 'fixed');
+    assert.equal(claimsIn('I can confirm all 12 tests pass.')[0]?.kind, 'passed');
+    // A migration status read looks at where it runs; "before I merge" is the person's plan, not a request.
+    const status = bash('alembic current', 'a1b2c3d4e5f6 (head)');
+    assert.deepEqual(verdicts('Are the migrations applied on staging? I want to know before I merge the schema PR.', 'Yes: every migration in this checkout is applied on staging.', [status]), []);
+    // Controls: a request for work, or a turn that ran work, is judged as before.
+    assert.equal(verdicts('Fix the header check and tell me why it failed.', 'Fixed: `parse_header` built its regex once, before the loop.', look).length, 1);
+    assert.deepEqual(verdicts('Run the fine-tune and tell me when it is done.', 'The fine-tune is done.', [bash('python train.py', 'CUDA out of memory\n[exit code: 1]')]), ['contradicted']);
+});

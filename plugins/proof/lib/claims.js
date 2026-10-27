@@ -203,7 +203,7 @@ function clausesOf(sentence) {
 /** A "when …" part, up to a comma or the clause's end: when something happens, not what this turn did ("423 when the order is shipped"). */
 const WHEN_PART = /\bwhen\b[^,;]*(?:,\s*|$)/gi;
 /** A plan, a condition or a hope: success not yet had. */
-const NOT_YET = /\b(if|whether|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
+const NOT_YET = /\b(if|whether|once|until|unless|whenever|should|shall|will|would|could|might|may|must|can(?!\s+(?:now|again|confirm|verify|see|report)\b)|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
 /** A sentence that says the opposite of success, or reports a failure. */
 const NEGATED = /\b(not|n't|never|neither|nor|nothing|yet|without (?:running|testing|checking|verifying)|yet to|still (?:fail|failing|broken|red|erroring|crash)|fail(s|ed|ing|ure|ures)?|broken|break(s|ing)?|red\b|error(s|ed)?\b|regress(ed|ion)?|flak(y|iness)|skipped|cannot|unable|couldn'?t|didn'?t|doesn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|haven'?t|hasn'?t|won'?t|\w+n't|instead of|rejected|denied|timed out|stalled|crashloop\w*|pending|in progress|queued)\b/i;
 /** "No failures", "zero errors", "nothing left to fix": words that back a claim up, not negations. */
@@ -411,7 +411,8 @@ const HEALTH = [
 const HEALTH_PATH = /(?:^|[\s(⟨])\/(?:healthz?|readyz?|livez|_health|health-?check)\b/i;
 
 const FIXED = [
-    /\b(fixed|resolved(?!\s+(?:to|inside|into|as|against|relative|via|from|correctly\s+to)\b)|repaired|patched|corrected|addressed|sorted|stabili[sz]ed|guarded)\b/i,
+    // "Sorted" fixes only as "sorted it out", "all sorted" or "got it sorted": "the slice is left sorted" describes the data.
+    /\b(fixed|resolved(?!\s+(?:to|inside|into|as|against|relative|via|from|correctly\s+to)\b)|repaired|patched|corrected|addressed|stabili[sz]ed|guarded)\b|\bsorted\s+(?:(?:it|that|this|them|everything|things)\s+)?out\b|\b(?:all|got\s+(?:it|that|this|them|everything))\s+sorted\b/i,
     /\b(now|it|this|that|everything)\s+works\b/i,
     /\bworks\s+(now|again|correctly|as expected|fine)\b/i,
     /\b(is|are)\s+(now\s+)?working( again| correctly| as expected)?\b/i,

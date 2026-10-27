@@ -2427,14 +2427,14 @@ const WRITE_UP_ASK = /\bwrite\s+(?:it|that|this|these|them|those|everything)\s+u
 /** A clause led by this turn's own work ("Deployed it again", "I updated", "Rolled 2.5.0 out", "Just fixed …"). */
 const OWN_WORK = new RegExp(String.raw`^(?:i|we)\b|\b(?:i'?ve|i\s+have|we'?ve|we\s+have|i|we)\s+(?:now\s+|also\s+|just\s+|then\s+|already\s+)?\w+(?:ed|t|wn|en)\b|^(?:(?:just|also|then|now|and|so)\s+)?(?:edited|modified|tweaked|adjusted|amended|altered|reworked|reverted|restored|added|created|updated|wrote|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|set\s+up|configured|installed|migrated|converted|extracted|merged|rewrote|built|rebuilt|generated|registered|wired|hooked\s+up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|ported|switched|swapped|applied|committed|regenerated|backfilled|raised|lowered|deployed|redeployed|released|shipped|rolled|promoted|published|pushed|tagged|provisioned|uploaded|fixed|resolved|repaired|patched|corrected|addressed|ran|re-?ran|cherry-?picked|rebased|reran|retried|restarted)\b`, 'i');
 /** Words that say something changed just now: "is now configured", "returns 0 now", "after my edit". */
-const CHANGED_NOW = /\bnow\b|\bjust\b|\bno longer\b|\banymore\b|\bany more\b|\bafter\s+(?:my|this|the|that)\s+(?:change|edit|fix|patch|commit|update)\b|\bsince\s+(?:my|this)\s+(?:change|edit|fix)\b/i;
+const CHANGED_NOW = /(?<![.\w])now\b(?!\s*\()|\bjust\b|\bno longer\b|\banymore\b|\bany more\b|\bafter\s+(?:my|this|the|that)\s+(?:change|edit|fix|patch|commit|update)\b|\bsince\s+(?:my|this)\s+(?:change|edit|fix)\b/i;
 /** How a thing is, in the present or as history: "is configured in", "are applied there", "is deployed on", "was added in". */
 const STATIVE = /\b(?:is|are|was|were|has\s+been|have\s+been|'s|’s|stays?|remains?)\s+(?:(?:already|still|also|currently|only|all|both|each|indeed|properly|correctly|fully|automatically|actually)\s+)*(?:[a-z]+ed|[a-z]+en|set|built|run|kept|held|made|done|in\s+place|in(?=\s+(?:the\s+)?[\w.\/⟨-]+)|on\s+(?=[\w.\/⟨-]))\b/i;
 /** A fix named as history: "is already fixed upstream in `b2c3d4e`", "was fixed in v2.3.1", "is fixed on main". */
 const FIX_HISTORY = /\balready\b|\bupstream\b|\b(?:in|by|on|since)\s+(?:(?:commit|release|version|pr|tag)\s+)?(?:⟨\s*)?(?:v?\d+\.\d+(?:\.\d+)?|(?=[0-9a-f]{0,39}\d)(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}|#\d+|main|master|trunk|the\s+(?:latest|next|new|current|\d[\w.]*)\b)/i;
 /** A look at where a thing runs: its deploy config read, or a status command of the place it runs. */
 const DEPLOY_FILE = /(?:^|[\s\/])(?:fly\.toml|Dockerfile|Containerfile|docker-compose[\w.-]*\.ya?ml|compose\.ya?ml|vercel\.json|netlify\.toml|render\.ya?ml|app\.ya?ml|Procfile|serverless\.ya?ml|[\w.-]+\.tf|[\w.-]+\.service|values[\w.-]*\.ya?ml|Chart\.ya?ml|kustomization\.ya?ml|[\w.-]*(?:deploy|deployment|release|k8s|manifest|workflow|pipeline|ci|cd)[\w.-]*\.(?:ya?ml|json|toml))$|(?:^|[\s\/])(?:k8s|kube|kubernetes|deploy|deployments?|manifests|helm|charts|infra|ops|\.github|workflows)\//i;
-const DEPLOY_LOOK_CMD = /\b(?:kubectl\s+(?:get|describe|rollout\s+(?:status|history))|helm\s+(?:status|list|ls|history|get)|fly(?:ctl)?\s+(?:status|releases|info|apps\s+list|config\s+show|machines?\s+list)|gh\s+(?:run|release|api)\s|docker\s+(?:ps|inspect|compose\s+ps|images)|systemctl\s+(?:status|is-active|show|cat)|vercel\s+(?:ls|list|inspect)|heroku\s+(?:ps|releases|apps:info)|aws\s+\w+\s+describe|gcloud\s+\S+\s+(?:services\s+)?describe|terraform\s+(?:show|output|state\s+(?:list|show))|curl\b|wget\b|nomad\s+(?:status|job\s+status)|argocd\s+app\s+get|cat\s+\S*(?:fly\.toml|Dockerfile|\.ya?ml|\.service|\.tf))\b/i;
+const DEPLOY_LOOK_CMD = /\b(?:prisma\s+migrate\s+status|alembic\s+(?:current|history|heads)|(?:rails|rake)\s+db:migrate:status|flyway\s+info|knex\s+migrate:(?:status|list)|showmigrations|dbmate\s+status|goose\b[^|;&]*\bstatus|sqitch\s+status|atlas\s+migrate\s+status|kubectl\s+(?:get|describe|rollout\s+(?:status|history))|helm\s+(?:status|list|ls|history|get)|fly(?:ctl)?\s+(?:status|releases|info|apps\s+list|config\s+show|machines?\s+list)|gh\s+(?:run|release|api)\s|docker\s+(?:ps|inspect|compose\s+ps|images)|systemctl\s+(?:status|is-active|show|cat)|vercel\s+(?:ls|list|inspect)|heroku\s+(?:ps|releases|apps:info)|aws\s+\w+\s+describe|gcloud\s+\S+\s+(?:services\s+)?describe|terraform\s+(?:show|output|state\s+(?:list|show))|curl\b|wget\b|nomad\s+(?:status|job\s+status)|argocd\s+app\s+get|cat\s+\S*(?:fly\.toml|Dockerfile|\.ya?ml|\.service|\.tf))\b/i;
 const deployLook = (i) => (i.kind === 'read' && DEPLOY_FILE.test(String(i.text ?? '').replace(/^\S+\s+/, ''))) || DEPLOY_LOOK_CMD.test(i.cmd ?? '') || i.kind === 'ci' || i.kind === 'probe';
 
 /**
@@ -2449,18 +2449,47 @@ export function described(claim, items, prompt = '') {
     if (!claim || claim.kind === 'passed' || (claim.kind === 'deployed' && (claim.target === 'health' || claim.ship))) return false;
     const list = Array.isArray(items) ? items.filter(Boolean) : [];
     const ask = typeof prompt === 'string' ? prompt.trim() : '';
-    if (list.length === 0 || !LOOK_ASK.test(ask) || list.some(CHANGES) || asksForWork(ask) || BUILD_ASK.test(ask) || WRITE_UP_ASK.test(ask) || ABOUT_OWN_WORK.test(ask)) return false;
+    if (list.length === 0 || !LOOK_ASK.test(ask) || list.some(CHANGES) || BUILD_ASK.test(ask) || WRITE_UP_ASK.test(ask) || ABOUT_OWN_WORK.test(ask)) return false;
+    // A run of the tests or a status read asked for is a look ("run the export tests once so I can see"); a run that does
+    // work (a training run, an import, a backfill) is work.
+    // "I want to know before I merge the PR": what the person will do, not what they ask for.
+    const asked = ask.replace(LOOK_RUN, ' ').replace(/\bi\s+(?:want|need|'d\s+like|would\s+like)\s+to\s+(?:know|see|understand|check|find\s+out|learn|confirm|make\s+sure)\b[^.!?\n]*/gi, ' ')
+        .replace(/\b(?:before|after|when|once|until|while|so\s+that|so)\s+(?:i|we)\s+[^.!?\n]*/gi, ' ');
+    if (asksForWork(asked)) return false;
     // A change asked for outside a question ("Document it in the README."), not "does anything document how pct works?".
     // "Explain how you would fix it" asks how, not for the fix.
-    const told = ask.split(/(?<=[.!?\n])\s+/).filter((x) => !/\?\s*$/.test(x.trim())).join(' ')
+    const told = asked.split(/(?<=[.!?\n])\s+/).filter((x) => !/\?\s*$/.test(x.trim())).join(' ')
         .replace(/\b(?:how|what|where|why|which|whether)\s+(?:you|we|i|one|they|it)\s+(?:would|could|should|might|can|will|'d)\s+(?:\w+\s+){0,2}?\w+/gi, ' ');
-    if (asksForChange(told)) return false;
-    const words = String(claim.part ?? claim.text ?? '').replace(/[`*_]/g, '').trim();
-    if (words === '' || OWN_WORK.test(words) || CHANGED_NOW.test(words) || !STATIVE.test(words)) return false;
+    // A change or a ship asked for, by its verb in a request's place: "Fix the retries", "can you deploy it", not "the export
+    // tests" or "before I merge the PR".
+    if (CHANGE_REQUEST.test(told.replace(/\b(?:do\s+not|don'?t|never|without|no\s+need\s+to)\s+(?:[\w-]+\s+){0,3}?[\w-]+[^.!?\n]*/gi, ' '))) return false;
+    const words = String(claim.part ?? claim.text ?? '').replace(/[`*]/g, '').trim();
+    if (words === '' || CHANGED_NOW.test(words)) return false;
+    // "`test_export_csv` built its header before the call", "`aws_s3_bucket_versioning.assets` — replaced along with it":
+    // code is the subject, so the clause says what the code does or did, or what a plan does to it.
+    const sentence = String(claim.text ?? '').replace(/[`*]/g, '').trim();
+    if ((claim.kind === 'done' || claim.kind === 'fixed') && (CODE_LED.test(words) || (FRAGMENT.test(words) && CODE_ITEM.test(sentence)))) return true;
+    if (OWN_WORK.test(words)) return false;
+    // "Already fixed — `b72e0d4` switches the test to a frozen clock": a fix named as history.
+    if (claim.kind === 'fixed' && FIX_HISTORY.test(words) && !/^(?:i|we)\b/i.test(words)) return true;
+    if (!STATIVE.test(words)) return false;
     if (claim.kind === 'deployed') return list.some(deployLook);
     if (claim.kind === 'fixed') return FIX_HISTORY.test(words);
     return true;
 }
+/** A run of tests, checks or a status read, asked for: "run the export tests once", "run `node --test`", "check the status". */
+const LOOK_RUN = /\b(?:run|rerun|re-run|execute|try)\s+(?:the\s+|a\s+|all\s+|its\s+|those\s+|these\s+|my\s+|our\s+|them\s+)?(?:`[^`]{1,80}`\s*|[\w./-]+\s+){0,3}?(?:tests?|specs?|suites?|checks?|lint(?:er|ers)?|type\s*checks?|tsc|pytest|jest|vitest|status|`[^`]*\b(?:test|tests|spec|lint|status|check)\b[^`]*`)(?:\s+(?:once|again|now))?\b|\brun\s+`[^`]*\b(?:test|tests|spec|lint|status|check|log|diff|show)\b[^`]*`/gi;
+/** A change or a ship asked for, its verb leading a request ("Fix …", "and then deploy …", "can you push …", "I want you to add …"). */
+const REQUEST_VERBS = String.raw`(?:add|fix|make|change|update|create|write|rename|remove|delete|move|refactor|implement|migrate|convert|rewrite|bump|pin|upgrade|downgrade|wire|register|expose|document|port|split|extract|replace|clean\s+up|set\s+up|configure|enable|disable|introduce|backfill|patch|edit|consolidate|dedupe|tidy|merge|inline|simplify|restructure|rework|tweak|adjust|harden|generate|regenerate|scaffold|stub|vendor|provision|apply|spin\s+up|deploy|redeploy|push|publish|release|ship|commit|tag|roll\s+(?:it\s+|them\s+)?(?:out|back)|rollback|promote|rebase|cherry-?pick|backport|revert|restart|reboot|install|uninstall)`;
+const CHANGE_REQUEST = new RegExp(String.raw`(?:^|[.!;:\n—–]\s*|\b(?:and|then|also|please|now|first|just|next)\s+)(?:please\s+|go\s+ahead\s+and\s+)?${REQUEST_VERBS}\b|\b(?:can|could|would|will)\s+you\s+(?:please\s+|also\s+|just\s+|quickly\s+|go\s+ahead\s+and\s+)*${REQUEST_VERBS}\b|\b(?:i\s+want\s+you|i'?d\s+like\s+you|i\s+need\s+you)\s+to\s+${REQUEST_VERBS}\b|\blet'?s\s+${REQUEST_VERBS}\b`, 'i');
+/** A ship or a repository change asked for: "deploy it", "push the branch", "tag the release". */
+const SHIP_ASK = /\b(?:deploy|redeploy|push|publish|release|ship|commit|tag|roll\s+(?:it\s+|them\s+)?(?:out|back)|rollback|promote|merge|rebase|cherry-?pick|backport|revert|restart|reboot|install|uninstall|upgrade|downgrade)\b/i;
+/** A clause led by code: an identifier with a dot, an underscore, "::", a slash or a call, then its verb. */
+const CODE_LED = /^(?:the\s+)?(?:[A-Za-z_$][\w$]*(?:(?:\.|::|->|#|\/)[A-Za-z_$][\w$]*)+(?:\(\))?|[A-Za-z$]*_[\w$]+(?:\(\))?|[A-Za-z_$][\w$]*\(\))\s+(?:also\s+|then\s+|first\s+|still\s+|only\s+|never\s+|always\s+)?[a-z]+(?:ed|es|s|t)\b/;
+/** A clause with no subject, led by a past participle: "replaced along with it", "updated in place to point at …". */
+const FRAGMENT = /^(?:also\s+|then\s+|both\s+)?[a-z]+(?:ed|en|t)\b/;
+/** A list item that names code before a dash: "aws_s3_bucket_versioning.assets — replaced along with it". */
+const CODE_ITEM = /^(?:\d+[.)]\s+|[-*•]\s+)?(?:[A-Za-z_$][\w$]*(?:(?:\.|::|->|#|\/)[\w$-]+)+|[A-Za-z$]*_[\w$]+|[\w.-]+\.[a-z]{1,5})(?:\s*\([^)]*\))?\s*[—–:-]\s/;
 
 /**
  * Whether `items` (this turn's evidence, in order) back `claim`:
