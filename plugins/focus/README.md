@@ -150,8 +150,10 @@ in one row 36 px wide, where two buttons do not fit and both would be cut. There
 to a plugin's footer button drawn before it (Wallpaper's, for one), so that button stays whole; the
 panel then opens with ⇧⌥⌘F (Ctrl+Shift+Alt+F), or from Focus's button once the sidebar is unfolded.
 With no such button before it, or when that one goes (Wallpaper switched off), Focus's button is in
-the rail as usual. The timer, the toast and the chime work the same either way. A rail footer that
-holds more than one plugin button is an open question for DSH itself.
+the rail as usual. The timer, the toast and the chime work the same either way; the done mark lives on
+Focus's button, so while Focus has given its seat the end is said by its toast and chime, and the mark
+shows once the sidebar is unfolded. A rail footer that holds more than one plugin button is an open
+question for DSH itself.
 
 ## API
 
@@ -236,7 +238,7 @@ changes nothing, its settings included.
   ⇧⌥⌘F (Ctrl+Shift+Alt+F) opens the panel anywhere.
 - The done clock shows the next step; the custom field has its name beside it; Undo after a Reset;
   what the panel's own buttons cause is said in the panel, never in a toast over the dialog; the
-  window's problem words name no path; `resume` logs its end.
+  window's problem words name no path and say which folder in words; `resume` logs its end.
 
 ## What changed in 0.2.0
 
