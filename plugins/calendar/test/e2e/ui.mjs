@@ -634,6 +634,7 @@ async function contrastSweep(page, scope) {
         const say = (el) => `${el.tagName.toLowerCase()}${[...el.classList].map((c) => `.${c}`).join('')}`;
         const ratios = [];
         const onGlass = [];
+        const side = [];
         const fails = [];
         for (const root of document.querySelectorAll(scope)) {
             for (const el of [root, ...root.querySelectorAll('*')]) {
@@ -665,13 +666,14 @@ async function contrastSweep(page, scope) {
                 const size = parseFloat(css.fontSize);
                 const need = size >= 24 || (Number(css.fontWeight) >= 700 && size >= 18.66) ? 3 : 4.5;
                 ratios.push(r);
+                if (el.closest('[data-calendar-side]')) side.push(r);
                 // Text on glass that reaches the wall (or DSH's own ground under it): the hard case.
                 if (!opaque && grounds.length) onGlass.push(r);
                 if (r < need) fails.push({ what: say(el), text: el.textContent.trim().slice(0, 24), ratio: Math.round(r * 100) / 100, need, color: css.color, ground: ground.slice(0, 3).map(Math.round).join(',') });
             }
         }
         const low = (list) => Math.round(Math.min(...list) * 100) / 100;
-        return { count: ratios.length, min: low(ratios), glass: onGlass.length, glassMin: low(onGlass), wall: Boolean(wall && wall[3] >= 1), failCount: fails.length, fails: [...new Map(fails.map((f) => [`${f.what} ${f.ratio}`, f])).values()].slice(0, 12) };
+        return { count: ratios.length, min: low(ratios), glass: onGlass.length, glassMin: low(onGlass), side: side.length, sideMin: low(side), wall: Boolean(wall && wall[3] >= 1), failCount: fails.length, fails: [...new Map(fails.map((f) => [`${f.what} ${f.ratio}`, f])).values()].slice(0, 12) };
     }, scope);
 }
 
@@ -1615,7 +1617,15 @@ try {
         }
         return calls;
     };
+    // The side column, shown (beside DSH's sidebar at 1280 px it starts folded, and a reload folds it again).
+    const showSide = async () => {
+        const side = page.locator('[data-calendar-side]');
+        if (await side.isVisible()) return;
+        await page.locator('[data-calendar-side-toggle]').click();
+        await side.waitFor({ state: 'visible' });
+    };
     const openAccounts = async () => {
+        await showSide();
         await page.locator('[data-calendar-accounts-open]').click();
         await page.locator('[data-calendar-accounts]').waitFor({ state: 'visible' });
     };
@@ -2402,6 +2412,8 @@ try {
         await settleWindow(page);
         await page.waitForTimeout(6000);
         const back = await page.locator(TOAST, { hasText: 'E2E Reminder in' }).count();
+        await openPage();
+        await showSide();
         if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
         check('a reminder that is due shows as DSH\'s banner at the top of the window: the event, how soon and when, with Open and Join; Open shows the event; it shows once, not again after a reload',
             Boolean(made) && shown && /E2E Reminder in [3-6] min/.test(words) && where?.dsh === true && where.top < 120 && buttons.includes('Open') && buttons.includes('Join') && opened
@@ -2782,6 +2794,7 @@ try {
         const before = addDays(today, -2);
         const ended = (await api('createEvent', { input: { title: 'E2E Ended', start: `${before}T09:00`, end: `${before}T10:00`, timeZone: ZONE } })).value?.occurrence;
         await openPage();
+        await showSide();
         await page.locator('[data-calendar-view="week"]').click();
         await showDay(before);
         const runs = {};
@@ -2819,12 +2832,12 @@ try {
         await shot(page, 'past-light');
         await page.locator('[data-calendar-today]').click();
         if (ended) await api('deleteEvent', { id: ended.id, scope: 'all' });
-        const short = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.glass} on glass, lowest there ${r.glassMin}:1`]));
+        const short = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.glass} on glass, lowest there ${r.glassMin}:1, ${r.side} in the side column, lowest there ${r.sideMin}:1`]));
         console.log(`# contrast: ${JSON.stringify(short)}`);
-        const hardShort = Object.fromEntries(Object.entries(hard).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.failCount} under, ${JSON.stringify(r.fails.slice(0, 4).map((f) => `${f.what} ${f.ratio}`))}`]));
+        const hardShort = Object.fromEntries(Object.entries(hard).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, side column lowest ${r.sideMin}:1, ${r.failCount} under, ${JSON.stringify(r.fails.slice(0, 4).map((f) => `${f.what} ${f.ratio}`))}`]));
         console.log(`# contrast, hard cases at tint .3 (measured, not held): ${JSON.stringify(hardShort)}`);
         // Over the grey wall the glass shows it: some text sits on glass all the way down to the wall. Week shows an ended event.
-        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (/grey wall/.test(k) && (!r.wall || r.glass < 10))
+        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || r.side < 10 || (/grey wall/.test(k) && (!r.wall || r.glass < 10))
             || (/week$/.test(k) && !(r.past > 0)));
         check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, events that have ended too, the side column too, without a wallpaper and over a mid-grey one at the default tint and at tint .3, where secondary text is deeper',
             Boolean(ended) && bad.length === 0 && deepens.at55 !== deepens.at30 && /^(rgb|color\()/.test(deepens.at30), JSON.stringify({ bad: Object.fromEntries(bad), deepens }));
