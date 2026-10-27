@@ -46,7 +46,7 @@
  * - A thread that hands back while its chat is held in a turn of its own,
  *   and whose reply asks: its card shows at once, and the handback the chat
  *   takes after its turn is the same card (same id and wait, announced
- *   once), answered into the thread.
+ *   once, its Markdown read as plain words), answered into the thread.
  * - The page, from DSH's sidebar: the count, the cards with their controls,
  *   an answer and an approval from the page (a one-line answer box that
  *   opens when you are in it; the page says when the answer reached the
@@ -494,7 +494,7 @@ try {
         await run.bridge('POST', `/sessions/${ids.lateChat}/prompt`, { text: 'Also read the changelog. E2E:slow #late-chat' });
         const chatHeld = await waitFor(() => [...model.held].find((e) => e.record.fresh.includes('#late-chat')), 'the chat\'s own turn, held open', 30000, 200);
         // The thread hands back needing a decision, then its reply asks the person; the chat is busy, so the handback waits for it.
-        await run.bridge('POST', `/sessions/${ids.lateThread}/prompt`, { text: `${call('thread_handback', { status: 'needs_decision', summary: 'Two names fit: release/v2 or rel-2. The deploy target is next.' })}\n#final=ask`, mode: 'steer' });
+        await run.bridge('POST', `/sessions/${ids.lateThread}/prompt`, { text: `${call('thread_handback', { status: 'needs_decision', summary: 'Two names fit: `release/v2` or **rel-2**. The deploy target is next.' })}\n#final=ask`, mode: 'steer' });
         threadHeld.finish();
         const first = await waitFor(async () => (await state()).waiting.find((c) => c.sessionId === ids.lateThread), 'the thread\'s own question as a card', 40000, 300);
         const chatBusy = (await run.session(ids.lateChat)).status === 'running';
@@ -508,6 +508,7 @@ try {
         const s = await state();
         const mine = s.waiting.filter((c) => c.sessionId === ids.lateThread || c.sessionId === ids.lateChat);
         check('the handback the chat took late is the same card, in the handback\'s words: one card, the same id, the same wait', Boolean(landed) && mine.length === 1 && mine[0].id === first.id && mine[0].at === first.at, json(mine));
+        check('the handback\'s words read plain, its code and bold marks dropped', landed?.question === 'Two names fit: release/v2 or rel-2. The deploy target is next.', json(landed));
         const told = s.history.filter((e) => e.kind === 'new' && (e.sessionId === ids.lateThread || e.sessionId === ids.lateChat));
         check('it was announced once', told.length === 1 && told[0].cardId === first.id, json(told));
         // Answered from Decisions: into the thread.

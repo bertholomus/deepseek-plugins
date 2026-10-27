@@ -58,6 +58,23 @@ export const plainLine = (line) => {
     return unholdCode(dropMarks(text).replace(/^\s*>+\s?/, '').replace(/^\s*#{1,6}\s+/, ''), spans).replace(/\s+/g, ' ').trim();
 };
 
+/** Text of several lines as a card shows it: each line by `plainLine`, a code fence's own line left out, one blank line at most. */
+export const plainText = (text) => String(text ?? '').replace(/\r/g, '').split('\n')
+    .map((line) => (/^\s*(?:```|~~~)[\w+.-]*\s*$/.test(line) ? '' : plainLine(line)))
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+
+/**
+ * A handback's question as `recommendationIn` split it from its pick, in
+ * plain words: its lines before the last by `plainText` (the last line's
+ * question already is), each read once, so `__init__.py` stays whole.
+ */
+function plainSplit(summary, question) {
+    const before = summary.trim().split('\n').slice(0, -1).join('\n').trim();
+    if (!before) return question;
+    if (!question.startsWith(before)) return plainText(question);
+    return [plainText(before), question.slice(before.length).trim()].filter(Boolean).join('\n');
+}
+
 /**
  * Words to find a question by in its reply: a line as a card shows it, in
  * lower case and without any mark, so a question already read into plain
@@ -427,7 +444,8 @@ export function threadCards(row, projection, rowsById, viewOf) {
         // and so does a pick said anywhere in it ("Recommend 9090 for the status page. …").
         const split = recommendationIn(summary);
         const pick = split ? undefined : pickIn(summary);
-        const question = split?.question || summary;
+        // Shown in plain words, as a reply's card is ("Use `9090`, not **8080**?" reads "Use 9090, not 8080?").
+        const question = split ? plainSplit(summary, split.question) : plainText(summary);
         const blocked = thread.handback.status === 'blocked';
         // One id per thread turn, the same as the thread's own reply's card (lib/inbox.js): a handback the chat takes
         // late updates the card the thread's reply made, never a second one. The turn is the one the thread's own

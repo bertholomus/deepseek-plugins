@@ -708,6 +708,27 @@ test('cards: a handback\'s recommendation goes under Recommended, with its own a
     assert.match(answerMessage(card, { recommended: true }), /go with your recommendation \(8080 — it matches the docs\)\.$/);
 });
 
+test('cards: a handback written in Markdown reads in plain words, every line of it, with code spans whole', () => {
+    const at = '2026-10-17T05:00:00.000Z';
+    const chat = { sessionId: 'c', title: 'Release', status: 'idle', state: {} };
+    const view = (summary) => ({ live: true, value: { v: { role: 'coordinator', threads: [{ id: 't1', session: 'th1', title: 'Ports', resolved: false, handback: { status: 'needs_decision', summary, at } }], cards: [{ kind: 'handback', thread: 't1' }] } } });
+    // Its lines before the question kept their marks on the card and in the quote sent back.
+    const [ports] = threadCards(chat, view('Both ports are free.\n**Port 9090** is unused and `8080` runs nginx.\nWhich port should the status page use? — recommend: `9090`'), new Map());
+    assert.equal(ports.question, 'Both ports are free.\nPort 9090 is unused and 8080 runs nginx.\nWhich port should the status page use?');
+    assert.equal(ports.recommendation, '9090');
+    assert.equal(answerMessage(ports, { recommended: true }), '[Decisions] The person answered your handback (“Both ports are free. Port 9090 is unused and 8080 runs nginx. Which port should the status page use?”): go with your recommendation (9090).');
+    const [names] = threadCards(chat, view('Two names fit: `release/v2` or **rel-2**. The deploy target is next.'), new Map());
+    assert.equal(names.question, 'Two names fit: release/v2 or rel-2. The deploy target is next.');
+    assert.equal(names.head, 'The thread needs your decision:');
+    // A heading, a list and a pick on a line of its own; `__init__.py` read once, so it stays whole.
+    const [entry] = threadCards(chat, view('## Result\n\n- `__init__.py` holds the entry point\n- `main.py` is empty\n\nShould I rename `__init__.py` to `main.py`?\n\n**Recommendation:** keep `__init__.py`'), new Map());
+    assert.equal(entry.question, 'Result\n\n- __init__.py holds the entry point\n- main.py is empty\n\nShould I rename __init__.py to main.py?');
+    assert.equal(entry.recommendation, 'keep __init__.py');
+    // A code fence's own lines are left out, and a link reads as its words.
+    const [fenced] = threadCards(chat, view('I checked [the docs](https://example.com/Cache_(computing)).\n```sh\nnpm ci\n```\nWhich cache should I use?'), new Map());
+    assert.equal(fenced.question, 'I checked the docs.\n\nnpm ci\n\nWhich cache should I use?');
+});
+
 test('inbox: a card\'s wait counts from when it was first seen; a re-raise or a restart does not restart it', async () => {
     const { clock, inbox, watch } = setup();
     await clock.advance(1000);
