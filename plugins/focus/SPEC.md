@@ -26,12 +26,15 @@ export async function apply(ctx, config) { ... }
   keeps the default and is said in words (`problems`), never thrown. `lib/index.js` declares
   `Config = z.object({ dataDir: z.any() })`, so DSH takes any value and Focus checks it. **(v3)** The
   words name no path ("its default folder (focus in DSH's data folder)"); when there is a problem,
-  `apply` logs `its folder: <dataDir>` to DSH's log, and focus.log's `started` line names the folder.
+  `apply` logs `its folder: <dataDir>` to DSH's logger, and focus.log's `started` line names the folder.
+  DSH 0.2.1 keeps its logger's lines in memory (no file), so focus.log is the log people read.
 - Files: `state.json` (tmp + rename), `focus.log` (ISO stamp per line; past 1 MB renamed to
   `focus.log.1`) **(v2)**. A folder that cannot be made or written is a `problems` entry; the timer
   keeps working in memory. **(v3)** Its words give the reason (`whyInWords`: "a file is in the way",
-  "no permission to write there", "the disk is read-only", "the disk is full") and no path; focus.log
-  and DSH's log have the path and the code.
+  "no permission to write there", "the disk is read-only", "the disk is full") and no path, then
+  which folder in words: "Its folder is focus in DSH's data folder." or "Its folder is the one set as
+  dataDir in its settings." (`apply` passes `folder` to `createFocus`). focus.log (while it can be
+  written) and DSH's logger have the path and the code.
 - Route: `connection.fetch.register({ path: '/api/focus/state', methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], requestBody: 'buffered', fetch })`
   inside `ctx.inject(['connection'], …)` and `c.effect(…)`, so it goes with the plugin.
 - `GET` → `{ settings, timer, sessions, rev, problems }`, `cache-control: no-store`.

@@ -408,9 +408,9 @@ test('a folder that cannot be made: the timer works in memory, and the problem i
     const focus = host(join(base, 'file', 'focus'), time, { say: (level, words) => said.push([level, words]) });
     const read = await call(focus);
     assert.equal(read.status, 200);
-    assert.equal(read.body.problems[0], 'Focus could not make its folder (a file is in the way): the timer works, but is not kept across a restart. DSH\'s log names the folder.', 'in words, with no path');
+    assert.equal(read.body.problems[0], 'Focus could not make its folder (a file is in the way): the timer works, but is not kept across a restart. Its folder is focus in DSH\'s data folder.', 'in words, with no path, saying which folder');
     assert.equal(said[0][0], 'warn');
-    assert.match(said[0][1], /could not make its folder .*file\/focus \(ENOTDIR\)/, 'DSH\'s log has the folder and the code');
+    assert.match(said[0][1], /could not make its folder .*file\/focus \(ENOTDIR\)/, 'DSH\'s logger gets the folder and the code');
     const started = await op(focus, { op: 'start', kind: 'focus', durationMs: 10000 });
     assert.equal(started.body.timer.running, true);
     time.advance(10100);
@@ -428,8 +428,8 @@ test('a save that fails is said (once) and the timer keeps counting; when a save
         await op(focus, { op: 'start', kind: 'focus', durationMs: 60000 });
         const read = await call(focus);
         assert.equal(read.body.timer.running, true);
-        assert.equal(read.body.problems.at(-1), 'Focus could not save its timer (no permission to write there); it keeps counting, but a restart would lose the change. DSH\'s log names the file.', 'in words, with no path');
-        assert.match(said.find((w) => /could not save/.test(w)), /state\.json \(EACCES\)/, 'DSH\'s log has the file and the code');
+        assert.equal(read.body.problems.at(-1), 'Focus could not save its timer (no permission to write there); it keeps counting, but a restart would lose the change. Its folder is focus in DSH\'s data folder.', 'in words, with no path, saying which folder');
+        assert.match(said.find((w) => /could not save/.test(w)), /state\.json \(EACCES\)/, 'DSH\'s logger gets the file and the code');
         await op(focus, { op: 'pause' });
         assert.equal(said.filter((w) => /could not save/.test(w)).length, 1, 'said once, not on every change');
     } finally {
@@ -494,7 +494,7 @@ test('apply: serves GET and POST /api/focus/state (buffered), says a wrong setti
     const dir = tempDir('focus-apply');
     const { ctx, routes, warns, infos, dispose } = fakeCtx();
     await apply(ctx, { dataDir: dir, colour: 'red' });
-    assert.deepEqual(infos, [['focus: %s', `its folder: ${dir}`]], 'the window\'s words name no folder; DSH\'s log does');
+    assert.deepEqual(infos, [['focus: %s', `its folder: ${dir}`]], 'the window\'s words name no folder; DSH\'s logger gets it');
     assert.equal(routes.length, 1);
     assert.deepEqual([routes[0].path, routes[0].methods, routes[0].requestBody], ['/api/focus/state', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], 'buffered']);
     assert.deepEqual(warns, [['focus: %s', 'colour is not a setting of Focus and is ignored (its one setting is dataDir).']]);
@@ -506,6 +506,29 @@ test('apply: serves GET and POST /api/focus/state (buffered), says a wrong setti
     assert.ok(logOf(dir).includes(`started; serving /api/focus/state (GET, POST) from ${dir}`), 'focus.log names its folder');
     dispose();
     assert.equal(routes[0].gone, true, 'the route goes with the plugin');
+});
+
+test('apply: a folder that cannot be made is said with which folder it is, in words (the one set, or the default one)', async () => {
+    const base = tempDir('focus-apply-nofolder');
+    writeFileSync(join(base, 'file'), 'a file, not a folder');
+    const set = fakeCtx();
+    await apply(set.ctx, { dataDir: join(base, 'file', 'focus') });
+    const one = await (await set.routes[0].fetch(req('GET'))).json();
+    assert.deepEqual(one.problems, ['Focus could not make its folder (a file is in the way): the timer works, but is not kept across a restart. Its folder is the one set as dataDir in its settings.']);
+    assert.match(set.warns[0][1], /could not make its folder .*file\/focus \(ENOTDIR\)/, 'DSH\'s logger gets the path and the code');
+    set.dispose();
+    const home = process.env.DSH_HOME;
+    process.env.DSH_HOME = join(base, 'file'); // DSH's data folder is a file here, so its focus folder cannot be made
+    try {
+        const plain = fakeCtx();
+        await apply(plain.ctx, undefined);
+        const two = await (await plain.routes[0].fetch(req('GET'))).json();
+        assert.deepEqual(two.problems, ['Focus could not make its folder (a file is in the way): the timer works, but is not kept across a restart. Its folder is focus in DSH\'s data folder.']);
+        plain.dispose();
+    } finally {
+        if (home === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = home;
+    }
 });
 
 test('apply: without DSH\'s connection.fetch it says so and does not throw', async () => {

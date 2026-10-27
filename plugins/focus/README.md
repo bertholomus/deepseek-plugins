@@ -108,18 +108,21 @@ The one setting is in row `focus` of the profile's `cordis.patch.yml`:
 ```
 
 A wrong value never stops Focus: it keeps its timer in the default folder and says why, in words, in
-`focus.log` (`setting: …`), in DSH's log, at the bottom of the panel, and in GET `problems`. For
+`focus.log` (`setting: …`), at the bottom of the panel, in GET `problems` and to DSH's logger. For
 example `dataDir must be a full path (starting with / or ~/), not "relative/focus"; Focus keeps its
-timer in its default folder (focus in DSH's data folder).` DSH's log then names the folder in use
-(`its folder: …`), and `focus.log`'s `started` line does too. A key Focus does not have is named and
-ignored. A changed `dataDir` takes effect at once; the timer then lives in that folder (a first start
-there if it is new) and the old folder is left as it was.
+timer in its default folder (focus in DSH's data folder).` `focus.log`'s `started` line names the
+folder in use, and DSH's logger gets it with the problem (`its folder: …`). DSH 0.2.1 keeps its
+logger's lines in memory and writes none to a file, so `focus.log` is the log to read. A key Focus
+does not have is named and ignored. A changed `dataDir` takes effect at once; the timer then lives in
+that folder (a first start there if it is new) and the old folder is left as it was.
 
 If the folder cannot be made or written, the timer still works in memory, and the panel and GET
-`problems` say that a restart would lose it, with the reason in words ("Focus could not save its timer
-(no permission to write there); it keeps counting, but a restart would lose the change. DSH's log
-names the file."). DSH's log has the path and the error code. Once a save works again the problem
-goes; a folder that could not be made is tried again the next time Focus starts.
+`problems` say that a restart would lose it, with the reason and the folder in words ("Focus could
+not save its timer (no permission to write there); it keeps counting, but a restart would lose the
+change. Its folder is focus in DSH's data folder.", or "the one set as dataDir in its settings" when
+you set one). `focus.log`, while it can still be written, and DSH's logger get the path and the error
+code. Once a save works again the problem goes; a folder that could not be made is tried again the
+next time Focus starts.
 
 ## Switch it off, roll it back
 

@@ -234,7 +234,7 @@ try {
             wrong.problems.length === 1 && /dataDir must be a full path .*"relative\/focus".*keeps its timer in/.test(wrong.problems[0]) && wrong.rev >= rev, json(wrong.problems));
         check('the words the window shows name no path',
             wrong.problems[0].endsWith('Focus keeps its timer in its default folder (focus in DSH\'s data folder).') && !wrong.problems[0].includes(run.home) && !/\/(Users|home|var|tmp|private)\//.test(wrong.problems[0]), json(wrong.problems));
-        check('DSH\'s log names the folder in use', run.logText().includes(`its folder: ${focusDir}`), run.logText().split('\n').filter((l) => /focus/.test(l)).slice(-6).join('\n'));
+        check('focus.log names the folder in use (the window\'s words do not)', read(logFile).includes(`started; serving /api/focus/state (GET, POST) from ${focusDir}`), read(logFile).slice(-300));
         check('focus.log says the setting', /setting: dataDir must be a full path/.test(read(logFile)), read(logFile).slice(-400));
         const own = join(run.root, 'focus-own');
         focusRow({ dataDir: own });
@@ -496,7 +496,7 @@ try {
             // An end while the panel is open: the panel says it and the chime sounds; no toast covers the dialog.
             await page.evaluate(() => { window.__chimes = []; });
             await op({ op: 'start', kind: 'custom', durationMs: 10000 });
-            await waitFor(async () => (await stateLine.getAttribute('data-focus-state')) === 'done', 'the end in the open panel', 25000, 200).catch(() => {});
+            await waitFor(async () => /^Custom · done at /.test(await stateLine.textContent()), 'the end in the open panel', 25000, 200).catch(() => {});
             await page.waitForTimeout(800);
             const inPanel = [await stateLine.textContent(), await page.locator('[data-focus-primary]').textContent()];
             check('an end with the panel open: the panel says it, with the next step, and chimes; no toast over the dialog',

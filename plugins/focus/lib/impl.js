@@ -54,6 +54,10 @@ export function whyInWords(e) {
 }
 /** How the window names Focus's folder: never a raw path (DESIGN.md section 9). */
 const DEFAULT_FOLDER = 'its default folder (focus in DSH\'s data folder)';
+// Where the timer's folder is, in words a person can follow (the window shows no path, and DSH 0.2.1
+// keeps its logger's lines in memory only, so the words do not send anyone to DSH's log).
+const FOLDER_DEFAULT = 'focus in DSH\'s data folder';
+const FOLDER_SET = 'the one set as dataDir in its settings';
 
 /** The server's local day of a time, as YYYY-MM-DD. */
 export const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -78,8 +82,8 @@ const dshHome = (env = process.env) => env.DSH_HOME || join(homedir(), '.dsh');
 
 /**
  * The row's config, checked in words. A wrong value never stops Focus: it keeps its timer in the
- * default folder and says why (in DSH's log, focus.log and GET /api/focus/state `problems`). The
- * words name no path, since the window shows them; the logs add the folder (`fallback`).
+ * default folder and says why (to DSH's logger, in focus.log and in GET /api/focus/state `problems`).
+ * The words name no path, since the window shows them; the logs add the folder (`fallback`).
  * @returns {{ dataDir: string, problems: string[], fallback: string }}
  */
 export function checkConfig(raw, env = process.env) {
@@ -181,10 +185,12 @@ function validateOp(op) {
  * @param {string} options.dataDir - state.json and focus.log live here.
  * @param {string[]} [options.problems] - what was wrong with the config, in words (no paths: the window shows them).
  * @param {(level: 'info'|'warn', text: string) => void} [options.say] - DSH's logger.
+ * @param {string} [options.folder] - the folder in words, for the window: the default one or the one set.
  */
 export function createFocus({
   dataDir, problems: configProblems = [], now = Date.now, day = (ms) => localDay(new Date(ms)),
   setTimer = setTimeout, clearTimer = clearTimeout, say = () => {}, logMaxBytes = LOG_MAX_BYTES,
+  folder = FOLDER_DEFAULT,
 }) {
   let storeProblem = null;
   let folderOk = true;
@@ -192,8 +198,8 @@ export function createFocus({
     mkdirSync(dataDir, { recursive: true });
   } catch (e) {
     folderOk = false;
-    // The window's words name no path; DSH's log has the folder and the code.
-    storeProblem = `Focus could not make its folder (${whyInWords(e)}): the timer works, but is not kept across a restart. DSH's log names the folder.`;
+    // The window's words name no path but say which folder; DSH's logger gets the path and the code.
+    storeProblem = `Focus could not make its folder (${whyInWords(e)}): the timer works, but is not kept across a restart. Its folder is ${folder}.`;
     say('warn', `could not make its folder ${dataDir} (${e?.code ?? errorText(e)}): the timer works, but is not kept across a restart`);
   }
   const logFile = join(dataDir, 'focus.log');
@@ -239,8 +245,8 @@ export function createFocus({
       renameSync(tmp, statePath);
       if (storeProblem) { log('state.json written again'); storeProblem = null; }
     } catch (e) {
-      // The window's words name no path; focus.log and DSH's log have it, with the code.
-      const why = `Focus could not save its timer (${whyInWords(e)}); it keeps counting, but a restart would lose the change. DSH's log names the file.`;
+      // The window's words name no path but say which folder; focus.log and DSH's logger get the path and the code.
+      const why = `Focus could not save its timer (${whyInWords(e)}); it keeps counting, but a restart would lose the change. Its folder is ${folder}.`;
       if (storeProblem !== why) {
         const logged = `could not save its timer to ${statePath} (${e?.code ?? errorText(e)}); it keeps counting, but a restart would lose the change`;
         log(logged);
@@ -414,12 +420,12 @@ export function createFocus({
 }
 
 export async function apply(ctx, rawConfig) {
-  const { dataDir, problems } = checkConfig(rawConfig);
+  const { dataDir, problems, fallback } = checkConfig(rawConfig);
   const say = (level, text) => { try { ctx.logger?.[level]?.('focus: %s', text); } catch {} };
   for (const p of problems) say('warn', p);
   // The window's words name no folder; the logs do.
   if (problems.length) say('info', `its folder: ${dataDir}`);
-  const focus = createFocus({ dataDir, problems, say });
+  const focus = createFocus({ dataDir, problems, say, folder: dataDir === fallback ? FOLDER_DEFAULT : FOLDER_SET });
   if (typeof ctx.effect === 'function') ctx.effect(() => () => focus.stop(), 'focus: timer');
   ctx.inject(['connection'], (c) => {
     try {
