@@ -3,15 +3,16 @@
  * it runs end to end through Recall's own index thread, each search of the
  * page answers well inside the 300 ms target (its median over three rounds:
  * on a busy computer one round can stall, as one did at 305 ms with the
- * load at 60), the rare word's result opens at its exact turn, and a new
- * turn and a new session are found. The 10k numbers in
+ * load at 60), the rare word's result opens at its exact turn, a new turn
+ * and a new session are found, and long notes are searched where they
+ * should be while searches go on. The 10k numbers in
  * plugins/recall/README.md come from the same script.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { QUERIES, percentile, runBench } from '../scripts/recall-bench.mjs';
 
-test('bench: a small history, end to end through the index thread: fast searches, the exact turn, new turns found', async () => {
+test('bench: a small history, end to end through the index thread: fast searches, the exact turn, new turns found, long notes', async () => {
     const r = await runBench({ sessions: 200, rounds: 3, log: () => {} });
     assert.equal(r.corpus.files, 201, '200 sessions and the one still being written to');
     assert.equal(r.build.files, 201);
@@ -33,6 +34,12 @@ test('bench: a small history, end to end through the index thread: fast searches
     assert.ok(Number.isFinite(r.build.mainThreadDelayMs.max));
     assert.ok(r.restart.readyMs >= 0 && r.restart.afterUncleanStopReadyMs >= 0);
     assert.equal(r.restart.reread, 0, 'a restart reads nothing again when nothing changed');
+    // Long notes: every section of the daily log, the big log's newest, the 60,000-section note's ends, not its middle.
+    assert.equal(r.notes.files, 3);
+    assert.equal(r.notes.partial, 2, 'the 9 MB log and the 60,000-section note are read in part; the daily log is not');
+    assert.equal(r.notes.sections, 602 + 50_000 + 50_000);
+    assert.deepEqual(r.notes.found, { walrus: 1, tapir: 1, word4999: 1, word59999: 1, word10000: 0, platypus: 1, quokka: 1 });
+    assert.ok(r.notes.first.searchesMeanwhile.n > 0 && r.notes.first.searchesMeanwhile.median < 300, `searches while notes are read: median ${r.notes.first.searchesMeanwhile.median} ms`);
 });
 
 test('bench: percentiles are nearest-rank', () => {

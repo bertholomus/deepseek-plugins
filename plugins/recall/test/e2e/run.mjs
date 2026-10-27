@@ -73,7 +73,7 @@
  * Playwright the run fails, unless NO_WINDOW=1 says to run without the
  * window checks.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
 import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
@@ -114,6 +114,9 @@ const AGENT_LOGS = join(run.root, 'agent-logs');
 const GONE = join(run.root, 'unplugged-disk', 'logs');
 const NOTES = join(run.root, 'notes');
 const MORE_NOTES = join(run.root, 'more-notes');
+/** Written by the notes step (after the first counts): a 601-section daily log and a run log past 4 MB. */
+const DAILY = join(NOTES, 'daily-log.md');
+const BIG_LOG = join(NOTES, 'run-log.md');
 const DAY = 86_400_000;
 const old = (days, minutes = 0) => new Date(Date.now() - days * DAY + minutes * 60_000).toISOString();
 const line = (value) => `${JSON.stringify(value)}\n`;
@@ -125,7 +128,7 @@ writeFileSync(RUN_1, [
     say('user', 'Please migrate the ledger schema to version 7.', old(40)),
     line({ type: 'assistant', timestamp: old(40, 1), cwd: '/work/parser', message: { role: 'assistant', model: 'glm-transcript', content: [{ type: 'tool_use', name: 'bash', input: { command: 'make migrate-ledger' } }, { type: 'text', text: 'Migrated the ledger schema.' }] } }),
     say('user', 'The xylophone parser fails on nested quotes.', old(40, 5)),
-    say('assistant', 'Fixed the xylophone tokenizer: nested quotes are read now.', old(40, 6)),
+    say('assistant', 'Fixed the xylophone tokenizer: **nested quotes** are read now, in `readQuoted`.', old(40, 6)),
 ].join(''));
 writeFileSync(RUN_2, [
     say('user', 'Rename the okapi helper.', old(39)),
@@ -395,6 +398,45 @@ try {
         const turn = await value('turn', { id: t.id });
         check('a transcript turn reads in full: what was asked, the reply, the turn after none', turn.prompt === 'The xylophone parser fails on nested quotes.' && /Fixed the xylophone tokenizer/.test(turn.reply) && turn.prev === 1 && turn.next === undefined && turn.count === 2, json(turn));
     });
+    await step('a note of 601 sections is searched to its last; one past 4 MB keeps its first 1 MB and last 3 MB, and says so', async () => {
+        // A daily log with a heading a day (round 3: sections past the 400th dropped without a word).
+        writeFileSync(DAILY, `# Daily log\n\n${Array.from({ length: 601 }, (_, i) => `## Day ${i}\nEntry ${i}: ${i === 600 ? 'the manatee survey' : i === 450 ? 'the axolotl tank' : 'a quiet day'}\n`).join('\n')}`);
+        // A run log past 4 MB that grows at the bottom: its first entry, its middle and its newest.
+        const lines = ['# Run log', '', '## First run', 'The gecko build started.', ''];
+        let bytes = lines.join('\n').length;
+        const fill = (upTo) => {
+            // The same few words on every line: a small index, so the later checks of the index's size hold.
+            const text = 'another step of the long run went fine';
+            while (bytes < upTo) {
+                lines.push(text);
+                bytes += text.length + 1;
+            }
+        };
+        fill(2.5 * 1048576);
+        lines.push('', '## Middle run', 'The chinchilla build stalled.', '');
+        fill(5 * 1048576);
+        const newestLine = lines.length + 2;
+        lines.push('', '## Newest run', 'The quetzal build passed.', '');
+        writeFileSync(BIG_LOG, lines.join('\n'));
+        await api('rescan');
+        const manatee = await found({ text: 'manatee' }, 'the daily log\'s 601st section', 30000);
+        const axolotl = await search({ text: 'axolotl' });
+        check('every section of a 601-section note is searched: the last at its heading and line, and the 451st',
+            manatee.total === 1 && manatee.results[0].label === 'Day 600' && manatee.results[0].line === 1803 && axolotl.results[0]?.label === 'Day 450', json([manatee.results[0], axolotl.results[0]]));
+        const quetzal = await found({ text: 'quetzal' }, 'the big log\'s newest section', 30000);
+        const gecko = await search({ text: 'gecko' });
+        const chinchilla = await search({ text: 'chinchilla' });
+        check('a note past 4 MB: its first and its newest sections are found, at their lines; its middle is not',
+            quetzal.results[0]?.label === 'Newest run' && quetzal.results[0].line === newestLine && gecko.results[0]?.label === 'First run' && chinchilla.total === 0,
+            json({ quetzal: quetzal.results[0], gecko: gecko.results[0], chinchilla: chinchilla.total }));
+        const s = await settledIndex();
+        const st = await pageState();
+        const parts = st.index.problems.filter((p) => p.part).map((p) => [p.path, p.error]);
+        const mb = Math.round((statSync(BIG_LOG).size / 1048576) * 10) / 10;
+        check('the big log is listed as read in part, with what is searched; the daily log is not, and its folder is up to date',
+            parts.some(([path, error]) => path === BIG_LOG && error === `Only its first 1 MB and its last 3 MB are searched (it is ${mb} MB).`) && !parts.some(([path]) => path === DAILY)
+            && st.index.roots.find((r) => r.kind === 'handoff')?.state === 'ok' && s.totals.partial >= 1, json({ parts, roots: st.index.roots.filter((r) => r.kind === 'handoff') }));
+    });
     await step('filters: kind, folder, model and time; newest first', async () => {
         const kinds = async (query) => [...new Set((await search(query)).results.map((r) => r.kind))].sort().join();
         check('kind: "gateway" is in sessions and a note; each kind alone finds only its own', await kinds({ text: 'gateway' }) === 'handoff,session'
@@ -624,6 +666,13 @@ try {
             const text = (await reading.innerText()).replace(/\n+/g, ' ');
             check('a transcript turn opens in the reading view: what was asked, the reply, the file and line, the turn before',
                 /Asked The xylophone parser fails on nested quotes\./.test(text) && /Reply Fixed the xylophone tokenizer/.test(text) && text.includes(`File: ${RUN_1}, line 3`) && /Turn before/.test(text) && /Coding-agent transcript · \/work\/parser · glm-transcript · turn 2 of 3/.test(text), text);
+            // The reply in DSH's own Markdown, as the chat draws it: bold and code drawn, no raw marks.
+            const md = await reading.evaluate((el) => {
+                const box = el.querySelector('[data-recall-markdown]');
+                return { box: Boolean(box), strong: box?.querySelector('strong, b')?.textContent ?? '', code: box?.querySelector('code')?.textContent ?? '', raw: /\*\*|`/.test(el.innerText) };
+            });
+            check('the reply is drawn in DSH\'s own Markdown, as in the chat: bold and code, with none of their marks shown',
+                md.box && md.strong === 'nested quotes' && md.code === 'readQuoted' && !md.raw, json(md));
             await shot(page, shots, 'reading-light');
             await setDark(page, true);
             await shot(page, shots, 'reading-dark');
@@ -741,6 +790,14 @@ try {
             const dockText = docked ? (await dock.innerText()).replace(/\n+/g, ' ') : '';
             check('a running turn opened from the page: a line above the composer says which turn, with Back to the results and Done',
                 /Found by Recall · turn 1, still running, for “ocelot canary”/.test(dockText) && /Back to the results/.test(dockText) && /Done/.test(dockText), dockText);
+            // As wide as the composer at most, inside its edges (round 3: it spanned the chat column, wider than the composer).
+            const widths = docked ? await dock.evaluate((el) => {
+                const card = document.querySelector('[data-slot="conversation.composer.bar"] :is([class$="_card"],[class*="_card "])');
+                const a = el.getBoundingClientRect();
+                const b = card?.getBoundingClientRect();
+                return { line: [Math.round(a.left), Math.round(a.right)], composer: b ? [Math.round(b.left), Math.round(b.right)] : null };
+            }) : { line: null, composer: null };
+            check('the line above the composer sits inside the composer\'s width', Boolean(widths.composer) && widths.line[0] >= widths.composer[0] - 1 && widths.line[1] <= widths.composer[1] + 1, json(widths));
             if (docked) {
                 await shot(page, shots, 'running-dock-light');
                 await setDark(page, true);
@@ -759,8 +816,18 @@ try {
             page.on('request', onRequest);
             const stoppedAt = Date.now();
             await run.bridge('POST', `/sessions/${encodeURIComponent(ids.ocelot)}/cancel`, {});
-            const took = await waitFor(async () => /turn 1 · stopped/.test((await row.innerText()).replace(/\n+/g, ' ')), 'the shown row to read stopped', 30000, 200).then(() => Date.now() - stoppedAt, () => -1);
+            // Every look at the row on the way says a state: still running, then ending, then stopped (round 3: no word
+            // at all for about 2 s while its end was read).
+            const seen = [];
+            const took = await waitFor(async () => {
+                const text = (await row.innerText()).replace(/\n+/g, ' ');
+                const word = /turn 1 · (still running|ending|stopped)\b/.exec(text)?.[1] ?? 'no word';
+                if (seen.at(-1) !== word) seen.push(word);
+                return word === 'stopped';
+            }, 'the shown row to read stopped', 30000, 100).then(() => Date.now() - stoppedAt, () => -1);
             page.off('request', onRequest);
+            check('on its way to "stopped", the row always says a state: still running, ending, stopped, never none', !seen.includes('no word') && seen.at(-1) === 'stopped', seen.join(' → '));
+            console.log(`# the shown row said: ${seen.join(' → ')}`);
             timings.followed = took;
             check('stopped from the chat, the row already shown reads "stopped" by itself: its state asked for, no search again',
                 took >= 0 && asked.includes('states') && !asked.includes('search') && (await searchBox(page).inputValue()) === 'ocelot canary', `${took} ms | asked: ${asked.join(', ')} | ${(await row.innerText()).replace(/\n+/g, ' ')}`);
@@ -806,11 +873,18 @@ try {
             await index.evaluate((el) => el.scrollIntoView({ block: 'start' }));
             await shot(page, shots, 'index-light');
             await setDark(page, true);
-            await shot(page, shots, 'index-dark');
-            await page.locator('[data-recall-history]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
-            await shot(page, shots, 'history-dark');
+            const indexDark = await shot(page, shots, 'index-dark');
+            // What happened, shot as its own card (round 3: the page could not scroll it to the top, so its pictures
+            // were the index card's again).
+            const history = page.locator('[data-recall-history]');
+            await history.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            const historyDark = await shot(page, shots, 'history-dark', history);
             await setDark(page, false);
-            await shot(page, shots, 'history-light');
+            await shot(page, shots, 'history-light', history);
+            if (indexDark && historyDark) {
+                const historyText = (await history.innerText()).replace(/\n+/g, ' ');
+                check('the pictures of What happened show that card, not the index card again', !readFileSync(indexDark).equals(readFileSync(historyDark)) && /^What happened/.test(historyText), historyText.slice(0, 200));
+            }
             await page.locator('[data-recall-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             await page.setViewportSize({ width: 760, height: 900 });
             await searchFor(page, 'gateway');
