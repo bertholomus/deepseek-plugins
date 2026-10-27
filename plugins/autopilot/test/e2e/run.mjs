@@ -815,6 +815,17 @@ try {
             }, 'the quoted setting to be fixed', 20000);
             const entry = fixed.log.find((e) => e.kind === 'settings');
             check('saved, it is fixed at once, and the log says the new value and the one before', entry?.text === 'Settings fixed: Autopilot is working again' && entry?.why === 'The change to “Notes in a row without progress” now 2 (was "2") fixed it.', JSON.stringify(entry));
+            // Saved at its default, the value is no change: no "Changed", nothing to reset. One that differs shows both, in one style.
+            const sameRow = page.locator('[data-suite-setting="maxNudges"]');
+            const changedRow = page.locator('[data-suite-setting="idleSeconds"]');
+            const noChip = await waitFor(async () => !/Changed|Use the default/.test(await sameRow.innerText()), 'the value saved at its default to show no Changed', 10000, 200).then(() => true, () => false);
+            const changedWords = await changedRow.innerText();
+            check('saved at its default (2), the value shows no "Changed" and no "Use the default"; one that differs (5 seconds) shows both',
+                noChip && /Changed/.test(changedWords) && /Use the default/.test(changedWords), `${(await sameRow.innerText()).replace(/\n+/g, ' | ')} || ${changedWords.replace(/\n+/g, ' | ')}`);
+            await shot(page, shots, 'settings-saved-light');
+            await setDark(page, true);
+            await shot(page, shots, 'settings-saved-dark');
+            await setDark(page, false);
             const ours = window.errors.filter((text) => /autopilot|session-watch/i.test(text));
             check('no errors from the suite in the window', ours.length === 0, ours.join('\n'));
         }, async () => {

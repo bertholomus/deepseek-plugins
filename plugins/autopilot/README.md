@@ -42,7 +42,9 @@ note: *happy to keep going*, *happy to report*, *feel free to review the
 diff*, *let me know if you have any questions*, or advice such as *If you
 want a stricter check, use …*. Nor does any offer when the reply's last
 sentence says what the agent does next (*Next: the CLI.*, *Moving on to
-the docs.*, *I will carry on with the remaining todos.*). The row quotes the
+the docs.*, *I will carry on with the remaining todos.*), unless that
+sentence waits on you itself (*Let me know if this looks good, and I'll
+move on to the tests.*). The row quotes the
 words that held it (*Waits for you: its last reply leaves the next step to
 you (“Let me know if you want me to continue with steps 2 and 3.”).*).
 Measured on 32 endings written after the rule was frozen
@@ -50,7 +52,7 @@ Measured on 32 endings written after the rule was frozen
 no false hold among the 16 that do not wait on you, and 3 misses among the
 16 that do (*If you're OK with the rename, I'll update all the imports.*,
 *I need the API token for the sandbox before I can go on.*, *I can add
-retries as well, if that's useful.*): such a session gets one note, which
+retries as well, if that's useful.*): such a session gets the nudge, which
 asks the agent to end with a `DECISION NEEDED` line if it is blocked. The
 84 real endings from the suite's DSH Test sessions, the round-5 judge's
 nine and 84 written ones that the rule was built on all read right. The
