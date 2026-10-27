@@ -1658,9 +1658,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const data = live.data;
             // Not running (or Session Watch is off): old data would mislead, so the page says why and what to do.
             const down = live.code === 'not-running' || (data === undefined && live.error);
-            // What a test said is about the page as it was: once the page goes down, it is not said again when it comes back.
+            // What a test or a failed action said is about the page as it was: once the page goes down (and says why),
+            // neither is said again when it comes back.
             React.useEffect(() => {
-                if (down) setSaid((was) => (was.where === 'mirror' ? { text: '', where: '', n: was.n + 1 } : was));
+                if (!down) return;
+                setSaid((was) => (was.where === 'mirror' ? { text: '', where: '', n: was.n + 1 } : was));
+                setFailure(undefined);
             }, [Boolean(down)]);
             return h(kit.Page, { label: TEXT.title, attrs: { 'data-decisions-page': '' } },
                 down

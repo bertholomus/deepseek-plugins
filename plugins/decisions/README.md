@@ -48,8 +48,10 @@ thread to hand back at once, and the handback that follows is the card).
 A recommendation in any of them shows under *Recommended*, with
 **Go with the recommendation**, and a link in the question
 (`[Port pick](.dsh-thread/t1)`, also one whose address holds brackets)
-reads as its words. A handback's pick
-counts wherever it is said (`Recommend 9090 for the status page.`,
+reads as its words. A handback reads in plain words, every line of it,
+as a reply's lines do (bold and code marks dropped, a code span's words
+whole: `` `release/v2` or **rel-2** `` reads "release/v2 or rel-2").
+Its pick counts wherever it is said (`Recommend 9090 for the status page.`,
 `9090 (recommended)`), and a handback that asks no question is headed
 *The thread needs your decision:* (or *The thread is blocked:*). An
 approval or a question from inside a thread says whose thread it is (*in a
@@ -83,7 +85,9 @@ quote, a bracket or a mark), never inside a code span: so a dot in a file
 name (`parser.py`), a version (`v1.2`, 2.0.0), an address, a number (2.5)
 or "e.g." ends nothing, and "I found two failing tests. Should I fix the
 bug in `parser.py` first?" gives *Should I fix the bug in parser.py
-first?*, in plain words like its lines. Its card also
+first?*, in plain words like its lines. A question that leans on the one
+before it keeps that one ("Should I merge now? Or wait for the review?"
+reads whole). Its card also
 carries the reply's lines just before the question (up to four lines or
 400 characters, folded after two), so a list of choices comes with "Which
 one do you prefer?" and you can answer in place;
@@ -133,8 +137,9 @@ handed back, still first in the list, with a button to the session.
   its button (*Test message sent to …*, or *Not sent: …* as an alert),
   and the focus stays on the button; a success is said for a minute,
   and neither is said again once the page has had to say why it cannot
-  work. When the last new card could not be
-  sent there, it says so, with the reason and when.
+  work (nor is an action that failed meanwhile, *Not done: …*). When the
+  last new card could not be sent there, it says so, with the reason and
+  when.
 - **Waiting on you**: each card with its state word (*needs a decision*,
   *blocked*, *waiting for approval*, *asks you*, *asked you*), the session
   (one click opens it), how long it has waited, the question, the
@@ -349,7 +354,8 @@ thread, and while the thread works on it neither card comes back and
 nothing is announced. A second thread hands back while its chat is held in
 a turn of its own, and its reply asks: the thread's card shows at once,
 and when the chat takes the handback after its turn it is the same card
-(same id, same wait, announced once), answered into the thread. A decision
+(same id, same wait, announced once, its Markdown read as plain words),
+answered into the thread. A decision
 line written `— recommend …` without the colon, with lines before it,
 keeps its pick and its lines, also after the restart below. Questions in
 a coding model's shapes keep their words: a plain question with a file

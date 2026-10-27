@@ -195,6 +195,41 @@ test('browser half: with notifications not running, the header offers Notificati
     }
 });
 
+test('browser half: once the page had to say why it cannot work, a test\'s line and a failed action are not said again when it comes back', async (t) => {
+    const { react, mount } = statefulReact();
+    const { client } = loadClient(CLIENT, { react });
+    const { kit, DecisionsPage } = client.internals;
+    let up = true;
+    const state = { ...base, waiting: [CARDS.decision], mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 0 } };
+    kit.setConnection({ rpc: { call: async (_path, method) => {
+        // DSH's gateway answers 404 for a plugin that is not running.
+        if (!up) throw new Error('404 Not Found');
+        if (method === 'dsh-plugin-decisions/state') return { ok: true, value: state };
+        if (method === 'dsh-plugin-decisions/testMirror') return { ok: true, value: { place: 'hooks.example.com' } };
+        return new Promise(() => {});
+    } } });
+    const page = mount(DecisionsPage, { decisions: {} });
+    t.after(() => { page.unmount(); kit.setConnection(undefined); });
+    const button = (label) => elementsOf(page.tree).find((e) => e.type === 'Button' && textIn(e) === label);
+    const drawn = async () => { await settle(); await settle(); page.update({}); return textIn(page.tree); };
+    await drawn();
+    button('Send a test').props.onClick();
+    assert.match(await drawn(), /Test message sent to hooks\.example\.com\./);
+    // Decisions stops: a dismiss fails, and the page says why it cannot work.
+    up = false;
+    button('Dismiss').props.onClick();
+    assert.match(await drawn(), /which is not running\.|Decisions is not running\./);
+    assert.ok(elementsOf(page.tree).some((e) => e.props?.['data-suite-trouble'] !== undefined), 'the page says why it cannot work');
+    // It runs again: the page comes back as it is now, with neither line from before.
+    up = true;
+    button('Check again').props.onClick();
+    const back = await drawn();
+    assert.match(back, /Drop the old tables\?/);
+    assert.doesNotMatch(back, /Test message sent/, 'it said so before the page went down');
+    assert.doesNotMatch(back, /Not done/, 'the dismiss that failed while it was down');
+    assert.equal(elementsOf(page.tree).find((e) => e.props?.['data-decisions-test-said'] !== undefined)?.props['data-decisions-test-said'], '', 'its live region stays, empty');
+});
+
 test('browser half: the answer box is one line until you start answering, and what your last answer did stays true', () => {
     const { react, mount } = statefulReact();
     const { client } = loadClient(CLIENT, { react });
