@@ -11,9 +11,9 @@ What it does for this stack: it lets work on local models run unattended, driven
 - The API listens on a **Unix socket only**. It opens no TCP port.
 - The socket's folder is mode `700` and the socket mode `600`, so only your user can connect. The bridge will not put its socket in a shared folder (your home folder, a sticky one such as `/tmp`, or another user's): it would have to close that folder to everyone else, so it says so and does not listen.
 - Anyone who can connect has full control of DSH sessions, including their tools. Do not forward the socket to a network.
-- The log records actions and sizes (for example `prompt <id> mode=followup chars=812 request=<id>`), never a prompt's text or a title (a rename is logged as `chars=<n>`). It is mode `600`, even if it was there before with wider rights, and a symlink at its path is never written through. An error line holds the error's own message, cut at 300 characters. Request ids are logged as you give them, so keep secrets out of them.
+- The log records actions and sizes (for example `prompt <id> mode=followup chars=812 request=<id>`), never a prompt's text or a title (a rename is logged as `chars=<n>`). It is mode `600`, even if it was there before with wider rights, and a symlink at its path is never written through. An error line holds the error's own message, cut at 300 characters. Request ids are logged as you give them, so keep secrets out of them. A log that cannot be written (a folder that cannot be made, no write access, a symlink) never stops the bridge, and is never silent: `GET /health` names it in `problems` while it lasts, and DSH's logger says it once.
 - Which session each create's request id made is kept beside the socket, in `creates.jsonl` (mode `600`; request ids, session ids and folders, never a text or a title; the last 5000).
-- The bridge never takes over a socket another program answers on (another DSH, or a second row of this plugin), and never deletes a file at the socket path that is not a socket. A socket left by a crash, which nobody answers on, is replaced.
+- The bridge never takes over a socket another program answers on (another DSH, or a second row of this plugin), and never deletes a file at the socket path that is not a socket. A socket left by a crash, which nobody answers on, is replaced. The log says what it changed: a folder it made, a folder it closed to `700` (with the mode it had; it stays `700`), an old socket it replaced.
 
 The tests prove each of these: `test/session-bridge.test.js` the modes, the refusals and the log, and the real-DSH test the same in a running DSH, plus the TCP ports (DSH listens on the same ones with the bridge on as off: only its window's).
 
@@ -31,12 +31,13 @@ Install the plugin as in the [root README](../../README.md#install-a-plugin). It
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `enabled` | `true` or `false` | `true` | `false`: nothing listens, and the bridge writes nothing (the Plugins page still lists it as on; switch it off there to have DSH show it off). |
 | `socketPath` | a full path (`/…` or `~/…`), at most 103 bytes | `<DSH data folder>/session-bridge/bridge.sock` | The Unix socket. Its folder is made, or closed, to mode 700: give the socket a folder of its own. |
 | `logFile` | a full path, or `""` | `<DSH data folder>/session-bridge/bridge.log` | The action log, mode 600; `""` for none. Past 5 MB it starts again and keeps the last part as `<logFile>.1`. |
 | `maxBodyBytes` | a whole number, 1024 to 67108864 | `1048576` | The largest request body taken; a larger one gets a 413. |
 
 A wrong value never stops the bridge. That setting keeps its default, and the problem is said in words in `GET /health` (`problems`) and in the bridge's log (`setting: …`). The bridge also hands it to DSH's logger, which may keep it in memory only, so read the bridge's log. A key the bridge does not have (a typo such as `socketpath`) is named the same way.
+
+`enabled` is no longer a setting (it was until 0.3.0): DSH's own switch in Plugins turns the bridge off, and DSH then shows it Off, where `enabled: false` left it reading "Running". A row that still has the key is named in `problems`; one that says `enabled: false` is never taken as on: the bridge does not start (see [When the bridge does not listen](#when-the-bridge-does-not-listen)).
 
 DSH applies a saved change to the row at once: the bridge stops, and starts again with the new settings.
 
@@ -44,8 +45,8 @@ In DSH Test, `dsh-test load <this folder>` keeps the test home's own socket and 
 
 ## Switch it off, roll it back
 
-- To switch it off, turn **Session Bridge** off on DSH's Plugins page, or set `enabled: false` in its row. Its socket file goes away, so scripts that use it (`dsh-test prompt`, for one) get "no such file" (`ENOENT`) until it is on again. To remove it, see [Remove a plugin](../../README.md#remove-a-plugin).
-- To roll back, check out the earlier version of `plugins/session-bridge` in your clone (`git log -- plugins/session-bridge` lists them) and restart DSH. For the same request, 0.3.0 answers with the same fields as 0.1.0 and 0.2.0 (some replies have more), except for input they let through or guessed at, which 0.3.0 refuses in words: see [What changed](#what-changed). An older version ignores `creates.jsonl`, and reads an unfinished prompt as `answered`.
+- To switch it off, turn **Session Bridge** off on DSH's Plugins page; DSH then shows it Off. Its socket file goes away, so scripts that use it (`dsh-test prompt`, for one) get "no such file" (`ENOENT`) until it is on again. To remove it, see [Remove a plugin](../../README.md#remove-a-plugin).
+- To roll back, check out the earlier version of `plugins/session-bridge` in your clone (`git log -- plugins/session-bridge` lists them) and restart DSH. For the same request, 0.4.0 answers with the same fields as 0.1.0, 0.2.0 and 0.3.0 (some replies have more), except for input they let through or guessed at, which 0.4.0 refuses in words: see [What changed](#what-changed). An older version ignores `creates.jsonl`; 0.3.0 reads a prompt whose turn DSH tore down as `answered`, and older ones every unfinished prompt.
 
 ## API
 
@@ -72,8 +73,8 @@ All requests and replies are JSON. An error comes back as `{"error": {"code", "m
 - With a `requestId`, a create is safe to retry, after a timeout or a DSH restart: the same id makes one session. A retry answers with that session and `alreadyCreated: true`, and does only the steps the first try did not finish (a model or title DSH does not have yet; the prompt, unless DSH already has it, when `prompt.alreadySent` is `true`). Retries that overlap run one after another, also when a settings change starts the bridge again while the first is on its way. The same id for another folder is a 409 (`request/conflict`); one whose session DSH no longer has is a 409 (`request/session-gone`): use a new id for a new session.
 - `status` is `running` or `idle` for a session open in DSH, and `cold` for one DSH has not opened since it started.
 - `followup` (the default) queues the text for after the running turn; `steer` sends it into the running turn at its next step. With no turn running, either one starts a turn.
-- `cancel` stops the running turn. On a session DSH has not opened since it started, there is no turn to stop: a 409, `session/not-running`.
-- Events: `after` is the last `seq` you have (default -1, the start); `limit` is 1 to 2000 (default 200; more reads as 2000), and `more` says there are more; each text is cut at 4000 characters unless `full=1`; `types` keeps only those event types.
+- `cancel` stops the running turn. With no turn running (the session is idle, or DSH has not opened it since it started) there is nothing to stop: a 409, `session/not-running`, and DSH is not asked.
+- Events: `after` is the last `seq` you have (default -1, the start); `limit` is 1 to 2000 (default 200; more reads as 2000), and `more` says there are more; each text is cut at 4000 characters unless `full=1`; `types` keeps only those event types. A reply DSH cut off in the middle (its turn was stopped or torn down while it was written) carries `interrupted: true`, here, in `lastAssistant` and in a prompt's `reply`: its text is only the part that came.
 - Each `user/message` event carries its `source`: `{kind: "user", …}` for the user or this bridge (a bridge prompt carries its request id as `rpcId`, and an attempt sent again after a cut-off turn `<requestId>~2`), `{kind: "agent-message", senderSessionId}` for a message from another session, and a plugin's own kind for a plugin's note.
 
 ### What became of a prompt
@@ -85,17 +86,17 @@ Every prompt has a request id: yours (`requestId`: 1 to 128 letters, digits or `
 | `waiting` | Not in the session's log yet: on its way into DSH. |
 | `queued` | In DSH's queue; `target` is `next-turn` (a followup) or `next-step` (a steer). |
 | `read` | A turn took it and is still running. |
-| `answered` | The turn that read it finished (`end.kind` `completed`) or was stopped on purpose (`aborted`, by a cancel or in the window). `reply` is the turn's last reply after it (`{seq, text}`, or `null`). |
-| `unfinished` | The turn that read it ended without finishing it: DSH stopped or crashed under it (`end.kind` `interrupted`), or it failed (`error`). `reply` holds any reply it gave first. Send it again with the same request id to have it done. |
-| `dropped` | It left DSH's queue but never reached the log: DSH stopped mid-step before it saved the message (`end.kind` is then `interrupted`), or someone took it out of the queue (`removed: true`). Send it again with the same request id. |
+| `answered` | The turn that read it ended by itself (`end.kind` `completed`; `max-tokens`, at its token limit; `blocked`, a plugin's check refused it) or was stopped on purpose (`aborted`, with `end.reason.kind` `user`: a cancel or the window's stop; `parent`: the session above it stopped; `hook`: a plugin stopped it). `reply` is the turn's last reply after it (`{seq, text}`, with `interrupted: true` when the stop cut it off; or `null`). |
+| `unfinished` | The turn that read it ended without finishing it: DSH stopped or crashed under it (`interrupted`); DSH tore the session's agent down under it, as when a plugin or setting is loaded again (`aborted` with `end.reason.kind` `disposed`), or stopped it because the DeepSeek account signed out (`hook`, `deepseek-account/signed-out`); it failed (`error`); or it ended in a way this version does not know. `reply` holds any reply it gave first (`interrupted: true` when cut off), never as the answer. Send it again with the same request id to have it done. |
+| `dropped` | It left DSH's queue but never reached the log: DSH stopped mid-step before it saved the message (`end.kind` is then `interrupted`), or it was taken out of the queue (`removed: true`), in the window or by DSH clearing the queue as it tore the agent down. Send it again with the same request id. |
 
-With `wait=<seconds>` (0 to 600), the answer comes when the state is `answered`, `unfinished` or `dropped`, or when the wait runs out (`timedOut: true`). A request id that is not in the session's log, and that the bridge has not sent to that session since DSH started, is a 404 (`request/not-found`).
+With `wait=<seconds>` (0 to 600; more reads as 600), the answer comes when the state is `answered`, `unfinished` or `dropped`, or when the wait runs out (`timedOut: true`). A request id that is not in the session's log, and that the bridge has not sent to that session since DSH started, is a 404 (`request/not-found`).
 
-A retry with your own `requestId` is safe. If DSH already has that message (`queued`, `read` or `answered`), or the bridge is still handing it over, it is not sent again, and the reply says `alreadySent: true` with its `state`. A `dropped` one is sent again. An `unfinished` one is sent once more as the next attempt (`attempt: 2`, `resent: true`): DSH takes each message id once per session, so the bridge gives that attempt the id `<requestId>~2` (then `~3`), and reads it back under your id. The turn it cut off may have done part of the work (its tool calls are in the session's log); the new attempt asks again from where the session is. `GET …/requests/<requestId>` follows the newest attempt and names it in `attempt` when it is not the first.
+A retry with your own `requestId` is safe. If DSH already has that message (`queued`, `read` or `answered`), or the bridge is still handing it over, it is not sent again, and the reply says `alreadySent: true` with its `state`. A retry whose text differs from the one DSH has (or the one on its way) is a 409 (`request/conflict`, with its `state`): it would not be sent, so the bridge says so instead of dropping it; use a new request id for another prompt. A `dropped` one is sent again. An `unfinished` one is sent once more as the next attempt (`attempt: 2`, `resent: true`), with the text you give now: DSH takes each message id once per session, so the bridge gives that attempt the id `<requestId>~2` (then `~3`), and reads it back under your id. The turn it cut off may have done part of the work (its tool calls are in the session's log); the new attempt asks again from where the session is. `GET …/requests/<requestId>` follows the newest attempt and names it in `attempt` when it is not the first. A failure that lasts (a turn that ends in `error` each time) gives a new attempt for each retry: cap your retries by `attempt`.
 
 ### Waiting without polling
 
-`wait=<seconds>` (0 to 600) on `events` answers as soon as the session has an event after `after` (of `types`, when given), or with an empty page and `timedOut: true` when the wait runs out. DSH's own session events wake a waiting request; the bridge does not poll. A caller that hangs up ends its wait. When the bridge stops (a settings change, switched off), every wait is answered at once with what it has, `timedOut: true` and `stopped: true`. When DSH itself quits, a wait in flight gets no answer: the connection closes. Ask again when DSH is back.
+`wait=<seconds>` (0 to 600; more reads as 600) on `events` answers as soon as the session has an event after `after` (of `types`, when given), or with an empty page and `timedOut: true` when the wait runs out. DSH's own session events wake a waiting request; the bridge does not poll. A caller that hangs up ends its wait. When the bridge stops (a settings change, switched off), every wait is answered at once with what it has, `timedOut: true` and `stopped: true`. When DSH itself quits, a wait in flight gets no answer: the connection closes. Ask again when DSH is back.
 
 ### Status codes
 
@@ -104,7 +105,7 @@ A retry with your own `requestId` is safe. If DSH already has that message (`que
 | 400 | Bad input (`bad-request`, `bad-json`), refused before DSH is asked. |
 | 404 | An unknown path (`not-found`), workspace (`workspace/not-found`) or request id (`request/not-found`), or a session DSH says it does not have (`session/not-found`). |
 | 405 | A wrong method; the `Allow` header names the right ones. |
-| 409 | DSH refused, in its own words (for example `session/model-unavailable`); `session/not-running`; or a create's request id used for another folder (`request/conflict`) or whose session is gone (`request/session-gone`). |
+| 409 | DSH refused, in its own words (for example `session/model-unavailable`); `session/not-running` (no turn to cancel); a request id used again for another folder or another text (`request/conflict`); or a create's request id whose session is gone (`request/session-gone`). |
 | 413 | A body over `maxBodyBytes`. |
 | 500 | Anything else, such as `session/read-failed`: DSH could not read the session for another reason than "not found", so it may still be there; try again before you make a new one. |
 | 503 | The bridge is stopping. |
@@ -137,12 +138,15 @@ From another machine, run the same `curl` over SSH on the DSH machine. The socke
 
 ## When the bridge does not listen
 
-DSH shows the plugin as failed on its page in Plugins: its part reads "Problem", not "Running", and the count says "1 failed" (the list of plugins itself shows no mark; the plugin's start fails with `Session Bridge is not listening on <socket>: <why>`). The bridge's log has `not listening on <socket>: <why>`. Fix the cause, then switch Session Bridge off and on in Plugins, or restart DSH: DSH does not start a plugin that failed to start again when only its row is saved.
+DSH shows the plugin as failed on its page in Plugins: its part reads "Problem", not "Running", and the count says "1 failed" (the list of plugins itself shows no mark; the plugin's start fails with `Session Bridge is not listening on <socket>: <why>`). DSH's page has no place for a plugin's reason, so read it in the bridge's log (`<DSH data folder>/session-bridge/bridge.log` unless `logFile` says otherwise; `dsh-test logs` in DSH Test): `not listening on <socket>: <why>`.
+
+Fix the cause, then switch Session Bridge off and on in Plugins, or restart DSH: either always starts it again. Saving the fixed row starts it again only when that row differs from the last row that ran: DSH leaves a failed plugin as it is when its row comes back to the settings it last ran with (as when you undo the change that failed), and starts it when the row is new.
 
 - `another program answers on <socket>`: another DSH, or a second row of this plugin, has it. Give each DSH its own `socketPath`.
 - `<socket> is a file that is not a socket`: the bridge never deletes it. Move it, or choose another `socketPath`.
 - `its folder … is shared` or `… belongs to another user`: give the socket a folder of its own.
 - `the socket path is N bytes`: DSH's data folder is too deep for a socket path; set a shorter `socketPath`.
+- `its row says enabled: false`: `enabled` is no longer a setting, and a row that says off is never taken as on. To keep the bridge off, switch it off in Plugins (DSH then shows it Off); to have it listen, take `enabled` out of its row, then switch it off and on.
 
 ## Tests
 
@@ -151,10 +155,19 @@ npm test                               # from the repository root; test/session-
 node scripts/e2e.mjs session-bridge    # the real-DSH test, on every DSH under .e2e/ and the installed app's
 ```
 
-- `test/session-bridge.test.js` needs no DSH. It covers the settings in words; the session's log read as prompt states, from DSH's queue to the reply (unfinished after a cut-off turn, dropped when taken out of the queue, each attempt); the socket (700 and 600; a stale one replaced; a live one, a plain file, a shared folder, the home folder however it is spelt, a long path refused); the log (no prompt text or titles, 600, bytes, a new part past its size, a symlink never followed, a broken log path); and every route over a stand-in DSH, with its refusals, retries (a create retried while the first is on its way, while the bridge starts again, and after a restart; a prompt sent again after a cut-off turn), deadlines kept by the bridge, waits (one woken by an event that landed before it started) and errors.
+- `test/session-bridge.test.js` needs no DSH. It covers the settings in words (and the retired `enabled`: a row that says off is read as off and said, anything else is ignored and said); the session's log read as prompt states, from DSH's queue to the reply (each turn end and stop cause as the states table says; unfinished after a cut-off turn or one DSH tore down, never answered with the cut-off text, which is marked `interrupted`; dropped when taken out of the queue; each attempt); the socket (700 and 600; a stale one replaced and said in the log; a live one, a plain file, a shared folder, the home folder however it is spelt, a long path refused); the log (no prompt text or titles, 600, bytes, a new part past its size, a symlink never followed; one that cannot be written said in `GET /health` and once in DSH's logger, until it can be written again); and every route over a stand-in DSH, with its refusals (among them a cancel with no turn running and a retry with another text), retries (a create retried while the first is on its way, while the bridge starts again, and after a restart; a prompt sent again after a cut-off or torn-down turn), deadlines kept by the bridge, waits (one woken by an event that landed before it started) and errors.
 - `plugins/session-bridge/test/e2e/run.mjs` runs a real DSH in a throwaway home, with a scripted model. It checks the security claims (modes, no TCP port of its own, no text in the log); a session made with a model, a title and a prompt, answered and found in its log; a create retried with its request id (one session, one message, the record 600); a steer into a running turn, a followup after it and a steer with nothing running; cancel, rename, a model and DSH's refusals; refusals in words; waits; a restart under a running turn (its prompt reads as the log on disk says, `dropped` or `unfinished`, and is sent again once) and a restart after DSH saved the prompt (`unfinished`, sent once more as attempt 2, answered, both attempts on disk once each); a crash (the stale socket replaced); settings changed while DSH runs, wrong ones too, `enabled: false` and back, and a socket another program holds (refused, shown as failed in Plugins, still failed after the row is fixed, running again once switched off and on); its Plugins page title, sentence and icon; switching it off and on in Plugins; and in a real window, the bridged session in the list and a prompt through the bridge showing live in the open chat, with pictures light and dark, wide and at 760 px, under `.e2e/shots/session-bridge/<DSH version>/`. `NO_WINDOW=1` skips the window, `KEEP=1` keeps the throwaway home, and `--dsh <version>` runs one DSH only.
 
 ## What changed
+
+### 0.4.0
+
+- A prompt whose turn DSH tore down (`aborted` with reason `disposed`, as when a plugin or setting is loaded again under it) or stopped at a sign-out is `unfinished`, and a retry sends it once more; 0.3.0 read every `aborted` turn as `answered`, gave its cut-off text as the reply, and never sent it again. An end the bridge does not know is `unfinished` too.
+- A reply DSH cut off carries `interrupted: true` (in a prompt's `reply`, `lastAssistant` and the events page).
+- A retry with a request id DSH already has but another text is a 409 (`request/conflict`); 0.3.0 answered `alreadySent` and dropped the new text.
+- `cancel` with no turn running is a 409 (`session/not-running`); 0.3.0 passed it to DSH, which answered `accepted` and stopped nothing.
+- A log that cannot be written is said in `GET /health` and once in DSH's logger; 0.3.0 said nothing. The log also says which folder the bridge made or closed to 700, and which old socket it replaced.
+- `enabled` is no longer a setting: DSH's switch in Plugins does its job and shows the bridge Off. A row that says `enabled: false` fails the start, with the reason, so the bridge is never listed as "Running" while nothing listens.
 
 ### 0.3.0
 

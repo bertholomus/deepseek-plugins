@@ -5,13 +5,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
     BridgeError, CREATES_FILE, EVENTS_LIMIT_MAX, LOG_MAX_BYTES, MAX_BODY_DEFAULT, MAX_BODY_RANGE, PROMPT_MS, READ_MS, SOCKET_PATH_MAX, WAIT_MAX_SECONDS, answers, attemptOf,
-    checkSettings, codeOf, createBridge, createsRecord, expandHome, isNotFound, lastAssistantText, prepareSocket, requestState, rpcIdFor, sessionSummary, statusFor, summarize, withDeadline,
+    checkSettings, codeOf, createBridge, createsRecord, endState, expandHome, isNotFound, lastAssistantText, prepareSocket, requestState, rpcIdFor, sentText, sessionSummary, statusFor, summarize, withDeadline,
 } from '../plugins/session-bridge/lib/bridge.js';
 import { OTHER_NAMES } from './helpers/client.mjs';
 import { tempDir } from './helpers/temp.mjs';
@@ -32,9 +32,9 @@ test('settings: nothing set gives the defaults in DSH\'s data folder, and no pro
 });
 
 test('settings: good values are taken; ~/ is the home folder; "" turns the log off', () => {
-    const { values, problems } = checkSettings({ enabled: false, socketPath: '~/b/bridge.sock', logFile: '', maxBodyBytes: 4096 }, DEFAULTS);
+    const { values, problems } = checkSettings({ socketPath: '~/b/bridge.sock', logFile: '', maxBodyBytes: 4096 }, DEFAULTS);
     assert.deepEqual(problems, []);
-    assert.equal(values.enabled, false);
+    assert.equal(values.enabled, true);
     assert.equal(values.socketPath, join(homedir(), 'b', 'bridge.sock'));
     assert.equal(values.logFile, '');
     assert.equal(values.maxBodyBytes, 4096);
@@ -46,19 +46,35 @@ test('settings: a wrong value never stops the bridge: that setting keeps its def
     const { values, problems } = checkSettings({ enabled: 'maybe', socketPath: 42, logFile: 'relative.log', maxBodyBytes: '1MB', socketpath: '/x' }, DEFAULTS);
     assert.deepEqual(values, { enabled: true, socketPath: DEFAULTS.socketPath, logFile: DEFAULTS.logFile, maxBodyBytes: MAX_BODY_DEFAULT });
     assert.equal(problems.length, 5, problems.join('\n'));
-    assert.match(problems[0], /^enabled must be true or false, not "maybe"; the bridge stays on\.$/);
+    assert.match(problems[0], /^enabled is no longer a setting of the session bridge and is ignored \(it was "maybe"\); the bridge is on\. Take it out of its row: its switch in Plugins turns the bridge off and on\.$/);
     assert.match(problems[1], /^socketPath must be a file path, not 42; the bridge uses \/home\/x\/\.data\/session-bridge\/bridge\.sock\.$/);
     assert.match(problems[2], /^logFile must be a full path \(starting with \/ or ~\/\), not "relative\.log"; the bridge logs to /);
     assert.match(problems[3], /^maxBodyBytes must be a whole number of bytes from 1024 to 67108864, not "1MB"; the bridge takes up to 1048576\.$/);
-    assert.match(problems[4], /^socketpath is not a setting of the session bridge and is ignored \(its settings: enabled, socketPath, logFile, maxBodyBytes\)\.$/);
+    assert.match(problems[4], /^socketpath is not a setting of the session bridge and is ignored \(its settings: socketPath, logFile, maxBodyBytes\)\.$/);
 });
 
-test('settings: enabled written as a word is read, and said; a socket path the system cannot take is refused', () => {
-    let r = checkSettings({ enabled: 'false' }, DEFAULTS);
-    assert.equal(r.values.enabled, false);
-    assert.match(r.problems[0], /^enabled is "false"; read as false\. Write it as true or false, without quotes\.$/);
-    r = checkSettings({ enabled: 0 }, DEFAULTS);
-    assert.equal(r.values.enabled, false);
+test('settings: enabled is no longer a setting (DSH\'s switch in Plugins is): a row that says off keeps the bridge from starting, and is said; on is ignored, and said', () => {
+    // An off DSH lists as "Running" is the wrong word, so the switch is DSH's own; a row that still says off is never taken as on.
+    for (const off of [false, 'false', 0, 'off', 'No']) {
+        const r = checkSettings({ enabled: off }, DEFAULTS);
+        assert.equal(r.values.enabled, false, JSON.stringify(off));
+        assert.equal(r.problems.length, 1);
+        assert.match(r.problems[0], /^enabled is no longer a setting of the session bridge, and while its row says enabled: \S+ the bridge does not start\. To switch it off, use its switch in Plugins \(DSH then shows it Off\); to have it listen, take enabled out of its row and switch it off and on in Plugins\.$/);
+    }
+    for (const on of [true, 'yes', 1]) {
+        const r = checkSettings({ enabled: on }, DEFAULTS);
+        assert.equal(r.values.enabled, true, JSON.stringify(on));
+        assert.match(r.problems[0], /^enabled is no longer a setting of the session bridge and is ignored/);
+    }
+    // A row without it has no problem: the key has no default any more.
+    assert.deepEqual(checkSettings({ enabled: undefined }, DEFAULTS).problems, []);
+    const index = readFileSync(join(PLUGIN_DIR, 'lib', 'index.js'), 'utf8');
+    assert.doesNotMatch(index, /enabled: z\.any\(\)\.default/, 'no default, or every row would read as having it');
+    assert.match(index, /if \(!settings\.values\.enabled\) \{[\s\S]*?throw new Error\(`Session Bridge is not listening: \$\{why\}/, 'off in its row: the start fails with the reason, so DSH never shows it Running');
+});
+
+test('settings: a socket path the system cannot take is refused', () => {
+    let r;
     const long = `/tmp/${'x'.repeat(SOCKET_PATH_MAX)}/bridge.sock`;
     r = checkSettings({ socketPath: long }, DEFAULTS);
     assert.equal(r.values.socketPath, DEFAULTS.socketPath);
@@ -303,16 +319,21 @@ test('socket: owner only: its folder is made 700 and the socket 600; the log is 
     assert.equal(modeOf(sock), 0o600);
     assert.ok(statSync(sock).isSocket());
     assert.equal(modeOf(logFile), 0o600);
-    assert.match(readFileSync(logFile, 'utf8'), /^an older line\n\S+ listening \S+bridge\.sock pid=\d+\n$/);
+    // The folder it closed is said, with the mode it had.
+    assert.match(readFileSync(logFile, 'utf8'), /^an older line\n\S+ closed \S+\/sock to mode 700 for the socket \(it was 755\); it stays 700\n\S+ listening \S+bridge\.sock pid=\d+\n$/);
     const health = await call(sock, 'GET', '/health');
     assert.deepEqual({ ...health.body, pid: 0 }, { ok: true, plugin: 'session-bridge', version: '9.9.9', pid: 0, socket: sock, problems: [] });
 });
 
-test('socket: a folder that does not exist yet is made 700, parents too', async (t) => {
+test('socket: a folder that does not exist yet is made 700, parents too, and the log says which folders it made', async (t) => {
     const folder = tempDir('sb');
-    const { ok } = await bridgeOn(t, { folder, raw: { socketPath: join(folder, 'a', 'b', 'bridge.sock') } });
+    const logFile = join(folder, 'logs', 'bridge.log');
+    const { ok } = await bridgeOn(t, { folder, raw: { socketPath: join(folder, 'a', 'b', 'bridge.sock'), logFile } });
     assert.equal(ok, true);
     assert.equal(modeOf(join(folder, 'a', 'b')), 0o700);
+    assert.equal(modeOf(join(folder, 'logs')), 0o700);
+    // Each folder the bridge made is said once: the log's own first, as its first line goes in.
+    assert.match(readFileSync(logFile, 'utf8'), /^\S+ made \S+\/logs \(mode 700\) for the log\n\S+ made \S+\/a\/b \(mode 700\) for the socket\n\S+ listening /);
 });
 
 test('socket: a socket left by a crash (nobody answers) is replaced; a live one is never taken over', async (t) => {
@@ -330,6 +351,7 @@ test('socket: a socket left by a crash (nobody answers) is replaced; a live one 
     const first = await bridgeOn(t, { folder });
     assert.equal(first.ok, true, 'the stale socket was replaced');
     assert.equal((await call(sock, 'GET', '/health')).body.ok, true);
+    assert.match(readFileSync(join(dir, 'bridge.log'), 'utf8'), /replaced the old socket \S+bridge\.sock, which nobody answered on\n/, 'and its log says so');
     // A second bridge on the same socket (another DSH, a second row) leaves the live one alone.
     const second = await bridgeOn(t, { folder });
     assert.equal(second.ok, false);
@@ -392,6 +414,7 @@ test('log: actions and sizes only: a prompt\'s text and a title never reach it; 
     const made = await call(sock, 'POST', '/sessions', { workspacePath: ws, title: TITLE, text: `${SECRET} one`, provider: 'p', model: 'm', reasoningEffort: 'high' });
     assert.equal(made.status, 200, made.text);
     const id = made.body.sessionId;
+    dsh.sessions.get(id).agent.status = 'running';
     await call(sock, 'POST', `/sessions/${id}/prompt`, { text: `${SECRET} two`, mode: 'steer' });
     await call(sock, 'POST', `/sessions/${id}/rename`, { title: TITLE });
     await call(sock, 'POST', `/sessions/${id}/cancel`, {});
@@ -418,16 +441,32 @@ test('log: actions and sizes only: a prompt\'s text and a title never reach it; 
     assert.deepEqual(files, ['bridge.log', 'bridge.log.1', 'bridge.sock']);
 });
 
-test('log: "" writes no log at all; a log that cannot be written never stops the bridge', async (t) => {
+test('log: "" writes no log at all; a log that cannot be written never stops the bridge, and is said in GET /health and once in DSH\'s log', async (t) => {
     const folder = tempDir('sb');
     const off = await bridgeOn(t, { folder, raw: { logFile: '' } });
     assert.equal(off.ok, true);
     assert.deepEqual(readdirSync(join(folder, 'sock')), ['bridge.sock']);
+    assert.deepEqual((await call(off.sock, 'GET', '/health')).body.problems, [], 'no log asked for: nothing to say');
     const folder2 = tempDir('sb');
     writeFileSync(join(folder2, 'not-a-folder'), '');
-    const broken = await bridgeOn(t, { folder: folder2, raw: { logFile: join(folder2, 'not-a-folder', 'x.log') } });
+    const logFile = join(folder2, 'not-a-folder', 'x.log');
+    const broken = await bridgeOn(t, { folder: folder2, raw: { logFile } });
     assert.equal(broken.ok, true);
-    assert.equal((await call(broken.sock, 'GET', '/health')).status, 200);
+    // Known from the bridge's first line (at its start), before any request.
+    const health = await call(broken.sock, 'GET', '/health');
+    assert.equal(health.status, 200);
+    assert.equal(health.body.problems.length, 1, health.text);
+    // The reason in words; the code is ENOTDIR or EEXIST, as the system says it.
+    assert.equal(health.body.problems[0].replace(/\((ENOTDIR|EEXIST): /, '(CODE: '), `logFile ${logFile} cannot be written (CODE: a part of its path is a file, not a folder), so the bridge's actions are not logged. Give logFile a folder you can write to, or "" for no log.`);
+    for (let i = 0; i < 3; i++) await call(broken.sock, 'POST', '/sessions', { workspacePath: folder2 });
+    assert.equal(broken.lines.filter(([level, , problem]) => level === 'warn' && /^logFile .* cannot be written/.test(problem)).length, 1, 'DSH\'s log says it once, not for every line');
+    // Writable again (the folder is there now): the next line goes in, and the problem is gone.
+    rmSync(join(folder2, 'not-a-folder'));
+    mkdirSync(join(folder2, 'not-a-folder'));
+    await call(broken.sock, 'POST', '/sessions', { workspacePath: folder2 });
+    assert.match(readFileSync(logFile, 'utf8'), /create session-4 /);
+    assert.deepEqual((await call(broken.sock, 'GET', '/health')).body.problems, []);
+    assert.ok(broken.lines.some(([level, words]) => level === 'info' && /is written again/.test(words)));
 });
 
 // ── The API over the stand-in ─────────────────────────────────────────
@@ -536,6 +575,13 @@ test('api: prompts: followup and steer; a wrong mode or no text is refused; an u
     assert.equal((await call(sock, 'POST', `/sessions/${id}/rename`, {})).status, 400);
     assert.equal((await call(sock, 'POST', `/sessions/${id}/rename`, { title: 'x'.repeat(501) })).status, 400);
     assert.equal((await call(sock, 'POST', `/sessions/${id}/model`, { provider: 'p' })).status, 400);
+    // Open but idle: no turn to stop, said so (DSH itself would answer "accepted" and stop nothing).
+    const calls = dsh.calls.length;
+    const idle = await call(sock, 'POST', `/sessions/${id}/cancel`);
+    assert.equal(idle.status, 409);
+    assert.deepEqual(idle.body.error, { code: 'session/not-running', message: `Session ${id} has no turn running, so there is nothing to cancel.` });
+    assert.equal(dsh.calls.length, calls, 'DSH was not asked');
+    dsh.sessions.get(id).agent.status = 'running';
     assert.deepEqual((await call(sock, 'POST', `/sessions/${id}/cancel`)).body, { accepted: true });
     // A session that is not open in DSH has no turn to cancel: said so, not "not found".
     dsh.sessions.get(id).agent = undefined;
@@ -734,13 +780,30 @@ test('api: DSH too slow, or failing, is said as such and never stops the bridge'
 
 // ── Round 2: retried creates, cut-off turns, deadlines, read errors ──
 
-test('log: a turn cut off after DSH saved the message (interrupted) or that failed (error) leaves it unfinished; an aborted one is answered', () => {
+test('log: a turn cut off after DSH saved the message (interrupted) or that failed (error) leaves it unfinished; one stopped on purpose is answered, one DSH tore down is not', () => {
     const base = [ev(1, 'turn/start', { turn: 1 }), ev(2, 'user/message', asked('job', 'j1'))];
-    const ended = (kind, extra = []) => [...base, ...extra, ev(9, 'turn/end', { turn: 1, reason: { kind } })];
+    const endedBy = (reason, extra = []) => [...base, ...extra, ev(9, 'turn/end', { turn: 1, reason })];
+    const ended = (kind, extra = []) => endedBy({ kind }, extra);
     assert.deepEqual(requestState(ended('interrupted'), 'j1'), { requestId: 'j1', state: 'unfinished', seq: 2, turn: 1, end: { seq: 9, kind: 'interrupted' }, reply: null });
     assert.equal(requestState(ended('error'), 'j1').state, 'unfinished');
     assert.equal(requestState(ended('interrupted', [ev(3, 'assistant/message', said('Half way'))]), 'j1').reply.text, 'Half way', 'a reply it gave before the cut is kept');
-    assert.equal(requestState(ended('aborted'), 'j1').state, 'answered', 'stopped on purpose is not resent');
+    // DSH's cancel causes, as dsh-agent-loop records them: a person (user), the session above it (parent), a plugin (hook), and DSH itself (disposed).
+    const aborted = (by) => endedBy({ kind: 'aborted', reason: by }, [ev(3, 'assistant/message', { ...said('Work'), interrupted: true })]);
+    for (const by of [{ kind: 'user' }, { kind: 'parent' }, { kind: 'hook', reason: 'budget' }]) {
+        assert.equal(requestState(aborted(by), 'j1').state, 'answered', `stopped on purpose (${by.kind}) is not resent`);
+    }
+    const torn = requestState(aborted({ kind: 'disposed' }), 'j1');
+    assert.deepEqual(torn, { requestId: 'j1', state: 'unfinished', seq: 2, turn: 1, end: { seq: 9, kind: 'aborted', reason: { kind: 'disposed' } }, reply: { seq: 3, text: 'Work', interrupted: true } },
+        'a turn DSH tore down (a plugin or setting loaded again under it) is unfinished, and its cut-off reply says so');
+    assert.equal(requestState(aborted({ kind: 'hook', reason: 'deepseek-account/signed-out' }), 'j1').state, 'unfinished', 'stopped because the account signed out: not done');
+    assert.equal(requestState(aborted({ kind: 'user' }), 'j1').reply.interrupted, true, 'a reply cut where a person stopped the turn says so');
+    // Ends of the turn's own are answered; an end the bridge does not know is never taken as done.
+    for (const kind of ['completed', 'max-tokens', 'blocked']) assert.equal(requestState(ended(kind), 'j1').state, 'answered', kind);
+    for (const reason of [{ kind: 'aborted' }, { kind: 'aborted', reason: { kind: 'later-cause' } }, { kind: 'paused' }, 'odd']) {
+        assert.equal(requestState(endedBy(reason), 'j1').state, 'unfinished', JSON.stringify(reason));
+    }
+    assert.equal(endState({ kind: 'completed' }), 'answered');
+    assert.equal(endState(undefined), 'unfinished');
     assert.equal(requestState(ended('completed'), 'j1').state, 'answered');
     // Sent again as the next attempt: the newest attempt counts, and says which it is.
     const again = [...ended('interrupted'), ev(10, 'turn/start', { turn: 2 }), ev(11, 'user/message', asked('job', 'j1~2')), ev(12, 'assistant/message', said('Done')), ev(13, 'turn/end', { turn: 2, reason: { kind: 'completed' } })];
@@ -1023,9 +1086,91 @@ test('log: its size counts bytes; a symlink at its path is never written through
     symlinkSync(target, join(folder2, 'sock', 'bridge.log'));
     const linked = await bridgeOn(t, { folder: folder2 });
     assert.equal(linked.ok, true, 'the bridge still listens');
-    await call(linked.sock, 'GET', '/health');
+    const health = (await call(linked.sock, 'GET', '/health')).body;
     assert.equal(readFileSync(target, 'utf8'), 'keep\n', 'nothing written through the link');
     assert.ok(lstatSync(join(folder2, 'sock', 'bridge.log')).isSymbolicLink());
+    assert.match(health.problems[0] ?? '', /^logFile \S+bridge\.log cannot be written \(ELOOP: it is a symlink, which the bridge never writes through\), so the bridge's actions are not logged\./, 'and it says so');
+});
+
+// ── Pass 2: a turn DSH tears down, a retry with another text ──────────
+
+test('api: a prompt whose turn DSH tore down (aborted, disposed) is unfinished, never answered with the cut-off text, and a retry sends it once more', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t);
+    const id = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Rebuild the index.', requestId: 'rebuild-1' });
+    dsh.push(id, 'turn/start', { turn: 1 });
+    dsh.push(id, 'user/message', asked('Rebuild the index.', 'rebuild-1'));
+    const waiting = call(sock, 'GET', `/sessions/${id}/requests/rebuild-1?wait=30`);
+    await sleep(50);
+    // DSH saves the stream it cut as an interrupted message, then ends the turn: the agent loop's row was changed under it.
+    dsh.push(id, 'assistant/message', { ...said('Working'), interrupted: true });
+    dsh.push(id, 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'disposed' } } });
+    const cut = (await waiting).body;
+    assert.deepEqual({ state: cut.state, end: cut.end, reply: cut.reply, timedOut: cut.timedOut },
+        { state: 'unfinished', end: { seq: 3, kind: 'aborted', reason: { kind: 'disposed' } }, reply: { seq: 2, text: 'Working', interrupted: true }, timedOut: false });
+    const events = (await call(sock, 'GET', `/sessions/${id}/events?types=assistant/message`)).body.events;
+    assert.equal(events[0].interrupted, true, 'the events route marks the cut-off reply too');
+    const again = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Rebuild the index.', requestId: 'rebuild-1' })).body;
+    assert.deepEqual(again, { accepted: true, mode: 'followup', requestId: 'rebuild-1', chars: 18, attempt: 2, resent: true });
+    assert.equal(dsh.calls.at(-1)[1].requestId, 'rebuild-1~2');
+    // Stopped by a person instead: answered, never sent again.
+    const id2 = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    await call(sock, 'POST', `/sessions/${id2}/prompt`, { text: 'Rebuild.', requestId: 'rebuild-2' });
+    dsh.push(id2, 'turn/start', { turn: 1 });
+    dsh.push(id2, 'user/message', asked('Rebuild.', 'rebuild-2'));
+    dsh.push(id2, 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } });
+    const stopped = (await call(sock, 'POST', `/sessions/${id2}/prompt`, { text: 'Rebuild.', requestId: 'rebuild-2' })).body;
+    assert.deepEqual({ alreadySent: stopped.alreadySent, state: stopped.state }, { alreadySent: true, state: 'answered' });
+    assert.equal(dsh.calls.filter(([k]) => k === 'prompt').length, 3);
+});
+
+test('api: a retry with the same request id but another text is refused (409, request/conflict), never dropped without a word; a resend may carry a new text', async (t) => {
+    const { sock, dsh, folder } = await bridgeOn(t);
+    dsh.recordSteps = true;
+    const id = (await call(sock, 'POST', '/sessions', { workspacePath: folder })).body.sessionId;
+    const prompts = () => dsh.calls.filter(([k]) => k === 'prompt').length;
+    // On its way into DSH (held): the bridge knows the text only by its fingerprint.
+    let release;
+    dsh.hold = new Promise((r) => { release = r; });
+    const first = call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy build 41.', requestId: 'deploy-41' });
+    await sleep(50);
+    const inFlight = await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy build 42.', requestId: 'deploy-41' });
+    assert.equal(inFlight.status, 409);
+    assert.deepEqual(inFlight.body, { error: { code: 'request/conflict', message: `Request id deploy-41 already went to session ${id} with another text (it is waiting); it is not sent again. Use a new request id for another prompt.` }, requestId: 'deploy-41', state: 'waiting' });
+    assert.equal((await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy build 41.', requestId: 'deploy-41' })).body.alreadySent, true, 'the same text is a plain retry');
+    release();
+    dsh.hold = null;
+    assert.equal((await first).status, 200);
+    // Queued in DSH's inbox, then read and answered: compared with the text DSH holds.
+    const queued = await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy build 43.', requestId: 'deploy-41' });
+    assert.deepEqual([queued.status, queued.body.error.code, queued.body.state], [409, 'request/conflict', 'queued']);
+    dsh.push(id, 'turn/start', { turn: 1 });
+    dsh.push(id, 'user/message', asked('Deploy build 41.', 'deploy-41'));
+    dsh.push(id, 'turn/end', { turn: 1, reason: { kind: 'completed' } });
+    const answered = await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'deploy build 41.', requestId: 'deploy-41' });
+    assert.deepEqual([answered.status, answered.body.state], [409, 'answered']);
+    assert.equal((await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Deploy build 41.', requestId: 'deploy-41' })).body.alreadySent, true);
+    assert.equal(prompts(), 1, 'sent once');
+    assert.equal(sentText([ev(1, 'user/message', asked('x', 'a'))], 'b'), undefined);
+    // Cut off (unfinished): a retry is a new attempt, and the text given now is the one sent.
+    dsh.push(id, 'user/message', asked('Migrate.', 'mig-9'));
+    dsh.push(id, 'turn/end', { turn: 2, reason: { kind: 'interrupted' } });
+    const resent = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'Migrate, from step 3.', requestId: 'mig-9' })).body;
+    assert.deepEqual({ attempt: resent.attempt, resent: resent.resent }, { attempt: 2, resent: true });
+    assert.deepEqual(dsh.calls.at(-1)[1].content, [{ type: 'text', text: 'Migrate, from step 3.' }]);
+    // A create retried with another first text says the same, with the session it made.
+    const body = { workspacePath: folder, text: 'Nightly run.', requestId: 'nightly-7' };
+    const made = (await call(sock, 'POST', '/sessions', body)).body;
+    const other = await call(sock, 'POST', '/sessions', { ...body, text: 'Nightly run, again.' });
+    assert.deepEqual([other.status, other.body.error.code, other.body.sessionId, other.body.failedStep], [409, 'request/conflict', made.sessionId, 'prompt']);
+    assert.equal(dsh.calls.filter(([k]) => k === 'create').length, 2, 'no second session');
+});
+
+test('events: a reply DSH cut off is marked interrupted in the events page and the session summary', () => {
+    const log = [ev(1, 'turn/start', { turn: 1 }), ev(2, 'assistant/message', { ...said('Half'), interrupted: true }), ev(3, 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } })];
+    assert.equal(summarize(log[1], false).interrupted, true);
+    assert.equal(summarize(ev(4, 'assistant/message', said('Whole')), false).interrupted, undefined);
+    assert.deepEqual(sessionSummary('s', {}, log, { status: 'idle' }).lastAssistant, { seq: 2, text: 'Half', interrupted: true });
 });
 
 const pickKeys = (o, keys) => Object.fromEntries(keys.map((k) => [k, o?.[k]]));
@@ -1058,15 +1203,26 @@ test('readme: its settings, limits, routes and states are the code\'s', async (t
     const readme = readFileSync(join(PLUGIN_DIR, 'README.md'), 'utf8');
     // Every setting the bridge has is in the settings table, and no other.
     const table = [...readme.matchAll(/^\| `(\w+)` \| [^|]+ \| [^|]+ \| [^|]+ \|$/gm)].map((m) => m[1]);
-    assert.deepEqual(table, ['enabled', 'socketPath', 'logFile', 'maxBodyBytes']);
-    const { problems } = checkSettings(Object.fromEntries(table.map((k) => [k, undefined])), { socketPath: '/s', logFile: '/l' });
-    assert.deepEqual(problems, [], 'each one is a setting of the bridge');
+    assert.deepEqual(table, ['socketPath', 'logFile', 'maxBodyBytes']);
+    const { problems } = checkSettings(Object.fromEntries(table.map((k) => [k, 'x'])), { socketPath: '/s', logFile: '/l' });
+    assert.ok(problems.every((p) => !/is not a setting/.test(p)), 'each one is a setting of the bridge');
+    assert.ok(checkSettings({ enabled: true }, { socketPath: '/s', logFile: '/l' }).problems[0].startsWith('enabled is no longer a setting'), 'and enabled, which the README says is retired, is not');
     // The limits the README gives are the code's.
     for (const text of [`\`${MAX_BODY_DEFAULT}\``, `${MAX_BODY_RANGE[0]} to ${MAX_BODY_RANGE[1]}`, `at most ${SOCKET_PATH_MAX} bytes`, `Past ${LOG_MAX_BYTES / 1048576} MB`,
-        `(0 to ${WAIT_MAX_SECONDS})`, `\`limit\` is 1 to ${EVENTS_LIMIT_MAX}`, 'at most 500 characters', '1 to 128 letters, digits or `. _ : -`',
+        `(0 to ${WAIT_MAX_SECONDS}; more reads as ${WAIT_MAX_SECONDS})`, `\`limit\` is 1 to ${EVENTS_LIMIT_MAX}`, 'at most 500 characters', '1 to 128 letters, digits or `. _ : -`',
         `${READ_MS / 1000} s to read a session or the list, ${PROMPT_MS / 1000} s to take a prompt`, `\`${CREATES_FILE}\``]) {
         assert.ok(readme.includes(text), `the README says ${text}`);
     }
+    // How each turn end leaves a prompt is the code's: the end kinds and stop causes its states table names.
+    const row = (state) => readme.split('\n').find((l) => l.startsWith(`| \`${state}\` |`)) ?? '';
+    const named = (line) => new Set([...line.matchAll(/`([a-z][a-z-]*(?:\/[a-z-]+)?)`/g)].map((m) => m[1]));
+    const answeredRow = named(row('answered'));
+    const unfinishedRow = named(row('unfinished'));
+    for (const kind of ['completed', 'max-tokens', 'blocked']) assert.ok(answeredRow.has(kind) && endState({ kind }) === 'answered', kind);
+    for (const by of ['user', 'parent', 'hook']) assert.ok(answeredRow.has(by) && endState({ kind: 'aborted', reason: { kind: by, reason: 'budget' } }) === 'answered', by);
+    for (const kind of ['interrupted', 'error']) assert.ok(unfinishedRow.has(kind) && endState({ kind }) === 'unfinished', kind);
+    assert.ok(unfinishedRow.has('disposed') && !answeredRow.has('disposed') && endState({ kind: 'aborted', reason: { kind: 'disposed' } }) === 'unfinished');
+    assert.ok(unfinishedRow.has('deepseek-account/signed-out') && endState({ kind: 'aborted', reason: { kind: 'hook', reason: 'deepseek-account/signed-out' } }) === 'unfinished');
     // Every route in its table is one the bridge answers, with that method.
     const routes = [...readme.matchAll(/^\| `(GET|POST) (\/[^`]*)` \|/gm)].map((m) => [m[1], m[2]]);
     assert.equal(routes.length, 12);
@@ -1076,6 +1232,7 @@ test('readme: its settings, limits, routes and states are the code\'s', async (t
     const id = made.body.sessionId;
     const sent = (await call(sock, 'POST', `/sessions/${id}/prompt`, { text: 'hello', requestId: 'readme-1' })).body;
     assert.equal(sent.requestId, 'readme-1');
+    dsh.sessions.get(id).agent.status = 'running'; // a turn runs, so cancel has one to stop
     for (const [method, path] of routes) {
         const real = path.replace(':id', id).replace(':requestId', 'readme-1');
         const body = { '/sessions': { workspacePath: ws }, prompt: { text: 'again' }, model: { provider: 'p', model: 'm' }, rename: { title: 'T' } };

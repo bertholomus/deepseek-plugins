@@ -36,7 +36,9 @@ export const inject = ['sessionController', 'workspaceRegistry', 'agents'];
  * folder's .dsh), so a second DSH with its own home gets its own socket.
  */
 export const Config = z.object({
-    enabled: z.any().default(true).description('Serve the API (true) or not (false).'),
+    // No longer a setting (0.4.0): DSH's switch in Plugins turns the bridge off and shows it Off. Still read, with no
+    // default, so that a row that says false keeps the socket closed instead of being taken as on.
+    enabled: z.any().description('No longer a setting: switch the bridge off in Plugins. A row that says false keeps it from starting.'),
     socketPath: z.any().description('The Unix socket to listen on. Default: session-bridge/bridge.sock in DSH\'s data folder.'),
     logFile: z.any().description('The action log (mode 600); "" for none. Default: session-bridge/bridge.log in DSH\'s data folder.'),
     maxBodyBytes: z.any().default(1048576).description('The largest request body taken, in bytes (1024 to 67108864).'),
@@ -50,23 +52,20 @@ const VERSION = (() => {
     }
 })();
 
+/** What to do after a failed start, as the start error says it. */
+const AGAIN ='then switch Session Bridge off and on in Plugins, or restart DSH (saving the fixed row starts it again only when that row differs from the last one that ran)';
+
 /**
- * Start the bridge. When it cannot listen (a refused socket path, a socket another program answers on), apply
- * fails with the reason, so DSH shows the plugin as failed ("Problem" on its Plugins page) and logs why, instead
- * of "Running". Switching the plugin off and on in Plugins (or restarting DSH) tries again: DSH does not
- * start a plugin that failed to start again when only its row is saved.
+ * Start the bridge. When it cannot listen (a refused socket path, a socket another program answers on, a row that
+ * still says `enabled: false`), apply fails with the reason, so DSH shows the plugin as failed ("Problem" on its
+ * Plugins page, never "Running") and logs why. Switching the plugin off and on in Plugins, or restarting DSH,
+ * always tries again; saving a fixed row does only when that row differs from the last one that ran.
  */
 export async function apply(ctx, config) {
     const settings = checkSettings(config, {
         socketPath: dshHomePath('session-bridge', 'bridge.sock'),
         logFile: dshHomePath('session-bridge', 'bridge.log'),
     });
-    if (!settings.values.enabled) {
-        // Switched off in the profile: nothing listens and nothing is written; a wrong setting is still said.
-        for (const problem of settings.problems) ctx.logger.warn('session-bridge: %s', problem);
-        ctx.logger.info('session-bridge: off (enabled: false); nothing listens');
-        return;
-    }
     const bridge = createBridge({
         host: {
             sessionController: () => ctx.sessionController,
@@ -77,6 +76,17 @@ export async function apply(ctx, config) {
         logger: ctx.logger,
         version: VERSION,
     });
+    if (!settings.values.enabled) {
+        // `enabled` is no longer a setting, but a row that says off is never taken as on: nothing listens, and DSH
+        // shows a failed start with the reason (not "Running" for a bridge that is off).
+        const why = 'its row says enabled: false, and enabled is no longer a setting. To switch it off, use its switch in Plugins (DSH then shows it Off); to have it listen, take enabled out of its row';
+        for (const problem of settings.problems) {
+            ctx.logger.warn('session-bridge: %s', problem);
+            bridge.log(`setting: ${problem}`);
+        }
+        bridge.log(`not listening: ${why}`);
+        throw new Error(`Session Bridge is not listening: ${why}, ${AGAIN}.`);
+    }
     // A request that waits for news is woken by DSH's own events. Nothing here may throw into DSH's dispatch.
     ctx.on('session/event', (session, event) => {
         try {
@@ -100,6 +110,6 @@ export async function apply(ctx, config) {
     const listening = await started;
     const why = bridge.refused ?? failure;
     if (!listening && !disposed && why) {
-        throw new Error(`Session Bridge is not listening on ${bridge.socketPath}: ${why}. Fix socketPath in its row (or free the socket), then switch the plugin off and on in Plugins, or restart DSH.`);
+        throw new Error(`Session Bridge is not listening on ${bridge.socketPath}: ${why}. Fix socketPath in its row (or free the socket), ${AGAIN}.`);
     }
 }

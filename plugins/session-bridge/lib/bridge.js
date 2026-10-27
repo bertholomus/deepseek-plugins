@@ -10,7 +10,7 @@
  *
  * @module dsh-plugin-session-bridge/bridge
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, constants as fsc, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
@@ -40,7 +40,9 @@ export const READ_MS = 20000;
 export const PROMPT_MS = 60000;
 /** The file beside the socket that remembers which session each create's request id made. */
 export const CREATES_FILE = 'creates.jsonl';
-const SETTING_KEYS = new Set(['enabled', 'socketPath', 'logFile', 'maxBodyBytes']);
+const SETTING_KEYS = new Set(['socketPath', 'logFile', 'maxBodyBytes']);
+/** `enabled` was a setting until 0.3.0. DSH's own switch in Plugins does its job (and shows the bridge Off). */
+const RETIRED_KEYS = new Set(['enabled']);
 
 // ── Small helpers ─────────────────────────────────────────────────────
 
@@ -53,6 +55,27 @@ export const expandHome = (path) => (path === '~' ? homedir() : path.startsWith(
 function shown(value) {
     if (typeof value === 'string') return `"${value.length > 60 ? `${value.slice(0, 59)}…` : value}"`;
     try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+/** What a file error means, in words a person can act on, after its code. */
+const FILE_WORDS = {
+    ENOTDIR: 'a part of its path is a file, not a folder',
+    EEXIST: 'a part of its path is a file, not a folder',
+    ENOENT: 'its folder is not there',
+    EACCES: 'permission denied',
+    EPERM: 'permission denied',
+    ELOOP: 'it is a symlink, which the bridge never writes through',
+    EISDIR: 'it is a folder',
+    ENOSPC: 'the disk is full',
+    EDQUOT: 'the disk quota is used up',
+    EROFS: 'the disk is read-only',
+};
+
+/** A file error as "CODE: words" (or its code, or its message cut short). */
+export function fileWhy(error) {
+    const code = typeof error?.code === 'string' ? error.code : '';
+    if (!code) return errorText(error, 80);
+    return FILE_WORDS[code] ? `${code}: ${FILE_WORDS[code]}` : code;
 }
 
 /** One short line for an error: its message, never a stack. */
@@ -124,7 +147,7 @@ export function withDeadline(promise, ms, onTimeout) {
 
 // ── Settings ──────────────────────────────────────────────────────────
 
-const YES = new Set([true, 1, 'true', 'yes', 'on', '1']);
+/** The ways a row can write "off" (for the retired `enabled`). */
 const NO = new Set([false, 0, 'false', 'no', 'off', '0']);
 
 /**
@@ -144,11 +167,15 @@ export function checkSettings(raw, defaults) {
     if (!isRecord(raw) && raw !== undefined && raw !== null) problems.push(`The settings must be a map of keys; got ${shown(raw)}. The bridge uses its defaults.`);
 
     if (set('enabled')) {
+        // No longer a setting: an off that DSH lists as "Running" is a wrong word on its Plugins page. A row that
+        // still says off is never taken as on, though: the bridge does not start, and says why (lib/index.js).
         const v = typeof given.enabled === 'string' ? given.enabled.trim().toLowerCase() : given.enabled;
-        if (YES.has(v)) values.enabled = true;
-        else if (NO.has(v)) values.enabled = false;
-        else problems.push(`enabled must be true or false, not ${shown(given.enabled)}; the bridge stays on.`);
-        if (typeof given.enabled !== 'boolean' && (YES.has(v) || NO.has(v))) problems.push(`enabled is ${shown(given.enabled)}; read as ${values.enabled}. Write it as true or false, without quotes.`);
+        if (NO.has(v)) {
+            values.enabled = false;
+            problems.push(`enabled is no longer a setting of the session bridge, and while its row says enabled: ${shown(given.enabled)} the bridge does not start. To switch it off, use its switch in Plugins (DSH then shows it Off); to have it listen, take enabled out of its row and switch it off and on in Plugins.`);
+        } else {
+            problems.push(`enabled is no longer a setting of the session bridge and is ignored (it was ${shown(given.enabled)}); the bridge is on. Take it out of its row: its switch in Plugins turns the bridge off and on.`);
+        }
     }
 
     if (set('socketPath')) {
@@ -177,7 +204,7 @@ export function checkSettings(raw, defaults) {
     }
 
     for (const key of Object.keys(given)) {
-        if (!SETTING_KEYS.has(key)) problems.push(`${key} is not a setting of the session bridge and is ignored (its settings: ${[...SETTING_KEYS].join(', ')}).`);
+        if (!SETTING_KEYS.has(key) && !RETIRED_KEYS.has(key)) problems.push(`${key} is not a setting of the session bridge and is ignored (its settings: ${[...SETTING_KEYS].join(', ')}).`);
     }
     return { values, problems };
 }
@@ -205,6 +232,8 @@ export function summarize(event, full) {
     if (event.type === 'agent/error' || event.type?.endsWith('/error')) out.error = JSON.stringify(d).slice(0, 2000);
     const text = textOf(event);
     if (text) out.text = full ? text : text.length > TEXT_PREVIEW ? `${text.slice(0, TEXT_PREVIEW)}…(+${text.length - TEXT_PREVIEW})` : text;
+    // DSH saves a reply its turn was stopped in the middle of as it stood, marked interrupted.
+    if (d.interrupted === true) out.interrupted = true;
     const msg = d.message;
     if (msg?.role) out.role = msg.role;
     if (Array.isArray(msg?.content)) {
@@ -214,12 +243,15 @@ export function summarize(event, full) {
     return out;
 }
 
-/** The last assistant text among `events`: { seq, text }, or null. */
+/**
+ * The last assistant text among `events`: { seq, text }, or null. A reply DSH cut off in the middle (the turn was
+ * stopped or torn down while it streamed) carries `interrupted: true`: its text is only the part that came.
+ */
 export function lastAssistantText(events) {
     for (let i = events.length - 1; i >= 0; i--) {
         const e = events[i];
         const role = e?.data?.message?.role;
-        if ((e.type === 'assistant/message' || role === 'assistant') && textOf(e)) return { seq: e.seq, text: textOf(e) };
+        if ((e.type === 'assistant/message' || role === 'assistant') && textOf(e)) return { seq: e.seq, text: textOf(e), ...(e.data?.interrupted === true ? { interrupted: true } : {}) };
     }
     return null;
 }
@@ -254,8 +286,31 @@ export function attemptOf(rpcId, requestId) {
 /** The rpcId DSH gets for one attempt: the request id itself, then `<id>~2`, `<id>~3` for each send after a cut-off turn. */
 export const rpcIdFor = (requestId, attempt) => (attempt > 1 ? `${requestId}~${attempt}` : requestId);
 
-/** Turn ends after which a prompt was not done: DSH stopped or crashed under the turn, or the turn failed. */
-const UNFINISHED = new Set(['interrupted', 'error']);
+/** Turn ends that are the turn's own: it finished, stopped at its token limit, or a plugin's check refused its input. */
+const ENDED_BY_ITSELF = new Set(['completed', 'max-tokens', 'blocked']);
+/**
+ * Who may stop a turn on purpose (DSH's `aborted` causes): a person's cancel (in the window or POST cancel), the
+ * session above it, or a plugin. DSH's other cause, `disposed`, is DSH tearing the session's agent down under the
+ * turn (a plugin or setting loaded again, the session closing): the work was cut off, not stopped.
+ */
+const STOPPED_ON_PURPOSE = new Set(['user', 'parent', 'hook']);
+/** Plugin stops that are DSH's own and not on purpose: the DeepSeek account signed out under the turn. */
+const DSH_STOPS = new Set(['deepseek-account/signed-out']);
+
+/**
+ * How a turn's end leaves the prompt it read: "answered" when the turn ended by itself or was stopped on purpose;
+ * "unfinished" when DSH cut it off (interrupted by a quit or a crash; aborted because DSH tore its agent down or the
+ * account signed out) or it failed (error). An end the bridge does not know is "unfinished": never taken as done.
+ * @param {{ kind: string, reason?: { kind?: string, reason?: string } }} end - a turn/end's reason, as endOf gives it.
+ * @returns {'answered' | 'unfinished'}
+ */
+export function endState(end) {
+    if (ENDED_BY_ITSELF.has(end?.kind)) return 'answered';
+    if (end?.kind === 'aborted' && isRecord(end.reason) && STOPPED_ON_PURPOSE.has(end.reason.kind)) {
+        return end.reason.kind === 'hook' && DSH_STOPS.has(end.reason.reason) ? 'unfinished' : 'answered';
+    }
+    return 'unfinished';
+}
 
 /**
  * What became of one prompt, read from the session's own log, by its request id:
@@ -263,12 +318,15 @@ const UNFINISHED = new Set(['interrupted', 'error']);
  * - "waiting": not in the log yet (on its way into DSH);
  * - "queued": in DSH's inbox, for the next turn (a followup) or the next step (a steer);
  * - "read": a turn took it and is still running;
- * - "answered": the turn that read it finished (completed) or was stopped on purpose (aborted): how (`end`),
- *   and its last reply (`reply`, or null);
- * - "unfinished": the turn that read it ended without finishing it: DSH stopped or crashed under it
- *   (interrupted), or it failed (error). Send it again with the same id: the bridge sends it once more;
+ * - "answered": the turn that read it ended by itself (completed, max-tokens, blocked) or was stopped on purpose
+ *   (aborted by a person, its parent session or a plugin): how (`end`), and its last reply (`reply`, or null;
+ *   `reply.interrupted` when DSH cut that reply off where the turn was stopped);
+ * - "unfinished": the turn that read it ended without finishing it (endState): DSH stopped or crashed under it
+ *   (interrupted), tore its agent down (aborted, disposed) or stopped it at a sign-out, or it failed (error).
+ *   Send it again with the same id: the bridge sends it once more;
  * - "dropped": it left the inbox but never reached the log as a message: the turn that took it was cut off
- *   before DSH saved it, or it was taken out of the queue (`removed: true`). Send it again.
+ *   before DSH saved it, or it was taken out of the queue (`removed: true`: in the window, or by DSH clearing
+ *   the queue as it tore the agent down). Send it again.
  *
  * A prompt sent again after a cut-off turn goes to DSH as `<id>~2` (then `~3`), because DSH takes each rpcId
  * once per session; the newest attempt counts, and `attempt` names it when it is not the first.
@@ -303,7 +361,7 @@ function attemptState(events, rpcId) {
         if (turn !== undefined) out.turn = turn;
         if (endAt >= 0) {
             out.end = endOf(events[endAt]);
-            out.state = UNFINISHED.has(out.end.kind) ? 'unfinished' : 'answered';
+            out.state = endState(out.end);
             out.reply = lastAssistantText(events.slice(at + 1, endAt));
         }
         return out;
@@ -351,6 +409,25 @@ function endOf(event) {
     const reason = event.data?.reason;
     return { seq: event.seq, ...(isRecord(reason) ? reason : { kind: String(reason ?? 'unknown') }) };
 }
+
+/**
+ * The text DSH holds for one attempt (one rpcId): its message in the session's log, or in DSH's queue (DSH keeps
+ * a prompt's text as it was given); undefined when it holds neither.
+ */
+export function sentText(events, rpcId) {
+    for (let i = events.length - 1; i >= 0; i--) {
+        const e = events[i];
+        if (e.type === 'user/message' && e.data?.source?.rpcId === rpcId) return textOf(e);
+        if (e.type === 'agent/inbox/spliced' && Array.isArray(e.data?.inserted)) {
+            const queued = e.data.inserted.find((m) => m?.source?.rpcId === rpcId);
+            if (queued) return textOf({ data: queued });
+        }
+    }
+    return undefined;
+}
+
+/** A short fingerprint of a prompt's text, so the bridge can tell a retry with another text without keeping the text. */
+const digestOf = (text) => createHash('sha256').update(text).digest('base64url');
 
 /** States a prompt does not leave by itself (a wait ends on them). */
 const FINAL = new Set(['answered', 'unfinished', 'dropped']);
@@ -490,19 +567,25 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
     // ── The action log: actions and sizes, never a prompt's text or a title ──
     const logFile = values.logFile;
     let logSize = -1;
+    /** Why the log cannot be written now (said in GET /health), or undefined while it can. */
+    let logProblem;
+    let logWarned = false;
     function log(line) {
         if (!logFile) return;
         try {
-            const text = `${new Date().toISOString()} ${line}\n`;
-            const bytes = Buffer.byteLength(text);
+            const stamp = new Date().toISOString();
+            let text = `${stamp} ${line}\n`;
             if (logSize < 0) {
-                mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
+                // A folder the bridge makes for its log is said in the log's first line after it.
+                const made = mkdirSync(dirname(logFile), { recursive: true, mode: 0o700 });
+                if (made) text = `${stamp} made ${made} (mode 700) for the log\n${text}`;
                 try {
                     logSize = lstatSync(logFile).size;
                 } catch {
                     logSize = 0;
                 }
             }
+            const bytes = Buffer.byteLength(text);
             if (logSize > 0 && logSize + bytes > logMaxBytes) {
                 renameSync(logFile, `${logFile}.1`);
                 logSize = 0;
@@ -516,11 +599,23 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
                 closeSync(fd);
             }
             logSize += bytes;
-        } catch {
-            // The log never stops the bridge; the next line tries again from the file's real size.
+            if (logProblem) {
+                logProblem = undefined;
+                say.info('session-bridge: the log %s is written again', logFile);
+            }
+        } catch (error) {
+            // The log never stops the bridge, but a log that cannot be written is said: in GET /health while it
+            // lasts, and once in DSH's log. The next line tries again from the file's real size.
             logSize = -1;
+            logProblem = `logFile ${logFile} cannot be written (${fileWhy(error)}), so the bridge's actions are not logged. Give logFile a folder you can write to, or "" for no log.`;
+            if (!logWarned) {
+                logWarned = true;
+                say.warn('session-bridge: %s', logProblem);
+            }
         }
     }
+    /** What is wrong now, in words: the settings, and the log while it cannot be written. */
+    const currentProblems = () => (logProblem ? [...problems, logProblem] : [...problems]);
 
     // ── Waiting for news: woken by DSH's own session events ──
     /** sessionId → Set of wake functions. */
@@ -607,10 +702,10 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         return { header: r?.meta, events: Array.isArray(r?.events) ? r.events : [] };
     }
 
-    /** Remember an attempt this bridge is sending (or sent) for a request id, before DSH is asked. */
-    const remember = (requestId, sessionId, attempt) => {
+    /** Remember an attempt this bridge is sending (or sent) for a request id, before DSH is asked; the text only as a fingerprint. */
+    const remember = (requestId, sessionId, attempt, digest) => {
         sent.delete(requestId);
-        sent.set(requestId, { sessionId, attempt });
+        sent.set(requestId, { sessionId, attempt, digest });
         while (sent.size > REMEMBERED) sent.delete(sent.keys().next().value);
     };
     /** The attempt this bridge sent for a request id to this session, or 0. */
@@ -649,6 +744,14 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
             const known = sentAttempt(own, sessionId);
             const now = requestState(events, own, known);
             if (now.state === 'queued' || now.state === 'read' || now.state === 'answered' || (now.state === 'waiting' && known > 0)) {
+                // The id alone says it was sent; a retry with another text would be dropped without a word, so it is refused.
+                const had = now.state === 'waiting' ? undefined : sentText(events, rpcIdFor(own, now.attempt ?? 1));
+                const memo = sent.get(own);
+                const differs = had !== undefined ? had !== text : now.state === 'waiting' && typeof memo?.digest === 'string' && memo.digest !== digestOf(text);
+                if (differs) {
+                    log(`prompt ${sessionId} conflict request=${own} state=${now.state} chars=${text.length}`);
+                    throw new BridgeError(409, 'request/conflict', `Request id ${own} already went to session ${sessionId} with another text (it is ${now.state}); it is not sent again. Use a new request id for another prompt.`, { requestId: own, state: now.state });
+                }
                 log(`prompt ${sessionId} already-sent request=${own} state=${now.state}`);
                 return { accepted: true, alreadySent: true, state: now.state, mode, requestId: own, chars: text.length, ...(now.attempt ? { attempt: now.attempt } : {}) };
             }
@@ -656,7 +759,7 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
             attempt = now.state === 'unfinished' ? last + 1 : Math.max(last, 1);
         }
         // Remembered before DSH is asked, so a retry that comes while this one is on its way is not sent twice.
-        remember(requestId, sessionId, attempt);
+        remember(requestId, sessionId, attempt, digestOf(text));
         const rpcId = rpcIdFor(requestId, attempt);
         const call = Promise.resolve().then(() => sc().prompt({ sessionId, content: [{ type: 'text', text }], mode, requestId: rpcId }, AbortSignal.timeout(promptMs)));
         let late = false;
@@ -850,7 +953,7 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         }
         if (path === '/health') {
             if (method !== 'GET') throw method405('GET');
-            return { ok: true, plugin: PLUGIN, version, pid: process.pid, socket: socketPath, problems };
+            return { ok: true, plugin: PLUGIN, version, pid: process.pid, socket: socketPath, problems: currentProblems() };
         }
         if (path === '/workspaces') {
             if (method !== 'GET') throw method405('GET');
@@ -893,10 +996,13 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         if (action === 'prompt') return prompt(sessionId, body);
         if (action === 'model') return selectModel(sessionId, body);
         if (action === 'rename') return rename(sessionId, titleOf(body));
-        if (host.agents()?.get?.(sessionId) === undefined) {
+        const agent = host.agents()?.get?.(sessionId);
+        if (agent === undefined) {
             await inspect(sessionId); // a 404 when there is no such session
             throw new BridgeError(409, 'session/not-running', `Session ${sessionId} is not open in DSH, so no turn runs to cancel.`);
         }
+        // Open but idle: DSH would answer "accepted" and stop nothing.
+        if (agent.status !== 'running') throw new BridgeError(409, 'session/not-running', `Session ${sessionId} has no turn running, so there is nothing to cancel.`);
         const r = await sc().cancel({ sessionId });
         log(`cancel ${sessionId}`);
         return r;
@@ -1011,7 +1117,7 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
             log(`setting: ${problem}`);
             say.warn('session-bridge: %s', problem);
         }
-        refused = await prepareSocket(socketPath);
+        refused = await prepareSocket(socketPath, (line) => log(line));
         if (refused || stopping) {
             if (refused) {
                 log(`not listening on ${socketPath}: ${refused}`);
@@ -1095,7 +1201,7 @@ export function createBridge({ host, settings, logger, version = '', sent = SENT
         get waiting() { let n = 0; for (const set of waiters.values()) n += set.size; return n; },
         socketPath,
         settings: values,
-        problems,
+        get problems() { return currentProblems(); },
     };
 }
 
@@ -1134,10 +1240,13 @@ function isHome(dir, st) {
  * shared one (the home folder, a sticky folder such as /tmp, another user's),
  * which the bridge refuses instead of closing. An old socket nobody answers
  * on (left by a crash) is removed; a live one, or a file that is not a
- * socket, is never touched.
+ * socket, is never touched. What it changes is said through `note` (the bridge's log): a folder it made, a
+ * folder it closed (with the mode it had), an old socket it replaced.
+ * @param {string} socketPath
+ * @param {(line: string) => void} [note]
  * @returns {Promise<string | undefined>} why not, or undefined when ready.
  */
-export async function prepareSocket(socketPath) {
+export async function prepareSocket(socketPath, note = () => {}) {
     if (typeof socketPath !== 'string' || !isAbsolute(socketPath)) return 'the socket path must be a full path';
     if (Buffer.byteLength(socketPath) > SOCKET_PATH_MAX) return `the socket path is ${Buffer.byteLength(socketPath)} bytes; the system takes at most ${SOCKET_PATH_MAX}. Choose a shorter socketPath.`;
     const dir = dirname(socketPath);
@@ -1145,38 +1254,44 @@ export async function prepareSocket(socketPath) {
     try {
         st = statSync(dir);
     } catch (error) {
-        if (error?.code !== 'ENOENT') return `its folder ${dir} cannot be read (${error?.code ?? errorText(error)})`;
+        if (error?.code !== 'ENOENT') return `its folder ${dir} cannot be read (${fileWhy(error)})`;
     }
     if (!st) {
         try {
             mkdirSync(dir, { recursive: true, mode: 0o700 });
             chmodSync(dir, 0o700);
         } catch (error) {
-            return `its folder ${dir} cannot be made (${error?.code ?? errorText(error)})`;
+            return `its folder ${dir} cannot be made (${fileWhy(error)})`;
         }
+        note(`made ${dir} (mode 700) for the socket`);
     } else {
         if (!st.isDirectory()) return `${dir} is not a folder`;
         if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return `its folder ${dir} belongs to another user; give the socket a folder of its own`;
         if ((st.mode & 0o1000) !== 0 || isHome(dir, st)) return `its folder ${dir} is shared, and the bridge closes its folder to everyone else; give the socket a folder of its own, such as ${resolve(dir, 'session-bridge', 'bridge.sock')}`;
-        try {
-            chmodSync(dir, 0o700);
-        } catch (error) {
-            return `its folder ${dir} cannot be closed to other users (${error?.code ?? errorText(error)})`;
+        const was = st.mode & 0o777;
+        if (was !== 0o700) {
+            try {
+                chmodSync(dir, 0o700);
+            } catch (error) {
+                return `its folder ${dir} cannot be closed to other users (${fileWhy(error)})`;
+            }
+            note(`closed ${dir} to mode 700 for the socket (it was ${was.toString(8)}); it stays 700`);
         }
     }
     let entry;
     try {
         entry = lstatSync(socketPath);
     } catch (error) {
-        if (error?.code !== 'ENOENT') return `${socketPath} cannot be read (${error?.code ?? errorText(error)})`;
+        if (error?.code !== 'ENOENT') return `${socketPath} cannot be read (${fileWhy(error)})`;
     }
     if (entry) {
         if (!entry.isSocket()) return `${socketPath} is a file that is not a socket, and the bridge never deletes one; move it or choose another socketPath`;
         if (await answers(socketPath)) return `another program answers on ${socketPath} (another DSH, or a second session-bridge row); the bridge does not take it over`;
         try {
             unlinkSync(socketPath);
+            note(`replaced the old socket ${socketPath}, which nobody answered on`);
         } catch (error) {
-            if (error?.code !== 'ENOENT') return `the old socket ${socketPath} cannot be removed (${error?.code ?? errorText(error)})`;
+            if (error?.code !== 'ENOENT') return `the old socket ${socketPath} cannot be removed (${fileWhy(error)})`;
         }
     }
     return undefined;
