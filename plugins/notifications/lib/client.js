@@ -557,6 +557,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             notification.onshow = () => settle('shown');
             notification.onerror = () => settle('failed', 'the system refused to show it');
             notification.onclick = () => {
+                // In the app a hidden window (closed with its close button, or minimised) does not come up by itself:
+                // ask the host to bring it up first, then open the chat in it.
+                let hiddenNow = false;
+                try { hiddenNow = Boolean(app && doc && doc.visibilityState === 'hidden'); } catch { /* the window may be gone */ }
+                const report = (down) => {
+                    try { onClick(item, down); } catch { /* a report never stops the click */ }
+                };
+                if (hiddenNow && typeof onClick === 'function') report(true);
                 try { win?.focus?.(); } catch { /* the window may be gone */ }
                 const open = openSession();
                 const page = openPage();
@@ -569,15 +577,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     try { page(); } catch { /* DSH may have no Plugins page here */ }
                 }
                 try { notification.close(); } catch { /* already closed */ }
-                if (typeof onClick !== 'function') return;
-                // Did the window come up? In the app a hidden or minimised window does not by itself: then the host raises it.
-                const report = () => {
+                if (typeof onClick !== 'function' || hiddenNow) return;
+                // A window behind other windows gets a moment to come up; if it has not, the host brings it up.
+                const check = () => {
                     let down = false;
                     try { down = Boolean(app && doc && (doc.visibilityState === 'hidden' || !doc.hasFocus())); } catch { /* the window may be gone */ }
-                    try { onClick(item, down); } catch { /* a report never stops the click */ }
+                    report(down);
                 };
-                if (app && checkAfter > 0) setTimeout(report, checkAfter);
-                else report();
+                if (app && checkAfter > 0) setTimeout(check, checkAfter);
+                else check();
             };
             return notification;
         }

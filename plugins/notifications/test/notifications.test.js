@@ -1129,21 +1129,30 @@ test('window: in front with nobody at it, it shows; the person\'s own input make
     disposers[0]();
 });
 
-test('window: a click in the app\'s window that stayed down asks the host to bring it up; one that came up only reports the click', () => {
+test('window: a click in the app\'s hidden window asks the host to bring it up before the chat opens; one behind others gets a moment first', async () => {
     const { showNotification } = clientInternals();
     const Notification = fakeNotificationClass();
-    const clicks = [];
-    const opened = [];
+    const steps = [];
     const hidden = { hasFocus: () => false, visibilityState: 'hidden' };
-    showNotification({ id: 4, title: 'T', sessionId: 's4' }, { Notification, doc: hidden, app: true, checkAfter: 0, win: { focus() {} }, openSession: () => (id) => opened.push(id), onClick: (item, down) => clicks.push([item.id, down]) });
+    showNotification({ id: 4, title: 'T', sessionId: 's4' }, { Notification, doc: hidden, app: true, checkAfter: 50, win: { focus() {} }, openSession: () => (id) => steps.push(['open', id]), onClick: (item, down) => steps.push(['raise', item.id, down]) });
     Notification.made[0].onclick();
-    assert.deepEqual([opened, clicks], [['s4'], [[4, true]]], 'the chat opens first, then the window is brought up');
-    const up = { hasFocus: () => true, visibilityState: 'visible' };
-    showNotification({ id: 5, title: 'T' }, { Notification, doc: up, app: true, checkAfter: 0, win: { focus() {} }, onClick: (item, down) => clicks.push([item.id, down]) });
+    assert.deepEqual(steps, [['raise', 4, true], ['open', 's4']], 'hidden: the window is asked up at once, then the chat opens in it');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(steps.length, 2, 'and it is asked once, not again after the check');
+    // Behind other windows (seen, not focused): it waits for the window to come up by itself, then asks.
+    const behind = { hasFocus: () => false, visibilityState: 'visible' };
+    showNotification({ id: 5, title: 'T', sessionId: 's5' }, { Notification, doc: behind, app: true, checkAfter: 30, win: { focus() {} }, openSession: () => (id) => steps.push(['open', id]), onClick: (item, down) => steps.push(['raise', item.id, down]) });
     Notification.made[1].onclick();
-    showNotification({ id: 6, title: 'T' }, { Notification, doc: hidden, app: false, checkAfter: 0, win: { focus() {} }, onClick: (item, down) => clicks.push([item.id, down]) });
+    assert.deepEqual(steps.slice(2), [['open', 's5']], 'behind others: the chat opens, the check comes a moment later');
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(steps.slice(3), [['raise', 5, true]], 'still not in front after the moment: the host is asked');
+    const clicks = [];
+    const up = { hasFocus: () => true, visibilityState: 'visible' };
+    showNotification({ id: 6, title: 'T' }, { Notification, doc: up, app: true, checkAfter: 0, win: { focus() {} }, onClick: (item, down) => clicks.push([item.id, down]) });
     Notification.made[2].onclick();
-    assert.deepEqual(clicks.slice(1), [[5, false], [6, false]], 'a browser tab never asks for the app to come up');
+    showNotification({ id: 7, title: 'T' }, { Notification, doc: hidden, app: false, checkAfter: 0, win: { focus() {} }, onClick: (item, down) => clicks.push([item.id, down]) });
+    Notification.made[3].onclick();
+    assert.deepEqual(clicks, [[6, false], [7, false]], 'a window that came up only reports the click; a browser tab never asks for the app to come up');
 });
 
 test('window: a click opens the place a notification names: a DSH page, a plugin\'s page, or for a summary the recent list', () => {
