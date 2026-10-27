@@ -2032,11 +2032,14 @@ test('a calendar hidden on the page still counts as busy, and a chat is told whi
         assert.doesNotMatch(listed.text, /Board meeting/);
         assert.match(listed.text, /Lunch with Ann/);
         assert.match(listed.text, /\nNot listed: “Work”, hidden on the Calendar page; give calendar_ids to include it\.$/);
+        assert.deepEqual(listed.view.hidden, ['Work'], 'the chat\'s card is told too');
         const named = await tools.calendar_events.execute({ from: '2026-10-12', to: '2026-10-12', calendar_ids: [work.id] });
         assert.match(named.text, /Board meeting/);
         assert.doesNotMatch(named.text, /Not listed/, 'a list of the calendars named leaves nothing out');
+        assert.equal(named.view.hidden, undefined);
         const searched = await tools.calendar_search.execute({ query: 'board' });
         assert.match(searched.text, /Nothing matches "board"\.\nNot searched: “Work”, hidden on the Calendar page; give calendar_ids to include it\.$/);
+        assert.deepEqual(searched.view.hidden, ['Work']);
         const found = await tools.calendar_search.execute({ query: 'board', calendar_ids: [work.id] });
         assert.match(found.text, /Board meeting/);
         m.updateCalendar(personal.id, { hidden: true });

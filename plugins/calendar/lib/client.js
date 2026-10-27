@@ -6213,6 +6213,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** How many of a list's events a card shows before "Show all". */
         const CARD_EVENTS = 8;
 
+        /** The calendars hidden on the page that a chat's list or search left out, in a line under its card ('' for none). */
+        function leftOutWords(view) {
+            const names = (Array.isArray(view?.hidden) ? view.hidden : EMPTY).filter((n) => typeof n === 'string' && n !== '');
+            if (names.length === 0) return '';
+            return `Not ${typeof view.query === 'string' ? 'searched' : 'listed'}: ${andList(names.map((n) => `“${n}”`))}, hidden on the Calendar page.`;
+        }
+
         /** The card under a settled call: its events, an event, free time, the calendars, or what a change did. */
         function ToolCard({ view, zone, cal }) {
             const [all, setAll] = React.useState(false);
@@ -6235,7 +6242,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     rows,
                     list.length > CARD_EVENTS || view.more ? h('div', { className: 'dshcal-chat-foot dshcal-inline' },
                         list.length > CARD_EVENTS ? h('button', { type: 'button', className: 'dshcal-link', onClick: () => setAll(!all) }, all ? 'Show fewer' : `Show all ${list.length}`) : null,
-                        view.more ? h('span', null, 'The calendar has more than the agent read.') : null) : null);
+                        view.more ? h('span', null, 'The calendar has more than the agent read.') : null) : null,
+                    leftOutWords(view) ? h('div', { className: 'dshcal-chat-foot', 'data-calendar-chat-hidden': '' }, leftOutWords(view)) : null);
             }
             if (view.kind === 'free') {
                 const byDay = new Map();
@@ -6444,7 +6452,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             draftFrom, draftProblems, createInput, changePatch, draftChanged, writableCalendars,
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, refusedEmailText, saysNotDone, saysPartly, NOT_DONE,
-            CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog, ToastHost, toastProps, toastHold, troubleWords, settingsWords,
+            CalendarPage, AgendaPane, ToolView, ToolCard, EventDialog, EventPopover, AccountsDialog, ToastHost, toastProps, toastHold, troubleWords, settingsWords, leftOutWords,
             ReminderHost, reminderText, REMINDER_STEP, REMINDER_HOLD,
         };
         return module.exports;

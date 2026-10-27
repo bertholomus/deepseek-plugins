@@ -248,7 +248,7 @@ export function calendarTools(manager, { askEmails = true, shown } = {}) {
                 const text = occurrences.length === 0
                     ? `${header()}\nNo events from ${span}.${hiddenLine(hidden, 'listed')}`
                     : `${header()}\nEvents from ${span}:\n${agenda(occurrences, z, { details: args.details === true })}${more ? '\nThere are more; ask for a shorter span.' : ''}${hiddenLine(hidden, 'listed')}`;
-                return { text, view: { kind: 'events', from, to, zone: z, occurrences: occurrences.slice(0, 60).map(card), more: more || occurrences.length > 60 } };
+                return { text, view: { kind: 'events', from, to, zone: z, occurrences: occurrences.slice(0, 60).map(card), more: more || occurrences.length > 60, ...(hidden?.length ? { hidden } : {}) } };
             },
         }),
         tool({
@@ -269,7 +269,7 @@ export function calendarTools(manager, { askEmails = true, shown } = {}) {
                 const text = occurrences.length === 0
                     ? `${header()}\nNothing matches "${args.query}".${hiddenLine(hidden, 'searched')}`
                     : `${header()}\nEvents matching "${args.query}":\n${occurrences.map((o) => `${dayWords(o.allDay ? o.startDay : dayIn(o.start, z))} ${line(o, z).slice(2)}`).map((l) => `- ${l}`).join('\n')}${more ? '\nThere are more; add words or a span.' : ''}${hiddenLine(hidden, 'searched')}`;
-                return { text, view: { kind: 'events', zone: z, query: args.query, occurrences: occurrences.slice(0, 40).map(card), more } };
+                return { text, view: { kind: 'events', zone: z, query: args.query, occurrences: occurrences.slice(0, 40).map(card), more, ...(hidden?.length ? { hidden } : {}) } };
             },
         }),
         tool({

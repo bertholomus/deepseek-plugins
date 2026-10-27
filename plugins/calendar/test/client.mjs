@@ -1144,6 +1144,25 @@ test('wrong settings: one box, where to change them once, then a line each', () 
     assert.ok(five.lines.every((l) => !l.text.includes('cordis.patch.yml')), 'where to change them is said once, in the head');
 });
 
+test('a chat\'s list or search says on its card which calendars hidden on the page it left out', () => {
+    assert.equal(I.leftOutWords({ kind: 'events', occurrences: [] }), '');
+    assert.equal(I.leftOutWords({ kind: 'events', hidden: [] }), '');
+    assert.equal(I.leftOutWords({ kind: 'events', hidden: ['Work'] }), 'Not listed: “Work”, hidden on the Calendar page.');
+    assert.equal(I.leftOutWords({ kind: 'events', query: 'board', hidden: ['Personal', 'Work'] }), 'Not searched: “Personal” and “Work”, hidden on the Calendar page.');
+    // Drawn under the card's events, and only when something was left out.
+    const lines = (node, out = []) => {
+        if (node && typeof node === 'object') {
+            if (node.props && node.props['data-calendar-chat-hidden'] !== undefined) out.push(node.children.join(''));
+            for (const child of node.children ?? []) (Array.isArray(child) ? child : [child]).forEach((c) => lines(c, out));
+        }
+        return out;
+    };
+    const o = { id: 'ev-1', title: 'Lunch with Ann', calendar: 'Personal', allDay: false, start: Date.parse('2026-10-12T19:00:00Z'), end: Date.parse('2026-10-12T20:00:00Z') };
+    const card = (view) => lines(I.ToolCard({ view: { kind: 'events', occurrences: [o], ...view }, zone: LA, cal: { openAt() {} } }));
+    assert.deepEqual(plain(card({ hidden: ['Work'] })), ['Not listed: “Work”, hidden on the Calendar page.']);
+    assert.deepEqual(plain(card({})), []);
+});
+
 test('switched off is the owner\'s choice: the store says so, forgets what it showed, and comes back by itself', async () => {
     let off = false;
     const value = { version: 1, defaultCalendar: 'cal-personal', calendars: [{ id: 'cal-personal', name: 'Personal' }], accounts: [] };
