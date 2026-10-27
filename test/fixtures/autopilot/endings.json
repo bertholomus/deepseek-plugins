@@ -670,6 +670,158 @@
    "from": "written"
   }
  ],
+ "written2": [
+  {
+   "text": "Both options are in the PR description. Which one should I keep?",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "I've drafted the migration but haven't run it. Give me the go-ahead and I'll apply it to staging.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "The tests pass locally.\n\nI'd like your review on the API shape before I write the client — it's the part I'm least sure about.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "Done with the first pass. If you'd rather keep the old names, I can revert that part.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "## Summary\n- Added the cache layer\n- Wrote 12 tests\n\nShall I go ahead with the eviction policy next?",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "I stopped before touching the production config. Let me know how you want to handle the secrets.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "I won't push until you've had a chance to look at the diff.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "There are two ways to fix the flaky test: retry it, or mock the clock. Your pick.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "Can you check whether the staging DB is up? I can't reach it from here.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "I'd suggest we split this into two PRs. Want me to do that?",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "The rename touches 40 files, so I'll leave it for you to approve before I start.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "I can also add a dark-mode variant of the icons if that would help.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "Next step needs your call: keep the v1 endpoint for a release, or drop it now.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "I've paused the rollout at 10%. Tell me when to continue.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "Waiting on your answer about the license header before I touch the remaining files.",
+   "hold": true,
+   "from": "written-2"
+  },
+  {
+   "text": "Fixed the off-by-one in the pager. Now writing the regression test.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "All 48 tests pass. I'll update the changelog next.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "## Done\n- Parser handles nested quotes\n- CLI flag `--strict` added\n\n## Next\n- Wire the flag into the config loader",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "The lint errors are gone. Let me know if you see anything odd in the output.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Build is green on all three targets. Continuing with the docs.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "That was the last of the todos for the parser. Starting on the formatter.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Feel free to try it with `npm start`; I'm moving on to the error messages.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Pushed the branch. If you want to see the screenshots, they're in `docs/img/`.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "I've added comments where the logic is subtle, in case anyone reads it later.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Step 2 of 4 is done: the schema is in place. Step 3 is the seed data.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Benchmarks are in `bench/results.md` if you want to compare against last week.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Hope this helps! The remaining todos are the CLI and the README, which I'll take next.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "Updated the README to match. Happy to report all checks are green.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "No changes needed in the auth module after all; the bug was in the caller.",
+   "hold": false,
+   "from": "written-2"
+  },
+  {
+   "text": "### Status\n- [x] parser\n- [x] tests\n- [ ] CLI (in progress)",
+   "hold": false,
+   "from": "written-2"
+  }
+ ],
  "heldOut1": [
   {
    "text": "Do you want the CSV export too, or is JSON enough?",
@@ -1204,6 +1356,158 @@
    "text": "I've left a note in HANDOFF.md for whoever picks this up next.",
    "hold": false,
    "from": "held-out-3"
+  }
+ ],
+ "heldOut4": [
+  {
+   "text": "I've left both versions in `config.example.yml`. Which format do you want going forward?",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "The fix works, but it changes the public API. Before I go further, are you OK with a breaking change here?",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Summary:\n- Rewrote the retry loop\n- Added jitter\n\nI'd rather not touch the scheduler without your sign-off, so I've stopped here.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Could you paste the full error from your terminal? The log I have is cut off.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Ready to merge once you give it a thumbs up.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "I've prepared three names: Lumen, Beacon and Harbor. Pick the one you like and I'll update the package.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "The migration is reversible. Just say go and I'll run it against staging.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "I don't have write access to the `infra` repo, so the DNS change has to come from you.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Let me know which of the two layouts you'd prefer and I'll finish the CSS.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "If you'd like, I can also port the same fix to the 2.x branch.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "There's a trade-off between speed and memory here; I'll go with whatever you decide.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "## Blocked\nThe staging deploy needs a VPN I can't reach. Can you run `make deploy-staging` from your machine and tell me the result?",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Everything's in place for the release. I'll tag it after you've checked the changelog.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "I could split the module now or after the release — your choice.",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Two tests still fail on Windows, and I can't reproduce that here. How would you like me to proceed?",
+   "hold": true,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Refactored the loader into three functions. Next, I'll add the cache invalidation.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "The parser now handles CRLF line endings. Running the full suite again to be sure.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Done:\n- Moved the helpers into `utils/`\n- Updated imports\n\nRemaining: the CLI help text, which I'm writing now.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Let me know if anything looks unclear in the docs, though I think they cover it. Now on to the examples.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "The flaky test was a race in the fixture; fixed by awaiting the server start.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "If you're curious, the root cause was a stale cache key. Moving to the next todo.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "I'll keep going with the remaining endpoints until they all have tests.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Added the `--json` flag. You can try it with `tool list --json`.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "No breaking changes so far. I'm continuing with the migration guide.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "That's the last config file converted. On to the CI workflow.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Fixed. Feel free to ping me if the error comes back.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "The coverage report is in `coverage/index.html` if you'd like a look.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Thanks — that clue about the timezone was the key. The scheduler tests pass now, and I'm starting on the reminder emails.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "Wrote the benchmark harness. Numbers coming once the warm-up run finishes.",
+   "hold": false,
+   "from": "held-out-4"
+  },
+  {
+   "text": "1. Schema ✔\n2. Seed data ✔\n3. API routes — in progress",
+   "hold": false,
+   "from": "held-out-4"
   }
  ]
 }

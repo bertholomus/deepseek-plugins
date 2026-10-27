@@ -12,11 +12,16 @@
  *   "should I", "do you want", "would you like");
  * - or hand the next step to the person: "let me know if you want me to
  *   go on", "tell me which one", "say the word and I'll run them", "… if
- *   you'd like", "once you confirm, I'll …", "I'll wait for your review".
+ *   you'd like", "once you confirm, I'll …", "I'll wait for your review",
+ *   "I can add retries too, if that's useful", "I'm holding off until you
+ *   confirm", "I'd like your review first", "I need the API token",
+ *   "Your pick.", "Can you check whether the DB is up?".
  *
  * An offer that hands nothing over does not count: "happy to keep going",
  * "feel free to review the diff", "let me know if you have any questions",
- * and advice that starts "If you want a stricter check, use …". Nor does
+ * "let me know if you hit any snags", advice ("If you want a stricter
+ * check, use …", "Run it again if you want") and where a thing is ("The
+ * logs are in /tmp if you want to look"). Nor does
  * any offer when the reply's last sentence says what the agent does next
  * itself ("Next: the CLI.", "Moving on to the docs.", "I will carry on with
  * the remaining todos."), unless that sentence hands over too.
@@ -28,10 +33,14 @@ import { asksForAnswer } from './shared/words.js';
 /** How many of a reply's last non-empty lines are read, as the suite's words read them. */
 const TAIL_LINES = 6;
 
+/** "If that's useful", "if it helps": what an offer that waits for a yes may end with. */
+const IF_HELPS = "if (?:it|that|this)(?: helps| would help| works for you| is (?:useful|helpful)| would be (?:useful|helpful)|['’]s (?:useful|helpful))";
+
 /** Offers that hand the session's next step to the person. */
 const HANDS_OVER = [
-    // "Let me know if you want me to continue", "Tell me which one", "Let me know when you are ready".
-    /\b(?:let me know|tell me|ping me)\b/i,
+    // "Let me know if you want me to continue", "Tell me which one", "Let me know when you are ready" (not "I'll
+    // keep going until you tell me to stop").
+    /\b(?:let me know|(?<!\b(?:until|unless) you )tell me|ping me)\b/i,
     // "Say the word and I'll run them", "If you'd rather, say so".
     /\bsay (?:the word|so)\b/i,
     // "If you'd like me to…", "If you want, I can…", "If you prefer, I'll…".
@@ -54,10 +63,30 @@ const HANDS_OVER = [
     // "Happy to try another colour next": an offer of more work, which waits for a yes. Not "happy to keep going"
     // (the agent goes on), nor "happy to report" or "happy to help" (words of course).
     /\bhappy to (?!(?:keep|continue|carry|proceed|move|go on|report|say|confirm|share|help|announce|note|see|hear)\b)[a-z]/i,
+    // "I can add retries too, if that's useful", "If it helps, I can draft the notes": an offer that waits for a yes.
+    new RegExp(`\\bI (?:can|could)\\b[^.!?]*\\b${IF_HELPS}`, 'i'),
+    new RegExp(`^${IF_HELPS},? I(?:['’]ll| will| can| could|['’]d| would)\\b`, 'i'),
+    // "If you're OK with the rename, I'll update the imports".
+    /^if you(?:['’]re| are) (?:ok|okay|happy|fine|good|comfortable|alright|all right)\b.*\bI(?:['’]ll| will| can| could)\b/i,
+    // "I'm holding off on the deploy until you confirm", "I won't push until you've had a look": a wait on the
+    // person (not "I'll keep going until you say stop").
+    /^(?!.*\b(?:keep (?:going|at it)|continue|carry on|go on)\b).*\buntil you(?:['’]ve| have)? (?:confirm|approve|review|decide|reply|answer|choose|pick|say|give|tell|check|look|had|sign|OK|okay)/i,
+    // "I'd like your review on the API first", "I need you to add the key".
+    /\bI(?:['’]d| would) (?:like|appreciate|need|want) (?:your|you to)\b/i,
+    /\bI need you to\b/i,
+    // "I need the API token for the sandbox before I can go on": what only the person can give.
+    /\bI need (?:the |an? |your |some )?(?:(?:api|access|auth|sandbox|deploy|admin|ssh) )?(?:token|key|password|credential|access|permission|approval|sign-?off|go-?ahead|login|secret)s?\b/i,
+    /\bI need\b[^.!?]*\bfrom you\b/i,
+    // "I'll leave it for you to approve".
+    /\b(?:for you to|up to you to) (?:approve|decide|confirm|choose|pick|sign off|review|OK|okay)\b/i,
+    // "Two ways to fix it: retry, or mock the clock. Your pick."
+    /^your (?:pick|choice|call)\s*[.!]?$/i,
+    // "Can you check whether the staging DB is up?": a request to act, even before a last line that explains it.
+    /^(?:can|could|would) you (?:please )?(?:check|confirm|look|run|send|share|tell|give|add|grant|approve|review|try|restart|enable|set|create|provide|paste|upload)\b[^?]*\?$/i,
 ];
 
 /** A closing courtesy hands nothing over: "Let me know if you have any questions." */
-const COURTESY = /\b(?:any (?:other |more |further )?(?:questions?|issues?|problems?|feedback|concerns?)|anything else|(?:have|got) (?:any )?questions?|run into (?:any )?(?:issues?|problems?|trouble)|(?:anything|something) (?:is unclear|comes up|breaks|looks off|goes wrong)|need (?:anything|any help|help|more)|how (?:it|that) (?:goes|works))\b/i;
+const COURTESY = /\b(?:any (?:other |more |further )?(?:questions?|issues?|problems?|feedback|concerns?|snags?|hiccups?|errors?|bugs?|trouble|glitch(?:es)?|failures?|surprises?|regressions?)|anything else|(?:have|got) (?:any )?questions?|run into (?:any )?(?:issues?|problems?|trouble)|if you (?:see|spot|notice|find|hit|run into|come across|encounter) (?:anything|something)|(?:anything|something)(?: else)?(?: (?:that(?:['’]s| is| looks| seems)|is|looks|seems|feels))? (?:unclear|odd|weird|strange|off|wrong|broken|missing|unexpected|confusing|amiss)|(?:anything|something) (?:comes up|breaks|goes wrong)|need (?:anything|any help|help|more)|how (?:it|that) (?:goes|works))\b/i;
 
 /** What keeps a sentence a hand-over beside a courtesy: it asks about the next step itself. */
 const NEXT_STEP = /\b(?:me to|I should|whether|which|when you|once you|how you(?:['’]d| would)? like|what you(?:['’]d| would)? like|if you want (?:me|it|that|them)|go ahead|proceed|continue|carry on)\b/i;
@@ -75,6 +104,9 @@ const GOES_ON = [
 
 /** A sentence that tells the person what they can do: advice, not an offer ("Run it again if you want"). */
 const ADVICE = /^(?:you (?:can|could|may|might|should)|(?:just )?(?:run|use|try|see|check|open|read|look|install|set|pass|call|edit|change|rerun|re-run|start|stop|view|inspect|compare|search|grep|tail|cat)\b)/i;
+
+/** Where a thing is, then "if you want": "The logs are in /tmp if you want to look" (a fact, not an offer). */
+const WHERE_IF = /\b(?:is|are|['’]re|['’]s|lives?|sits?) (?:saved |stored |kept |written |left )?(?:in|at|under)\b[^,;]*\bif you(?:['’]d| would)? (?:like|want|prefer)\b/i;
 
 /** What may start a line before its words: quote marks, a bullet, a list number, a heading mark. */
 const LEAD = /^[\s>*_`#-]*(?:\d{1,3}[.)]\s+)?/;
@@ -99,8 +131,8 @@ export function handsOver(sentence) {
     // choice to the person; at a sentence's start it is advice ("If you want a stricter check, use …"), unless it
     // asks them for the go ("If you'd like me to…", "If you want, I can…").
     // Nor after an instruction to the person ("Run make bench if you want more numbers", "You can rerun it if you
-    // like"): that is advice too.
-    const trailingIf = /\S.*?\bif you(?:['’]d| would)? (?:like|want|prefer)\b/i.test(sentence) && !/^if you/i.test(sentence) && !ADVICE.test(sentence);
+    // like"), nor after where a thing is ("The logs are in /tmp if you want to look"): those are advice too.
+    const trailingIf = /\S.*?\bif you(?:['’]d| would)? (?:like|want|prefer)\b/i.test(sentence) && !/^if you/i.test(sentence) && !ADVICE.test(sentence) && !WHERE_IF.test(sentence);
     if (!trailingIf && !HANDS_OVER.some((pattern) => pattern.test(sentence))) return false;
     return !COURTESY.test(sentence) || NEXT_STEP.test(sentence);
 }
