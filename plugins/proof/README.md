@@ -57,7 +57,8 @@ makes it claim nothing. These claim nothing, so they are never flagged:
   anything", "Run the export tests once so I can see where they stand"),
   in a turn that changed nothing: a clause led by code ("`parse_header`
   built its pattern before the loop"), a plan's items ("`aws_s3_bucket.logs`
-  — replaced along with the rename"), how a thing is ("Retries are
+  — replaced along with the rename"), a list of what each named thing does
+  ("- `build` — compiles the TypeScript"), how a thing is ("Retries are
   configured in `config/retry.yml`"; "every migration is applied on
   staging" after `alembic current` or another status read of that place),
   how it behaves ("passes when it runs alone", "builds fine on Node 20 but
@@ -70,7 +71,8 @@ makes it claim nothing. These claim nothing, so they are never flagged:
   run or a count of the turn ("I ran the suite: all 212 examples pass"),
   and the turn's own work ("I fixed the import") are still claims, and a
   message that asks for a change or a ship ("Fix it", "then deploy") is
-  not a look. "The port is fixed at 8080" means set, in any turn;
+  not a look. In any turn, "the port is fixed at 8080" means set, and
+  "locks are released in the `finally` block" is code at work;
 - code blocks, `>` quotes, and reports of what something else says ("the
   README says the build passes"). *Claims* is reported speech only with a
   speaker, so "Fixed the double-claim bug" is a claim.
@@ -136,7 +138,7 @@ ansible and more), database migrations and checksums.
 
 ## How well it reads
 
-**Now** (pass 2, rules at 82a9161). The fair figures are the guards, whose
+**Now** (pass 2, rules at 834bba4). The fair figures are the guards, whose
 cases nobody working on Proof has opened, and each fresh set's first
 measure; `node scripts/proof-corpus.mjs` prints every row.
 
@@ -157,9 +159,13 @@ by label into two halves of 20. The rules learned from the tuned half
 (`seen12/`, now 0 of 18) are the look-only readings listed under
 [What counts as a claim](#what-counts-as-a-claim); on the guard half
 (`holdout12/`), whose cases stay unread, they flag 5 of its 16 turns that
-claim nothing, before and after the last of them (60ab17a, 82a9161). So
-about one plain explanation in four can still get a card when it says what
-code or a service does in words the rules have not met.
+claim nothing, at each of the last three commits of rules (60ab17a, 82a9161,
+834bba4). So more than one plain explanation in four, written the way that
+writer writes, can still get a card when it says what code or a service
+does in words the rules have not met. (Two later batches of explanation
+sentences the builder wrote, 22 and 25, each measured once before the rules
+they led to: 3 flagged in each, about one in eight; not a fair figure, as
+the builder knows the rules.)
 
 Measured on labelled corpora of coding-agent turns: real tool-output
 formats and replies, each turn labelled by the person who wrote it as
