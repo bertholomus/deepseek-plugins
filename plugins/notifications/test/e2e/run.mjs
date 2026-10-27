@@ -151,7 +151,7 @@ async function openFakeWindow(pw, { width = 1280, height = 860, fake = {}, dismi
     const context = await browser.newContext({ viewport: { width, height }, locale: 'en-US', colorScheme: 'light', timezoneId: 'America/Los_Angeles' });
     await context.addInitScript({ content: fakeNotifications(fake) });
     const page = await context.newPage();
-    page.setDefaultTimeout(15000);
+    page.setDefaultTimeout(30000);
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -176,6 +176,19 @@ const inView = async (locator) => {
     await locator.first().evaluate((element) => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     await sleep(250);
 };
+/**
+ * A picture for the record. On a busy machine a screenshot can take longer
+ * than an action may wait (one took over 15 s at a load average of 65), so
+ * a picture gets up to 60 s; the checks keep their own limits.
+ */
+async function picture(page, name) {
+    page.setDefaultTimeout(60000);
+    try {
+        return await shot(page, shots, name);
+    } finally {
+        page.setDefaultTimeout(30000);
+    }
+}
 const notes = (page) => page.evaluate(() => window.__notes.map((n) => ({ title: n.title, body: n.body, tag: n.tag, closed: Boolean(n.closed) })));
 /** Make the window look at its queue now (it polls every 15 s, and at once on focus or blur). */
 const poke = (page) => page.evaluate(() => window.dispatchEvent(new Event('blur')));
@@ -278,8 +291,8 @@ try {
             await page.evaluate(() => window.__notes.at(-1).onclick());
             await page.getByText('Notifications e2e: the chat a notification opens.', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
             check('a click opens the chat the news is about, and closes the notification', (await notes(page)).at(-1).closed === true, json(await notes(page)));
-            await shot(page, shots, 'chat-opened-light');
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-background'); });
+            await picture(page, 'chat-opened-light');
+        }, async () => { if (window?.page) await picture(window.page, 'failed-background'); });
 
         await step('a window in front with nobody at it still shows the news; once the person is at it, nothing shows, and the list says why', async () => {
             // A window in front and seen that nobody has touched since it loaded (the owner walked away). The first window
@@ -347,7 +360,7 @@ try {
                 return found.focused && found.seen ? found : undefined;
             }, 'the recent list in view', 15000, 300).catch(() => ({ focused: false, seen: false }));
             check('a click on the summary opens the plugin\'s page at the recent list, with the keyboard on it', at.focused && at.seen, json(at));
-            await shot(page, shots, 'summary-opens-recent-light');
+            await picture(page, 'summary-opens-recent-light');
         });
 
 
@@ -374,28 +387,28 @@ try {
             const open = page.getByRole('button', { name: 'Open chat: “Fix the flaky upload test” handed back' });
             check('the one from a chat has Open chat', (await open.count()) === 1);
             await inView(page.locator('[data-notifications-settings]'));
-            await shot(page, shots, 'settings-light');
+            await picture(page, 'settings-light');
             // The master switch off (not saved yet): the kinds below it show as inactive, and say why.
             const master = form.getByRole('switch', { name: 'Send system notifications' });
             await master.click();
             const inactive = await form.locator('[data-notifications-event] [role=switch]').evaluateAll((els) => els.map((el) => el.disabled === true || el.getAttribute('aria-disabled') === 'true'));
             const note = await page.locator('[data-notifications-kinds-off]').innerText().catch(() => '');
             check('with the master off, the six kinds are inactive and the page says they apply while it is on', inactive.length === 6 && inactive.every(Boolean) && note === 'These apply while “Send system notifications” is on.', json({ inactive, note }));
-            await shot(page, shots, 'settings-master-off-light');
+            await picture(page, 'settings-master-off-light');
             await master.click();
             const back = await form.locator('[data-notifications-event] [role=switch]').evaluateAll((els) => els.filter((el) => el.disabled === true || el.getAttribute('aria-disabled') === 'true').length);
             check('master on again: the kinds are live again', back === 0 && (await page.locator('[data-notifications-kinds-off]').count()) === 0, String(back));
             await setDark(page, true);
-            await shot(page, shots, 'settings-dark');
+            await picture(page, 'settings-dark');
             // Further down: where they go, this window, the test, and the recent list.
             await inView(page.locator('[data-notifications-recent]'));
-            await shot(page, shots, 'settings-recent-dark');
+            await picture(page, 'settings-recent-dark');
             await setDark(page, false);
-            await shot(page, shots, 'settings-recent-light');
+            await picture(page, 'settings-recent-light');
             await open.click();
             await page.getByText('Notifications e2e: the chat a notification opens.', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
             check('Open chat opens it', true);
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-settings'); });
+        }, async () => { if (window?.page) await picture(window.page, 'failed-settings'); });
 
         await step('a kind switched off and saved: the next one of that kind is "off", in words, on the page too', async () => {
             const { page } = window;
@@ -412,7 +425,7 @@ try {
             check('other kinds still go', (await notify({ title: 'Still on', kind: 'handback' })) === 'browser');
             check('the save applied in place: nothing restarted, the earlier ones are still listed', (await status()).recent.some((item) => item.title === 'Burst 1') && logLines().filter((line) => /^info started /.test(line)).length === 1, logLines().filter((line) => /^info started /.test(line)).join('\n'));
             check('the log says which setting changed, by its title, with its new value', logLines().some((line) => /^info settings changed: “Fleet findings” off \(notifications on; sender: window\)$/.test(line)), logLines().slice(-4).join('\n'));
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-switch'); });
+        }, async () => { if (window?.page) await picture(window.page, 'failed-switch'); });
 
         await step('the test button shows one now, says the system showed it, and logs it', async () => {
             const { page } = window;
@@ -435,8 +448,8 @@ try {
             const entry = await waitFor(async () => (await entryOf('Notifications test')), 'the test in the list', 15000, 300);
             check('the test is in the list and the log', entry.state === 'shown' && logLines().some((l) => l.startsWith(`info #${entry.id} (test) “Notifications test” shown`)), json(entry));
             await page.evaluate(() => { window.__watching = false; });
-            await shot(page, shots, 'settings-tested-light');
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-test'); });
+            await picture(page, 'settings-tested-light');
+        }, async () => { if (window?.page) await picture(window.page, 'failed-test'); });
 
         await step('a 760 px window: the page fits without a sideways scroll, every state word readable', async () => {
             const { page } = window;
@@ -448,12 +461,12 @@ try {
                 return { width: root.getBoundingClientRect().width, scroll: root.scrollWidth, client: root.clientWidth, over };
             });
             check('no sideways scroll in the page at 760 px', fit.scroll <= fit.client + 1 && fit.over.length === 0, json(fit));
-            await shot(page, shots, 'settings-760-light');
+            await picture(page, 'settings-760-light');
             await setDark(page, true);
-            await shot(page, shots, 'settings-760-dark');
+            await picture(page, 'settings-760-dark');
             await setDark(page, false);
             await page.setViewportSize({ width: 1280, height: 860 });
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-760'); });
+        }, async () => { if (window?.page) await picture(window.page, 'failed-760'); });
 
         await step('contrast: every text style on the page reaches 4.5:1, light and dark', async () => {
             const { page } = window;
@@ -512,7 +525,7 @@ try {
                 const row = page.locator('[data-notifications-permission]');
                 check('the row says the browser asks once, with an Allow button', /This browser asks you once before DSH may show notifications/.test(await row.innerText()) && (await row.getByRole('button', { name: 'Allow notifications' }).count()) === 1, await row.innerText());
                 await inView(row);
-                await shot(page, shots, 'permission-ask-light');
+                await picture(page, 'permission-ask-light');
                 await row.getByRole('button', { name: 'Allow notifications' }).focus();
                 await page.keyboard.press('Enter');
                 await waitFor(async () => /This window may show notifications\./.test(await row.innerText()), 'the answer', 10000, 200);
@@ -522,7 +535,7 @@ try {
                 await asking.browser.close().catch(() => {});
                 await window.page.evaluate(() => { window.__watching = false; });
             }
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-ask'); });
+        }, async () => { if (window?.page) await picture(window.page, 'failed-ask'); });
 
         await step('a blocked tab beside a window that can show news takes nothing; two windows that can both show it show it once', async () => {
             const blocked = await openFakeWindow(pw, { fake: { startPermission: 'denied' } });
@@ -548,12 +561,12 @@ try {
                 const perm = await blocked.page.locator('[data-notifications-permission]').innerText();
                 check('the blocked tab\'s page says it is blocked, and how to allow them', /blocked/i.test(perm) && where.length > 0, `${where} | ${perm}`);
                 await inView(blocked.page.locator('[data-notifications-permission]'));
-                await shot(blocked.page, shots, 'blocked-tab-light');
+                await picture(blocked.page, 'blocked-tab-light');
             } finally {
                 await blocked.browser.close().catch(() => {});
                 await second.browser.close().catch(() => {});
             }
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-two-windows'); });
+        }, async () => { if (window?.page) await picture(window.page, 'failed-two-windows'); });
 
         await step('a notification that names a place opens it on a click', async () => {
             const { page } = window;
@@ -578,7 +591,7 @@ try {
             check('Fleet\'s findings name Fleet\'s page', JSON.stringify(fleet.open) === JSON.stringify({ panel: 'fs-fleet' }), json(fleet));
             await waitFor(async () => logLines().filter((line) => /^info #\d+ clicked: DSH's window came up by itself$/.test(line)).length >= 3, 'the clicks in the log', 10000, 300).catch(() => {});
             check('each click is in the log', logLines().filter((line) => /^info #\d+ clicked: DSH's window came up by itself$/.test(line)).length >= 3, logLines().slice(-6).join('\n'));
-        }, async () => { if (window?.page) await shot(window.page, shots, 'failed-open-place'); });
+        }, async () => { if (window?.page) await picture(window.page, 'failed-open-place'); });
 
         const ours = window.errors.filter((text) => /notifications/i.test(text));
         check('no errors from the plugin in the window', ours.length === 0, ours.join('\n'));
@@ -609,7 +622,7 @@ try {
         const again = (await notes(page)).filter((n) => n.title === 'Waited through a restart');
         check('shown once after the restart, and not again after a reload', again.length === 0, json(again));
         await page.evaluate(() => { window.__watching = false; });
-    }, async () => { if (window?.page) await shot(window.page, shots, 'failed-restart'); });
+    }, async () => { if (window?.page) await picture(window.page, 'failed-restart'); });
 
     // ── Switched off and on from Plugins ───────────────────────────────
     await step('switched off and on from Plugins: callers get nothing while off, its sheet leaves the window, and on again it works', async () => {
@@ -633,7 +646,7 @@ try {
             await waitFor(async () => (await window.page.locator('style[data-plugin="dsh-plugin-notifications"]').count()) === 1, 'its style sheet to come back', 15000, 300).catch(() => {});
             check('one style sheet of its own again', (await window.page.locator('style[data-plugin="dsh-plugin-notifications"]').count()) === 1);
         }
-    }, async () => { if (window?.page) await shot(window.page, shots, 'failed-off-on'); });
+    }, async () => { if (window?.page) await picture(window.page, 'failed-off-on'); });
     await window?.browser?.close().catch(() => {});
     window = undefined;
 
@@ -653,9 +666,9 @@ try {
             check('the page names the setting, what it must be, and how to fix it', /A setting is wrong/.test(problem) && problem.includes('“Handbacks” must be true or false, but it is "no"; it counts as on until you change it. Set it with its switch above and save (in the profile its key is notifyHandback).'), problem);
             check('and the misspelt key, with the setting it meant and the fix', problem.includes('“notifyFleeet” is not a setting of this plugin, so it does nothing; did you mean “Fleet findings”? Rename it to notifyFleet in the profile\'s notifications row, or remove it.') && !problem.includes('?.'), problem);
             await inView(window.page.locator('[data-notifications-problems]'));
-            await shot(window.page, shots, 'settings-wrong-setting-light');
+            await picture(window.page, 'settings-wrong-setting-light');
         }
-    }, async () => { if (window?.page) await shot(window.page, shots, 'failed-wrong-setting'); });
+    }, async () => { if (window?.page) await picture(window.page, 'failed-wrong-setting'); });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);
 } finally {
