@@ -648,9 +648,10 @@ export class SessionWatch {
      * A session that is not running but whose queue already holds messages
      * (a stop left them there: DSH reads one queued message per turn, and
      * nothing woke the session since) gets the message in its next step: the
-     * turn it starts reads it first, with the oldest one waiting. So a note
-     * about the stop is read before what was sent before the stop, never
-     * after it, and never waits behind it.
+     * turn it starts reads it with the oldest message waiting for a turn, it
+     * first (anything a stop left for a next step comes ahead of both, in that
+     * same turn). So a note about the stop is read before what was queued
+     * for a turn before the stop, never after it, and never waits behind it.
      * @param {string} sessionId
      * @param {string} text
      * @param {{ mode?: 'queue' | 'steer', from?: string }} [options] - `from`: who sends it, kept with its record.

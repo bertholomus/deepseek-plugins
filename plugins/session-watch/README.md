@@ -81,8 +81,10 @@ start until a turn ends there again.
   turn for each, or be taken back unread. When a session is not running
   and has messages waiting, `deliver` puts the new message in as a steer
   instead: it starts the next turn, and DSH reads it there with the oldest
-  waiting message, the new one first. `cutOffSessions` names what still
-  waits in each cut-off session (`queued`).
+  message waiting for a turn, the new one first (a message a stop left for
+  a running turn's next step is read in that same turn, ahead of both).
+  `cutOffSessions` names what still waits in each cut-off session
+  (`queued`).
 - **Cut off by a stop.** It keeps a small record of turns running now
   (`running.json`). After DSH restarts, crashes or reloads, it finds the
   sessions whose turn the stop cut off, from that record and from DSH's
