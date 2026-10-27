@@ -35,18 +35,18 @@ Install the plugin as in the [root README](../../README.md#install-a-plugin). It
 | `logFile` | a full path, or `""` | `<DSH data folder>/session-bridge/bridge.log` | The action log, mode 600; `""` for none. Past 5 MB it starts again and keeps the last part as `<logFile>.1`. |
 | `maxBodyBytes` | a whole number, 1024 to 67108864 | `1048576` | The largest request body taken; a larger one gets a 413. |
 
-A wrong value never stops the bridge. That setting keeps its default, and the problem is said in words in `GET /health` (`problems`) and in the bridge's log (`setting: …`). The bridge also hands it to DSH's logger, which may keep it in memory only, so read the bridge's log. A key the bridge does not have (a typo such as `socketpath`) is named the same way.
+A wrong value never stops the bridge (a row that still says `enabled: false` does, on purpose: see below). That setting keeps its default, and the problem is said in words in `GET /health` (`problems`) and in the bridge's log (`setting: …`). The bridge also hands it to DSH's logger, which may keep it in memory only, so read the bridge's log. A key the bridge does not have (a typo such as `socketpath`) is named the same way.
 
 `enabled` is no longer a setting (it was until 0.3.0): DSH's own switch in Plugins turns the bridge off, and DSH then shows it Off, where `enabled: false` left it reading "Running". A row that still has the key is named in `problems`; one that says `enabled: false` is never taken as on: the bridge does not start (see [When the bridge does not listen](#when-the-bridge-does-not-listen)).
 
-DSH applies a saved change to the row at once: the bridge stops, and starts again with the new settings.
+DSH applies a saved change to the row at once: the bridge stops, and starts again with the new settings. (A bridge that failed to start: see [When the bridge does not listen](#when-the-bridge-does-not-listen).)
 
 In DSH Test, `dsh-test load <this folder>` keeps the test home's own socket and log (DSH Test sets `DSH_HOME` to its home), so `dsh-test prompt` and `dsh-test bridge` reach it there.
 
 ## Switch it off, roll it back
 
 - To switch it off, turn **Session Bridge** off on DSH's Plugins page; DSH then shows it Off. Its socket file goes away, so scripts that use it (`dsh-test prompt`, for one) get "no such file" (`ENOENT`) until it is on again. To remove it, see [Remove a plugin](../../README.md#remove-a-plugin).
-- To roll back, check out the earlier version of `plugins/session-bridge` in your clone (`git log -- plugins/session-bridge` lists them) and restart DSH. For the same request, 0.4.0 answers with the same fields as 0.1.0, 0.2.0 and 0.3.0 (some replies have more), except for input they let through or guessed at, which 0.4.0 refuses in words: see [What changed](#what-changed). An older version ignores `creates.jsonl`; 0.3.0 reads a prompt whose turn DSH tore down as `answered`, and older ones every unfinished prompt.
+- To roll back, check out the earlier version of `plugins/session-bridge` in your clone (`git log -- plugins/session-bridge` lists them) and restart DSH. For the same request, 0.4.0 answers with the same fields as 0.1.0, 0.2.0 and 0.3.0 (some replies have more), except where they let input through, guessed at it, or answered as done what they did not do (a cancel with no turn running, a retry with another text): 0.4.0 refuses those in words. See [What changed](#what-changed). An older version ignores `creates.jsonl`; 0.3.0 reads a prompt whose turn DSH tore down as `answered`, and older ones every unfinished prompt.
 
 ## API
 
