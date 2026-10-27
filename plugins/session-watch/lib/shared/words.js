@@ -125,6 +125,33 @@ export function plainLine(line) {
     return unholdCode(dropMarks(text), spans);
 }
 
+/** A fence's line: up to three spaces, then three or more backticks or tildes (an opening one may name a language). */
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * The text with each closed fenced code block (```…``` or ~~~…~~~) blanked
+ * out, line for line: what a reply shows as code (a DECISION NEEDED line
+ * quoted from a rules file, a prompt's "Continue?") is not what it asks. A
+ * fence that is never closed is read as text.
+ */
+export function unfenced(text) {
+    const lines = String(text ?? '').split('\n');
+    let open;
+    for (let i = 0; i < lines.length; i += 1) {
+        const fence = FENCE.exec(lines[i]);
+        if (!fence) continue;
+        if (open === undefined) {
+            // A backtick fence's language holds no backtick: "```a```" on one line is code inside a line, not a fence.
+            if (fence[1][0] === '`' && fence[2].includes('`')) continue;
+            open = { at: i, mark: fence[1] };
+        } else if (fence[1][0] === open.mark[0] && fence[1].length >= open.mark.length && fence[2].trim() === '') {
+            for (let j = open.at; j <= i; j += 1) lines[j] = '';
+            open = undefined;
+        }
+    }
+    return lines.join('\n');
+}
+
 /** A text's lines with their marks dropped and their code spans held, and how to give a part of them back in words. */
 function heldLines(text) {
     const { text: held, spans } = holdCode(text);
@@ -140,7 +167,8 @@ function heldLines(text) {
  * and, in the reply's last lines, also after the end of a sentence:
  * "…without valid credentials. BLOCKED: working staging credentials." A
  * marker inside a sentence ("the request was BLOCKED: by policy") is not
- * one. DECISION NEEDED is read in any case; BLOCKED only in capitals.
+ * one, nor is one inside a fenced code block (a rule quoted as an example).
+ * DECISION NEEDED is read in any case; BLOCKED only in capitals.
  */
 
 /** How many of a reply's last non-empty lines may carry a marker after a sentence's end. */
@@ -191,8 +219,9 @@ const RECOMMEND_LINE = /^[\s>*_`-]*recommend(?:ation|ed)?\s*[:：]\s*(.+?)\s*$/i
 /** The question and recommendation of the last decision line in a text, or undefined. */
 export function decisionIn(text) {
     if (typeof text !== 'string' || !/DECISION NEEDED/i.test(text)) return undefined;
-    // Code spans are held while the line is read, so `__init__.py` or a `--flag` in one stays whole.
-    const { lines, words } = heldLines(text);
+    // Code spans are held while the line is read, so `__init__.py` or a `--flag` in one stays whole; a fenced
+    // code block is shown, not said, so a marker in one is none.
+    const { lines, words } = heldLines(unfenced(text));
     const tail = tailStart(lines);
     for (let i = lines.length - 1; i >= 0; i -= 1) {
         const rest = afterMarker(lines[i], 'DECISION NEEDED', { anyCase: true, inline: i >= tail });
@@ -234,7 +263,7 @@ export function recommendationIn(text) {
 /** The text of the last BLOCKED marker in a text, or undefined. */
 export function blockedIn(text) {
     if (typeof text !== 'string' || !/BLOCKED/.test(text)) return undefined;
-    const { lines, words } = heldLines(text);
+    const { lines, words } = heldLines(unfenced(text));
     const tail = tailStart(lines);
     for (let i = lines.length - 1; i >= 0; i -= 1) {
         const rest = words(trimMarks(afterMarker(lines[i], 'BLOCKED', { anyCase: false, inline: i >= tail }))).trim();
@@ -258,8 +287,11 @@ const cutAsk = (text) => {
  * plain question.
  * @returns {{ kind: 'decision', question: string, recommendation?: string } | { kind: 'blocked', question: string } | { kind: 'question', question: string } | undefined}
  */
-export function askIn(text) {
-    if (typeof text !== 'string' || text.trim() === '') return undefined;
+export function askIn(reply) {
+    if (typeof reply !== 'string') return undefined;
+    // A fenced code block is shown, not asked: read as blank lines.
+    const text = unfenced(reply);
+    if (text.trim() === '') return undefined;
     const decision = decisionIn(text);
     if (decision) return { kind: 'decision', question: cutAsk(decision.question), ...(decision.recommendation ? { recommendation: cutAsk(decision.recommendation) } : {}) };
     const blocked = blockedIn(text);
@@ -345,7 +377,7 @@ const tailOf = (text) => text.trim().split('\n').map((line) => line.trim()).filt
  */
 export function asksForAnswer(text) {
     if (typeof text !== 'string' || text.trim() === '') return false;
-    const lines = tailOf(text);
+    const lines = tailOf(unfenced(text));
     if (/\?\s*[*_`)\]]*\s*$/.test(lines.at(-1) ?? '')) return true;
     const tail = lines.slice(-6).join('\n');
     return ASKS.some((pattern) => pattern.test(tail));
@@ -360,7 +392,7 @@ export function asksForAnswer(text) {
 export function asksSomeone(text) {
     if (asksForAnswer(text)) return true;
     if (typeof text !== 'string' || text.trim() === '') return false;
-    const tail = tailOf(text).slice(-6).join('\n');
+    const tail = tailOf(unfenced(text)).slice(-6).join('\n');
     return OFFERS.some((pattern) => pattern.test(tail));
 }
 

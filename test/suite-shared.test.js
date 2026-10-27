@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, holdCode, plainError, plainLine, recommendationIn, spanWords, stateWord, timeWords, unholdCode } from '../shared/host/words.js';
+import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, holdCode, plainError, plainLine, recommendationIn, spanWords, stateWord, timeWords, unfenced, unholdCode } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -190,6 +190,27 @@ test('words: a question keeps its words when a dot sits in it (a file, a version
     assert.equal(asked('Should I run `make build. Then deploy` again?'), 'Should I run `make build. Then deploy` again?');
     assert.equal(asked('I added `cache?.get()`. Should I keep the old path too?'), 'Should I keep the old path too?');
     assert.equal(askIn('Use `x ?? y` there. Should I?').question, 'Should I?');
+});
+
+test('words: a fenced code block is shown, not asked: no marker or question in one counts, and a question before one is found', () => {
+    // A rule quoted from a rules file made a card "<question>" with the pick "<pick>".
+    const quoted = 'I added the rule to AGENTS.md:\n```\nDECISION NEEDED: <question> — recommend: <pick>\n```\nThat is all.';
+    assert.equal(decisionIn(quoted), undefined);
+    assert.equal(askIn(quoted), undefined);
+    assert.equal(asksSomeone(quoted), false);
+    assert.equal(askIn('Rules updated:\n~~~md\nBLOCKED: <what is missing>\n~~~'), undefined, 'a tilde fence too');
+    assert.equal(blockedIn('```\nBLOCKED: no key\n```'), undefined);
+    // A "?" in the code is not the question; the one around it is.
+    assert.deepEqual(askIn('The migration is ready.\n```sh\nread -p "Continue? " ok\nnpm run migrate\n```\nShould I run it on staging now?'), { kind: 'question', question: 'Should I run it on staging now?' });
+    assert.deepEqual(askIn('Should I run this on staging?\n```sh\nnpm run migrate\n```'), { kind: 'question', question: 'Should I run this on staging?' }, 'a question before the code that ends the reply');
+    assert.equal(asksForAnswer('Should I run this on staging?\n```sh\nnpm run migrate\n```'), true);
+    // The session's own marker after a block still counts, and so does one after a fence never closed.
+    assert.deepEqual(askIn('```sh\nnpm test\n```\nDECISION NEEDED: Ship it? — recommend: yes'), { kind: 'decision', question: 'Ship it?', recommendation: 'yes' });
+    assert.deepEqual(askIn('```\nDECISION NEEDED: Ship it? — recommend: yes'), { kind: 'decision', question: 'Ship it?', recommendation: 'yes' });
+    // Each line stays in its place (blank), a closing fence must match the opening one, and "```a```" is no fence.
+    assert.equal(unfenced('a\n````md\n```\nb\n````\nc'), 'a\n\n\n\n\nc');
+    assert.equal(unfenced('a\n```x```\nb'), 'a\n```x```\nb');
+    assert.equal(unfenced('a\n```js\nb\n~~~\nc'), 'a\n```js\nb\n~~~\nc', 'a tilde fence does not close a backtick one');
 });
 
 test('words: code spans keep identifiers whole: dunders, double stars and dashes stay in the question, the pick and the lines', () => {
