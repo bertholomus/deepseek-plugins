@@ -159,3 +159,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 8:35 PM PDT: PASS 2 Hermes Bridge (a9cbff7) judged 9.0 NOT YET (U 9.5, R 9, UX 9, T 9, D 9; all nine round-1 findings fixed; a refused POST /sessions still makes a workspace; the e2e fails once on 0.2.0-rc.2). Discord (e2d04a4) judged 8.5 NOT YET (U 9, R 8.5, UX 8.5, T 9, D 9; 10 of 12 round-2 findings fixed; scorecard local). Focus handed over 8478288; its judge is running.
 - 2026-10-26 11:37 PM PDT: PASS 2 Focus (8478288) judged 9.3 NOT YET (U 9.5, R 9.5, UX 9, T 9.5, D 9; all ten round-1 findings fixed). The account's usage limit stopped 14 pass-2 agents at about 9:01 PM PDT (5 builders, 9 judges); it reset at 11:30 PM and every one is resumed with new times.
 - 2026-10-26 11:47 PM PDT: PASS 2 categories (a8be48e) judged 8.9 NOT YET (U 9, R 9, UX 8.5, T 9, D 9).
+- 2026-10-26 11:49 PM PDT: PASS 2 dna-studio (7975838) judged 8.5 NOT YET (U 8.5, R 9, UX 8, T 8.5, D 9).
