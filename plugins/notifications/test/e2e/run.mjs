@@ -167,6 +167,15 @@ async function openFakeWindow(pw, { width = 1280, height = 860, fake = {}, dismi
     return { browser, context, page, errors };
 }
 
+/**
+ * Scroll an element into the window for a picture, without waiting for it to
+ * hold still (on a busy machine DSH's page can keep moving for longer than a
+ * locator waits; the picture is taken either way).
+ */
+const inView = async (locator) => {
+    await locator.first().evaluate((element) => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+    await sleep(250);
+};
 const notes = (page) => page.evaluate(() => window.__notes.map((n) => ({ title: n.title, body: n.body, tag: n.tag, closed: Boolean(n.closed) })));
 /** Make the window look at its queue now (it polls every 15 s, and at once on focus or blur). */
 const poke = (page) => page.evaluate(() => window.dispatchEvent(new Event('blur')));
@@ -364,7 +373,7 @@ try {
             check('the list names the log file that has every one', hint.includes(`Every one is also a line in its log file, ${logFile()}.`), hint);
             const open = page.getByRole('button', { name: 'Open chat: “Fix the flaky upload test” handed back' });
             check('the one from a chat has Open chat', (await open.count()) === 1);
-            await page.locator('[data-notifications-settings]').scrollIntoViewIfNeeded();
+            await inView(page.locator('[data-notifications-settings]'));
             await shot(page, shots, 'settings-light');
             // The master switch off (not saved yet): the kinds below it show as inactive, and say why.
             const master = form.getByRole('switch', { name: 'Send system notifications' });
@@ -379,7 +388,7 @@ try {
             await setDark(page, true);
             await shot(page, shots, 'settings-dark');
             // Further down: where they go, this window, the test, and the recent list.
-            await page.locator('[data-notifications-recent]').scrollIntoViewIfNeeded();
+            await inView(page.locator('[data-notifications-recent]'));
             await shot(page, shots, 'settings-recent-dark');
             await setDark(page, false);
             await shot(page, shots, 'settings-recent-light');
@@ -502,7 +511,7 @@ try {
                 await openSettings(page);
                 const row = page.locator('[data-notifications-permission]');
                 check('the row says the browser asks once, with an Allow button', /This browser asks you once before DSH may show notifications/.test(await row.innerText()) && (await row.getByRole('button', { name: 'Allow notifications' }).count()) === 1, await row.innerText());
-                await row.scrollIntoViewIfNeeded();
+                await inView(row);
                 await shot(page, shots, 'permission-ask-light');
                 await row.getByRole('button', { name: 'Allow notifications' }).focus();
                 await page.keyboard.press('Enter');
@@ -538,7 +547,7 @@ try {
                 const where = await blocked.page.locator('[data-notifications-where]').innerText();
                 const perm = await blocked.page.locator('[data-notifications-permission]').innerText();
                 check('the blocked tab\'s page says it is blocked, and how to allow them', /blocked/i.test(perm) && where.length > 0, `${where} | ${perm}`);
-                await blocked.page.locator('[data-notifications-permission]').scrollIntoViewIfNeeded();
+                await inView(blocked.page.locator('[data-notifications-permission]'));
                 await shot(blocked.page, shots, 'blocked-tab-light');
             } finally {
                 await blocked.browser.close().catch(() => {});
@@ -643,7 +652,7 @@ try {
             const problem = await window.page.locator('[data-notifications-problems]').innerText();
             check('the page names the setting, what it must be, and how to fix it', /A setting is wrong/.test(problem) && problem.includes('“Handbacks” must be true or false, but it is "no"; it counts as on until you change it. Set it with its switch above and save (in the profile its key is notifyHandback).'), problem);
             check('and the misspelt key, with the setting it meant and the fix', problem.includes('“notifyFleeet” is not a setting of this plugin, so it does nothing; did you mean “Fleet findings”? Rename it to notifyFleet in the profile\'s notifications row, or remove it.') && !problem.includes('?.'), problem);
-            await window.page.locator('[data-notifications-problems]').scrollIntoViewIfNeeded();
+            await inView(window.page.locator('[data-notifications-problems]'));
             await shot(window.page, shots, 'settings-wrong-setting-light');
         }
     }, async () => { if (window?.page) await shot(window.page, shots, 'failed-wrong-setting'); });
