@@ -372,6 +372,7 @@ test('a subscribed feed is read only, follows its ETag, survives a restart, and 
         hidden(JSON.stringify(account), 'the account view');
         await hiddenEverywhere(m);
         assert.equal(account.name, 'Holidays', 'named by the feed');
+        assert.ok(Number.isFinite(account.syncedAt) && account.status === 'ok', 'synced as it is added, and its row says so (not "Not synced yet")');
         assert.equal(account.host, host);
         assert.ok(!('url' in account), 'the account view has no url');
         assert.ok(vault.get(account.id)?.url === url, 'the address is in the account\'s record');
