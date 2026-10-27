@@ -52,6 +52,25 @@ makes it claim nothing. These claim nothing, so they are never flagged:
   uploaded as the `plan-prod` artifact", "It is deployed on every merge"),
   what code does ("`LRU.Get` released the mutex"), what a commit once did,
   where a thing came from ("The lock file was made with Node 22");
+- answers to a message that only asks to look ("Why does the header check
+  fail?", "How is the discount documented? Just look, do not change
+  anything", "Run the export tests once so I can see where they stand"),
+  in a turn that changed nothing: a clause led by code ("`parse_header`
+  built its pattern before the loop"), a plan's items ("`aws_s3_bucket.logs`
+  — replaced along with the rename"), how a thing is ("Retries are
+  configured in `config/retry.yml`"; "every migration is applied on
+  staging" after `alembic current` or another status read of that place),
+  how it behaves ("passes when it runs alone", "builds fine on Node 20 but
+  fails on Node 18", "the rollout completes in about four minutes",
+  "deployed behind the gateway"), history ("Already fixed — `b72e0d4`
+  switches the test to a frozen clock", "the fix landed in 3.1.0"), and the
+  cause of what a why question takes as given ("It works locally because
+  your `.env` sets `API_URL`" after "Why does it work locally but fail on
+  CI?"). A status question ("Is it deployed?", "Did the tests pass?"), a
+  run or a count of the turn ("I ran the suite: all 212 examples pass"),
+  and the turn's own work ("I fixed the import") are still claims, and a
+  message that asks for a change or a ship ("Fix it", "then deploy") is
+  not a look. "The port is fixed at 8080" means set, in any turn;
 - code blocks, `>` quotes, and reports of what something else says ("the
   README says the build passes"). *Claims* is reported speech only with a
   speaker, so "Fixed the double-claim bug" is a claim.
@@ -116,6 +135,31 @@ docker push, kubectl, helm, fly, vercel, netlify, gcloud, aws, terraform,
 ansible and more), database migrations and checksums.
 
 ## How well it reads
+
+**Now** (pass 2, rules at 82a9161). The fair figures are the guards, whose
+cases nobody working on Proof has opened, and each fresh set's first
+measure; `node scripts/proof-corpus.mjs` prints every row.
+
+| Set | Quiet turns flagged | Of them, turns that claim nothing | Bad turns caught | Caught for the right claim | True claims called contradicted |
+|---|---|---|---|---|---|
+| Eighth hold-out (guard, never tuned on) | 3 of 60 (5.0%) | 1 of 20 | 47 of 50 (94.0%) | — | — |
+| Eleventh hold-out (guard, never tuned on) | 3 of 60 (5.0%) | 0 of 20 | 45 of 50 (90.0%) | 45 of 50 (90.0%) | 2 |
+| Twelfth hold-out: 40 look-only turns by a fresh writer, measured whole once at 2252a96 | 10 of 36 (27.8%) | 9 of 32 | 4 of 4 | 3 of 4 | 1 |
+| Twelfth hold-out, guard half (20 turns never opened, never tuned on) | 5 of 18 (27.8%) | 5 of 16 | 2 of 2 | 2 of 2 | 0 |
+| The round-4 judge's own turns (`judge4/`), measured once at 7cc66ef | 6 of 44 (13.6%) | 6 of 22 | 22 of 26 (84.6%) | 21 of 26 (80.8%) | 2 |
+| Every tuned set (dev, the first seven hold-outs, the ninth, tenth, `live/`, `probes/`, `judge4/`, the twelfth's tuned half) | 0 | 0 | all | all | 0 |
+
+The weak figure is the look-only one. Floors were fixed for the twelfth
+before its writer started (at most 5% of quiet turns flagged, at least 80%
+of bad turns caught, at most 1 true claim called contradicted): measured
+whole, it met the last two and missed the first by far. It was then split
+by label into two halves of 20. The rules learned from the tuned half
+(`seen12/`, now 0 of 18) are the look-only readings listed under
+[What counts as a claim](#what-counts-as-a-claim); on the guard half
+(`holdout12/`), whose cases stay unread, they flag 5 of its 16 turns that
+claim nothing, before and after the last of them (60ab17a, 82a9161). So
+about one plain explanation in four can still get a card when it says what
+code or a service does in words the rules have not met.
 
 Measured on labelled corpora of coding-agent turns: real tool-output
 formats and replies, each turn labelled by the person who wrote it as
@@ -274,7 +318,7 @@ alone after a fix, and repeated runs.
 
 The eleventh hold-out, from four more fresh writers, was measured once
 with the rules frozen (at c276436) and is never tuned on: its figure is the
-fair one, and no twelfth was written. **It missed one of the seven
+fair one for everyday work. **It missed one of the seven
 floors**: it called 2 true claims contradicted, where the floor is at most
 1. It met the other six: it flagged 8.3% of quiet turns (3 of its 40
 honest turns that claim something, 7.5%, and 2 of its 20 turns that claim
@@ -313,14 +357,19 @@ of another corpus are left out). Both are held to the dev bar in `npm
 test`. The fixes are general rules, listed under
 [What counts as a claim](#what-counts-as-a-claim).
 
-The two guards were not tuned on in round 4 and their cases are still
-unread. Measured again with round 4's rules, the eighth flags 3 of its 60
-quiet turns (5.0%), catches 47 of 50 (94.0%) and calls 22 of its 25 wrong
-claims contradicted; the eleventh flags 4 of 60 (6.7%: 3 of its 40 honest
-turns that claim something, one of them called contradicted, and 1 of the
-20 that claim nothing), catches 45 of 50 (90.0%), each for the right
-claim, puts a flag on another claim in 1, and still calls 2 true claims
-contradicted, so it still misses that floor. To measure again:
+Pass 2 took the round-4 judge's turns (its everyday set, its probes, its
+description probes and three look-only real-model replies: 70 turns in
+`judge4/`) as a tuned set, after the one measure above, and the twelfth
+hold-out as described at the top of this section. The two older guards
+were not tuned on in round 4 or pass 2 and their cases are still unread.
+Measured again with pass 2's rules, the eighth flags 3 of its 60 quiet
+turns (5.0%), catches 47 of 50 (94.0%) and calls 22 of its 25 wrong claims
+contradicted; the eleventh flags 3 of 60 (5.0%: 3 of its 40 honest turns
+that claim something, one of them called contradicted, and none of the 20
+that claim nothing; round 4's rules flagged one of those), catches 45 of
+50 (90.0%), each for the right claim, puts a flag on another claim in 1,
+and still calls 2 true claims contradicted, so it still misses that floor.
+To measure again:
 
 ```sh
 node scripts/proof-corpus.mjs           # one row per corpus
@@ -342,12 +391,13 @@ On the tuned sets, two turns:
   second change with no run after it follows. Proof keeps which file a
   change touched, not its text, so it cannot tell which change a fix was.
 
-On the eleventh hold-out, whose cases nobody working on Proof has read,
-with round 4's rules: 5 of its 50 bad turns are not caught, 1 has a flag
-on another claim, 2 true claims are called contradicted (at least one in
-an honest turn), 4 of its 60 quiet turns are flagged, and 4 of its 25
-wrong claims are not called contradicted. Which shapes these are is not
-known; reading its cases would end it as a fair figure.
+On the guards, whose cases nobody working on Proof has read, with pass 2's
+rules: on the twelfth's guard half, 5 of its 16 look-only turns that claim
+nothing get a card; on the eleventh, 5 of its 50 bad turns are not caught,
+1 has a flag on another claim, 2 true claims are called contradicted (at
+least one in an honest turn), 3 of its 60 quiet turns are flagged, and 4
+of its 25 wrong claims are not called contradicted. Which shapes these are
+is not known; reading their cases would end them as fair figures.
 
 Some ways of putting a claim are not read as claims at all, so nothing
 checks them: a comma before a clause with no joining word ("Pushed to
@@ -405,7 +455,8 @@ Proof has its own entry in the sidebar. Its page shows:
   latest flag (a session with no flag, by when it last changed) and with
   its one state (*contradicted*, *no evidence*, *verified* or *shown*).
   Pick one to see its ledger. Opening the page from a flag picks that
-  session.
+  session. The list is one Tab stop: the up and down arrows (and Home and
+  End) move between its sessions, and Enter or Space picks one.
 - **Ledger**: the session's claims, newest turn first and a reply's claims
   in the order it made them, **Flagged** or **All claims**, and their
   counts. A flagged claim the independent check verified is counted
@@ -632,7 +683,7 @@ node --test test/proof*.test.js       # claims, evidence, the ledger, the check,
 node scripts/e2e.mjs proof            # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (139 checks, three to six minutes a build)
+The real-DSH test (143 checks, three to six minutes a build)
 starts DSH from each `.e2e/dsh-<version>` install and from the installed
 app's own DSH, each in a throwaway home, with Session Watch and Proof and
 a scripted model (`test/e2e/fake-model.mjs`) that plays both the agent and
@@ -647,7 +698,8 @@ runs in a new "Proof check · …" thread on the check model alone, at low
 effort, and DSH's own log shows the read-only file policy and approvals
 that never ask before its first message; its model is offered only tools
 that read or run (and DSH's `subagent`), Proof's guard refuses the
-subagent and a commit, DSH's file policy stops a write, the checked
+subagent and a commit, DSH's file policy stops a write (the check's
+`touch` is tried and refused, so no file is made), the checked
 session gets nothing and DSH's default model is unchanged. A NOT VERIFIED
 and a VERIFIED head their cards, and the verified claim is counted apart on
 the ledger, its session's row, the header and the exports. While a slow
@@ -675,7 +727,11 @@ fixed in the README after the fix and a passing run; "Fixed the flaky
 coupon test; it passes reliably now." after a loop of three runs in which
 the second failed is called contradicted, saying a round failed and
 naming the program the loop ran by its own name, and it is the only card
-in that chat; Proof's page, open all the while, lists that
+in that chat; a look-only answer ("How is the discount documented? Just
+look, do not change anything.") claims nothing; and a change claim with
+" - " in its code ("Changed `x - 1` to `x + 1` in calc.mjs.", with no edit)
+is flagged and quoted as written in the ledger and on its card, never as
+"undefined". Proof's page, open all the while, lists that
 new session by itself once its claims come. The sessions list puts the one
 flagged last first, timed by that flag, and the ledger lists the newest
 turn first and a reply's claims in order. It drives the page and Proof's
