@@ -2127,6 +2127,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const holdOf = (paused, off) => (paused && off ? 'both' : off ? 'off' : paused ? 'paused' : null);
 
         /**
+         * Each thread's name for its rows and controls, as the user knows it: its title, never the plugin's id
+         * ("t1"); a title two threads share says which by number ("Fix tests, thread 3"); none, "Untitled thread".
+         * @returns {Map<string, string>} thread id → name.
+         */
+        const threadNames = (threads) => {
+            const titleOf = (t) => (typeof t.title === 'string' && t.title.trim() !== '' ? t.title.trim() : 'Untitled thread');
+            const seen = new Map();
+            for (const t of threads) seen.set(titleOf(t), (seen.get(titleOf(t)) ?? 0) + 1);
+            return new Map(threads.map((t) => {
+                const n = /^t(\d+)$/.exec(t.id)?.[1];
+                return [t.id, seen.get(titleOf(t)) > 1 && n ? `${titleOf(t)}, thread ${n}` : titleOf(t)];
+            }));
+        };
+
+        /**
          * A thread whose handback is held (its chat paused its threads or
          * stopped coordinating) says so, and what it waits for, instead of
          * "No handback yet", and sits where that handback puts it (Done, or
@@ -6103,8 +6118,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const threads = Array.isArray(data.threads) ? data.threads.filter((t) => isObject(t) && typeof t.id === 'string') : [];
                 const open = threads.filter((t) => !t.resolved);
                 const resolved = threads.filter((t) => t.resolved);
+                const named = threadNames(threads);
                 const threadRowFor = (t) => {
                     const key = `thread:${t.id}`;
+                    const name = named.get(t.id);
                     const status = typeof t.session === 'string' ? statuses?.get?.(t.session) : undefined;
                     const running = status?.running === true;
                     // The same states as the Threads menu.
@@ -6117,7 +6134,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     const permission = typeof t.permission === 'string' ? t.permission : undefined;
                     const reach = joined([perms && permission ? permissionName(permission, perms) : null, guarded.length > 0 ? toolsWords(t.tools) : null]);
                     return h(SettingRow, {
-                        key, id: key, title: t.title || t.id, message: messageFor(key),
+                        key, id: key, title: name, message: messageFor(key),
                         note: notesFor(resolveRoute(cv, t.model ?? undefined, t.effort ?? undefined), t.live),
                         lead: h('span', { className: 'dshp-ps-dot' }, h(ui.StateDot, { state: dot })),
                         description: t.resolved ? SETTINGS.resolved : running ? SETTINGS.running : undefined,
@@ -6125,12 +6142,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             perms && permission ? permissionGlyph(permission, 12) : null, h('span', null, ...reach))] : undefined,
                         control: h('div', { className: 'dshp-ps-controls' },
                             h(ModelPicker, {
-                                id: `dshp-ps-${t.id}`, label: `${t.title || t.id} (${t.id})`, catalog: catalog.value, busy: busy === key, disabled,
+                                id: `dshp-ps-${t.id}`, label: name, catalog: catalog.value, busy: busy === key, disabled,
                                 value: { model: t.model ?? undefined, effort: t.effort ?? undefined }, own: { model: true, effort: true }, autoOpen: threadInView === key,
                                 onPick: (pick) => change(key, { thread: t.id, ...pick }),
                             }),
                             perms && !t.resolved && typeof t.session === 'string' ? h(PermissionPicker, {
-                                id: `dshp-ps-${t.id}-permission`, label: `${t.title || t.id}: ${SETTINGS.permission}`, catalog: perms, value: permission, compact: true,
+                                id: `dshp-ps-${t.id}-permission`, label: `${name}: ${SETTINGS.permission}`, catalog: perms, value: permission, compact: true,
                                 risk: RISK.thread, disabled, onPick: (next) => change(key, { thread: t.id, permission: next }),
                             }) : null),
                     });
@@ -6389,7 +6406,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             withHit, valueIn, takeKnown, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, sectionGroups, nestingCss, nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
-            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, holdOf,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, holdOf, threadNames,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, shownCounts, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM, ThreadsMenu,

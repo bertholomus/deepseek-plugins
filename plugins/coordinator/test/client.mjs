@@ -2416,6 +2416,15 @@ test('browser half: one store of what the plugin says about each coordinating ch
     assert.equal(withHeld(rows, [{ thread: 't1', status: 'done' }], holdOf(false, false)), rows);
 });
 
+test('browser half: Thread settings names each thread by its title, never by the plugin\'s id (round-1 nit 9)', () => {
+    const { client } = loadClient();
+    const { threadNames } = client.internals;
+    // Before, a thread's picker was named "Add subtract to calc.py (t1)" for a screen reader.
+    const names = threadNames([{ id: 't1', title: 'Add subtract to calc.py' }, { id: 't2', title: 'Fix tests' }, { id: 't3', title: 'Fix tests' }, { id: 't4', title: '  ' }, { id: 't5' }]);
+    assert.deepEqual([...names.values()], ['Add subtract to calc.py', 'Fix tests, thread 2', 'Fix tests, thread 3', 'Untitled thread, thread 4', 'Untitled thread, thread 5']);
+    assert.ok([...names.values()].every((name) => !/\bt\d+\b|\(t\d+\)/.test(name)));
+});
+
 test('browser half: news from threads marks their chat\'s row and shows one notice for the newest, until that chat is opened', async () => {
     const { client } = loadClient();
     const { projectFacts, NewsNotice, ThreadMark, RowPlace, newsLine, newsDot, takeKnown } = client.internals;
