@@ -172,7 +172,7 @@ export function checkSettings(raw, defaults) {
         const v = typeof given.enabled === 'string' ? given.enabled.trim().toLowerCase() : given.enabled;
         if (NO.has(v)) {
             values.enabled = false;
-            problems.push(`enabled is no longer a setting of the session bridge, and while its row says enabled: ${shown(given.enabled)} the bridge does not start. To switch it off, use its switch in Plugins (DSH then shows it Off); to have it listen, take enabled out of its row and switch it off and on in Plugins.`);
+            problems.push(`enabled is no longer a setting of the session bridge, and while its row says enabled: ${shown(given.enabled)} the bridge does not start. To switch it off, use its switch in Plugins (DSH then shows it Off); to have it listen, take enabled out of its row (if Plugins still shows it failed, switch it off and on there).`);
         } else {
             problems.push(`enabled is no longer a setting of the session bridge and is ignored (it was ${shown(given.enabled)}); the bridge is on. Take it out of its row: its switch in Plugins turns the bridge off and on.`);
         }

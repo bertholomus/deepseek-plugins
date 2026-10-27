@@ -19,11 +19,12 @@
  *   DSH process listens on no TCP port but its own window's, the same with
  *   the bridge on and off.
  * - Sessions: made in a folder with a title, a model and a first prompt;
- *   followup, steer into a running turn, cancel, rename, model; what became
- *   of each prompt (queued, read, answered) matches the session's log; a
- *   retried prompt and a retried create (two at once, then a third) are
- *   sent once and make one session; waits answer when DSH commits the
- *   event, or say they ran out.
+ *   followup, steer into a running turn, cancel (and a 409 with no turn
+ *   running), rename, model; what became of each prompt (queued, read,
+ *   answered) matches the session's log; a retried prompt and a retried
+ *   create (two at once, then a third) are sent once and make one session,
+ *   and a retry with another text is a 409; waits answer when DSH commits
+ *   the event, or say they ran out.
  * - Refusals in words: bad JSON, a body over maxBodyBytes, an unknown
  *   session, path or method, a relative folder, a model DSH does not have
  *   (the session's id comes back with the failed step), a create's request
@@ -34,11 +35,18 @@
  *   waits until DSH saved the prompt, so that the unfinished path is always
  *   run: attempt 2 goes as `<id>~2`, is answered, and the log on disk holds
  *   each attempt once. A crash (SIGKILL): the stale socket is replaced.
+ * - A turn DSH tears down under its prompt (the agent loop's row changed:
+ *   aborted, reason disposed, on disk): unfinished, its cut-off reply marked
+ *   interrupted, sent once more as attempt 2 and answered; on disk once each.
  * - Settings while DSH runs: a new log file; wrong values named in
- *   GET /health and the bridge's log while it keeps working; enabled: false
- *   (nothing listens, nothing written) and back; a socket path another
- *   program answers on is refused and left alone, and DSH shows the plugin
- *   as failed, still after the row is fixed, until it is switched off and on.
+ *   GET /health and the bridge's log while it keeps working; a log that
+ *   cannot be written (said in GET /health, gone once it can be written);
+ *   enabled: false (the start fails with the reason: failed in Plugins,
+ *   never running, nothing listens), then the row without it (running at
+ *   once); a socket path another program answers on is refused and left
+ *   alone, failed in Plugins, still failed with the row that last ran,
+ *   running again once switched off and on, and at once with a row that
+ *   differs from the one that last ran.
  * - Plugins: its title, sentence and icon; switched off (no socket left)
  *   and on again.
  * - The window: the bridged session in DSH's sidebar, and a prompt sent
@@ -55,7 +63,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
@@ -173,6 +181,8 @@ async function startKeepingSocket(what) {
 
 let window;
 const ids = {};
+/** More logs the run wrote to, read at the end for prompt text. */
+const logs = [];
 try {
     writeRow();
     await run.boot('first start');
@@ -182,7 +192,7 @@ try {
         const health = await run.bridge('GET', '/health');
         check('GET /health answers: the plugin, its version, DSH\'s pid, the socket, no problems', health.ok === true && health.plugin === 'session-bridge' && /^\d+\.\d+\.\d+$/.test(health.version)
             && health.pid === run.child.pid && health.socket === run.sock && Array.isArray(health.problems) && health.problems.length === 0, json(health));
-        check('the socket\'s folder was made by the bridge, mode 700', modeOf(ownDir) === 0o700, modeOf(ownDir).toString(8));
+        check('the socket\'s folder was made by the bridge, mode 700, and its log says so', modeOf(ownDir) === 0o700 && read(logFile).includes(`made ${ownDir} (mode 700) for the socket\n`), `${modeOf(ownDir).toString(8)} ${read(logFile).slice(0, 300)}`);
         check('the socket is a socket, mode 600', statSync(run.sock).isSocket() && modeOf(run.sock) === 0o600, modeOf(run.sock).toString(8));
         check('the log is mode 600 and says where the bridge listens', modeOf(logFile) === 0o600 && read(logFile).includes(`listening ${run.sock} pid=${run.child.pid}`), read(logFile).slice(0, 300));
         const tcp = tcpListeners();
@@ -213,6 +223,9 @@ try {
         check('GET /sessions/:id/events by type: the reply', page.events.length === 1 && page.events[0].text === `First reply ${MARK}` && page.more === false, json(page).slice(0, 300));
         const retry = (await call('POST', `/sessions/${ids.first}/prompt`, { text: `E2E:say First reply ${MARK}`, requestId: rid })).body;
         check('a retry with the same request id is not sent again: said so, and the log still has it once', retry.alreadySent === true && (await sentWith(ids.first, rid)).length === 1, json(retry));
+        const other = await call('POST', `/sessions/${ids.first}/prompt`, { text: 'E2E:say Another text', requestId: rid });
+        check('a retry with the same request id but another text: 409 request/conflict in words, with its state, and nothing sent', other.status === 409 && other.body?.error?.code === 'request/conflict' && other.body.state === 'answered'
+            && /already went to session \S+ with another text \(it is answered\); it is not sent again\. Use a new request id/.test(other.body.error.message) && (await sentWith(ids.first, rid)).length === 1, other.text);
     });
 
     await step('a create retried with its request id: one session and one message, also when the retry overlaps the first', async () => {
@@ -267,6 +280,9 @@ try {
         }, 'the turn to end', 30000, 200);
         check('POST cancel: DSH accepts, and the session\'s log ends the turn as aborted by the user', cancelled.accepted === true && s.turns.lastEnd?.kind === 'aborted' && (await turnEnds(id)).at(-1)?.reason?.reason?.kind === 'user', json(s.turns));
         check('the log has the cancel', read(logFile).includes(`cancel ${id}\n`));
+        const idle = await call('POST', `/sessions/${id}/cancel`, {});
+        check('cancel again, with no turn running: 409 session/not-running in words, and DSH is not asked (the log has one cancel)', idle.status === 409 && idle.body?.error?.code === 'session/not-running'
+            && idle.body.error.message === `Session ${id} has no turn running, so there is nothing to cancel.` && read(logFile).split(`cancel ${id}\n`).length === 2 && (await turnEnds(id)).length === 1, idle.text);
         const renamed = await call('POST', `/sessions/${id}/rename`, { title: `${TITLE} renamed` });
         check('POST rename: the new title reads back, and the log has its length only', renamed.status === 200 && (await run.session(id)).title === `${TITLE} renamed` && read(logFile).includes(`rename ${id} chars=${TITLE.length + 8}\n`), renamed.text);
         const chosen = await call('POST', `/sessions/${id}/model`, { provider: 'fake', model: 'fake-model' });
@@ -414,6 +430,41 @@ try {
         check('the log says it listened again at each start', (read(logFile).match(/ listening /g) ?? []).length >= 3, read(logFile).slice(-600));
     });
 
+    // ── A turn DSH tears down ─────────────────────────────────────────
+    await step('a turn DSH tears down under its prompt (the agent loop\'s row changed): unfinished, its cut-off reply marked, sent once more, answered, and on disk once each', async () => {
+        const rid = `e2e-torn-${randomUUID().slice(0, 8)}`;
+        ids.torn = (await run.bridge('POST', '/sessions', { workspacePath: run.ws, title: 'Torn down', text: 'E2E:slow', requestId: rid })).sessionId;
+        await waitFor(async () => (await run.session(ids.torn)).status === 'running' && model.held.size > 0, 'the slow turn to run', 30000, 200);
+        await waitFor(() => savedWith(ids.torn, rid).length === 1, 'DSH to save the message on disk', 30000, 100);
+        const taken = (await call('GET', `/sessions/${ids.torn}/requests/${rid}`)).body;
+        check('before: read by the running turn', taken.state === 'read' && taken.turn === 1, json(taken));
+        // A declarative agent added to the agent loop's row: DSH loads the loop again and tears down the live agents
+        // under their turns (the row stays from here on, so later saves do not load it again).
+        run.rows = `- id: agent-loop\n  config:\n    agents:\n      - id: e2e-extra\n        cwd: ${json(run.ws)}\n`;
+        writeRow();
+        await waitFor(async () => (await run.session(ids.torn).catch(() => ({ turns: {} }))).turns.ended >= 1, 'the torn-down turn to end', 30000, 300);
+        model.release();
+        await waitFor(() => answers(), 'the bridge to answer', 30000, 300);
+        await waitFor(() => run.savedEvents(ids.torn).some((e) => e.type === 'turn/end'), 'the turn\'s end on disk', 10000, 100).catch(() => {});
+        const ends = run.savedEvents(ids.torn).filter((e) => e.type === 'turn/end').map((e) => e.data?.reason);
+        check('on disk, DSH ended the turn aborted, reason disposed: torn down, not stopped by anyone', ends.length === 1 && ends[0]?.kind === 'aborted' && ends[0]?.reason?.kind === 'disposed', json(ends));
+        const cut = (await call('GET', `/sessions/${ids.torn}/requests/${rid}?wait=30`)).body;
+        check('what became of it: unfinished (not answered), with that end, and a wait ends on it at once', cut.state === 'unfinished' && cut.end?.kind === 'aborted' && cut.end?.reason?.kind === 'disposed' && cut.timedOut === false && cut.seq === taken.seq, json(cut));
+        check('the reply it was writing is marked interrupted, never given as the answer', cut.reply?.interrupted === true && cut.reply.text === 'Working', json(cut.reply));
+        const page = (await call('GET', `/sessions/${ids.torn}/events?after=-1&types=assistant/message`)).body;
+        const s = await run.session(ids.torn);
+        check('the events page and the session\'s last reply mark it interrupted too', page.events.length === 1 && page.events[0].interrupted === true && s.lastAssistant?.interrupted === true, json({ page: page.events, last: s.lastAssistant }));
+        const resent = (await call('POST', `/sessions/${ids.torn}/prompt`, { text: AGAIN, requestId: rid })).body;
+        check('a retry with the same id is sent once more, as attempt 2', resent.accepted === true && !resent.alreadySent && resent.resent === true && resent.attempt === 2 && resent.requestId === rid, json(resent));
+        const done = (await call('GET', `/sessions/${ids.torn}/requests/${rid}?wait=60`)).body;
+        check('attempt 2 is answered by a turn of its own, completed, with a whole reply', done.state === 'answered' && done.attempt === 2 && done.turn === 2 && done.end?.kind === 'completed' && REPLIED.test(done.reply?.text ?? '') && done.reply.interrupted === undefined, json(done));
+        const third = (await call('POST', `/sessions/${ids.torn}/prompt`, { text: AGAIN, requestId: rid })).body;
+        check('a third try sends nothing', third.alreadySent === true && third.state === 'answered' && third.attempt === 2, json(third));
+        await waitFor(() => savedWith(ids.torn, rid).length === 2, 'both attempts on disk', 10000, 100).catch(() => {});
+        const disk = savedWith(ids.torn, rid).map((e) => e.data.source.rpcId);
+        check('the session\'s log on disk: the first attempt once and the second once, nothing more', json(disk) === json([rid, `${rid}~2`]), json(disk));
+    });
+
     // ── Settings while DSH runs ───────────────────────────────────────
     const newLog = join(run.root, 'logs', 'bridge-2.log');
     await step('settings while DSH runs: a new log file takes effect at once, on the same socket', async () => {
@@ -437,19 +488,49 @@ try {
         check('the default limit is in force: a 70 kB body is read (and refused for its mode, not its size)', big.status === 400 && big.body?.error?.code === 'bad-request', big.text.slice(0, 200));
     });
 
-    await step('enabled: false while DSH runs: nothing listens and nothing is written; true again brings it back', async () => {
-        const before = read(newLog);
-        writeRow({ logFile: newLog, enabled: false });
-        await waitFor(() => !existsSync(run.sock), 'the socket to go', 30000, 200);
-        check('off: no socket file, and nobody answers', !existsSync(run.sock) && !(await answers()));
-        const added = read(newLog).slice(before.length).trim();
-        check('off, nothing is written to its log but the stop', added.split('\n').every((l) => / stopped$/.test(l)), added);
+    // DSH's logger keeps a plugin's lines in memory, not in its output, so this reads GET /health and the bridge's log;
+    // that DSH's logger is told once is the unit test's.
+    await step('a log that cannot be written: the bridge keeps working and says so in GET /health; once it can be written, the problem is gone', async () => {
+        const blocked = join(run.root, 'blocked');
+        writeFileSync(blocked, 'a file where the log\'s folder should be\n');
+        const badLog = join(blocked, 'bridge.log');
+        writeRow({ logFile: badLog });
+        const health = await waitFor(async () => {
+            const h = (await call('GET', '/health', undefined, { timeout: 3000 }).catch(() => ({}))).body;
+            return h?.problems?.some((x) => x.startsWith(`logFile ${badLog} `)) ? h : null;
+        }, 'the log\'s problem in GET /health', 30000, 300);
+        check('GET /health says the log cannot be written, why in words, and what to do', health.problems.length === 1
+            && health.problems[0].replace(/\((ENOTDIR|EEXIST): /, '(CODE: ') === `logFile ${badLog} cannot be written (CODE: a part of its path is a file, not a folder), so the bridge's actions are not logged. Give logFile a folder you can write to, or "" for no log.`, json(health.problems));
+        for (let i = 0; i < 3; i++) await run.bridge('POST', `/sessions/${ids.first}/rename`, { title: TITLE });
+        check('the bridge keeps working: its actions go through', (await run.session(ids.first)).title === TITLE);
+        rmSync(blocked);
+        mkdirSync(blocked);
+        await run.bridge('POST', `/sessions/${ids.first}/rename`, { title: TITLE });
+        check('once its folder is there, the next action goes in, mode 600, and GET /health has no problem', read(badLog).includes(`rename ${ids.first} chars=${TITLE.length}\n`) && modeOf(badLog) === 0o600
+            && (await run.bridge('GET', '/health')).problems.length === 0, read(badLog));
+        logs.push(badLog);
         writeRow({ logFile: newLog });
-        await waitFor(() => answers(), 'the bridge back on', 30000, 300);
-        check('on again: it answers', await answers());
+        await waitFor(async () => (await answers()) && (await run.bridge('GET', '/health')).problems.length === 0, 'the bridge on its own log again', 30000, 300);
     });
 
-    await step('a socket another program answers on is never taken over: refused in words, shown as failed in Plugins until switched off and on, and that program keeps it', async () => {
+    await step('enabled: false (no longer a setting) while DSH runs: the start fails with the reason, so DSH shows it failed, never running; the row without it, saved, runs it again', async () => {
+        const before = read(newLog).length;
+        writeRow({ logFile: newLog, enabled: false });
+        await waitFor(() => !existsSync(run.sock), 'the socket to go', 30000, 200);
+        const failed = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null), 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
+        check('nothing listens: no socket file, and nobody answers', !existsSync(run.sock) && !(await answers()));
+        check('DSH shows the plugin as failed (its page in Plugins reads Problem), not running, its switch on', failed?.fiberPhase === 'failed' && failed.enabled === true, json({ ...failed, meta: undefined }));
+        const added = read(newLog).slice(before);
+        check('the bridge\'s log says why and what to do', /setting: enabled is no longer a setting of the session bridge, and while its row says enabled: false the bridge does not start\. To switch it off, use its switch in Plugins/.test(added)
+            && added.includes(`not listening on ${run.sock}: its row says enabled: false, and enabled is no longer a setting. To switch it off, use its switch in Plugins (DSH then shows it Off); to have it listen, take enabled out of its row`), added);
+        // The row without enabled is the row that last ran, and after this failure DSH starts the plugin on it (the README says so).
+        writeRow({ logFile: newLog });
+        const back = await waitFor(() => answers(), 'the bridge back on its own socket', 30000, 300).then(() => true, () => false);
+        const entry = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'active' ? bridgeEntry() : null), 'the plugin to run', 30000, 300).catch(() => bridgeEntry());
+        check('the row without enabled, saved: DSH starts it again at once; it answers, with no problems, and DSH shows it running', back && (await run.bridge('GET', '/health')).problems.length === 0 && entry?.fiberPhase === 'active', json({ back, phase: entry?.fiberPhase }));
+    });
+
+    await step('a socket another program answers on is never taken over: refused in words, failed in Plugins; still failed with the row that last ran; running again once switched off and on, and at once with a row that differs from the one that last ran; that program keeps its socket', async () => {
         const otherDir = mkdtempSync(join(base, 'o-'));
         const otherSock = join(otherDir, 'bridge.sock');
         const other = createServer((req, res) => {
@@ -464,21 +545,32 @@ try {
             check('the bridge refused it, in its log, and the other program still answers there', still.body?.other === true, still.text);
             const failed = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'failed' ? bridgeEntry() : null), 'the plugin to read as failed', 30000, 300).catch(() => bridgeEntry());
             check('DSH shows the plugin as failed (its page in Plugins reads Problem), not running', failed?.fiberPhase === 'failed' && failed.enabled === true, json({ ...failed, meta: undefined }));
-            // The row fixed and saved: DSH leaves a plugin that failed to start as it is (it does not run it again).
+            // The row put back as it last ran (undoing the change that failed): DSH leaves the failed plugin as it is.
             const logged = read(newLog).length;
             writeRow({ logFile: newLog });
             const back = await waitFor(() => answers(), 'the bridge back on its own socket', 15000, 300).then(() => true, () => false);
             const added = read(newLog).slice(logged).trim();
             const entry = await bridgeEntry();
-            check('the row fixed and saved: DSH does not start the failed plugin again (nothing new in its log), so it stays failed, as the README says', !back && added === '' && entry?.fiberPhase === 'failed', json({ back, added, phase: entry?.fiberPhase }));
+            check('the row put back as it last ran: DSH does not start the failed plugin again (nothing new in its log), so it stays failed, as the README says', !back && added === '' && entry?.fiberPhase === 'failed', json({ back, added, phase: entry?.fiberPhase }));
+            const off = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: false });
+            const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: true });
+            await waitFor(() => answers(), 'the bridge back after off and on', 30000, 300).catch(() => {});
+            const active = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'active' ? bridgeEntry() : null), 'the plugin to run', 30000, 300).catch(() => bridgeEntry());
+            check('switched off and on in Plugins: it answers on its own socket again, and DSH shows it running', off.ok === true && on.ok === true && (await answers()) && active?.fiberPhase === 'active', json({ off, on, phase: active?.fiberPhase }));
+            // Refused once more; then a fixed row that differs from the row that last ran (its body limit too): DSH starts it at once.
+            const refusedAt = read(newLog).length;
+            writeRow({ logFile: newLog, socketPath: otherSock });
+            await waitFor(async () => read(newLog).slice(refusedAt).includes(`not listening on ${otherSock}`) && (await bridgeEntry())?.fiberPhase === 'failed', 'the second refusal', 30000, 300);
+            const differsAt = read(newLog).length;
+            writeRow({ logFile: newLog, maxBodyBytes: 65537 });
+            const again = await waitFor(() => answers(), 'the bridge back with the new row', 30000, 300).then(() => true, () => false);
+            const running = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'active' ? bridgeEntry() : null), 'the plugin to run', 30000, 300).catch(() => bridgeEntry());
+            const otherStill = await call('GET', '/health', undefined, { sock: otherSock });
+            check('refused again, then a fixed row that differs from the row that last ran: DSH starts it at once, it answers on its own socket, and DSH shows it running', again && running?.fiberPhase === 'active' && read(newLog).slice(differsAt).includes(`listening ${run.sock} pid=`), json({ again, phase: running?.fiberPhase }));
+            check('the other program still answers on its socket, untouched', otherStill.body?.other === true, otherStill.text);
         } finally {
             await new Promise((r) => other.close(r));
         }
-        const off = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: false });
-        const on = await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: true });
-        await waitFor(() => answers(), 'the bridge back after off and on', 30000, 300).catch(() => {});
-        const entry = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'active' ? bridgeEntry() : null), 'the plugin to run', 30000, 300).catch(() => bridgeEntry());
-        check('switched off and on in Plugins: it answers on its own socket again, and DSH shows it running', off.ok === true && on.ok === true && (await answers()) && entry?.fiberPhase === 'active', json({ off, on, phase: entry?.fiberPhase }));
     });
 
     // ── Plugins ───────────────────────────────────────────────────────
@@ -502,8 +594,8 @@ try {
         check('on again from Plugins: DSH applies it, and the bridge answers', on.ok === true && on.value?.application === 'applied' && (await answers()), json(on));
     });
 
-    const logs = read(logFile) + read(newLog);
-    check('the logs never held a prompt\'s text or a title', !logs.includes(MARK) && !logs.includes(TITLE) && !logs.includes('Steered in') && !logs.includes('E2E:'), 'found in the log');
+    const text = [logFile, newLog, ...logs].map(read).join('');
+    check('the logs never held a prompt\'s text or a title', !text.includes(MARK) && !text.includes(TITLE) && !text.includes('Steered in') && !text.includes('E2E:') && !text.includes('Another text'), 'found in the log');
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);
     console.log(run.logText().slice(-3000));

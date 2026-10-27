@@ -59,7 +59,7 @@ test('settings: enabled is no longer a setting (DSH\'s switch in Plugins is): a 
         const r = checkSettings({ enabled: off }, DEFAULTS);
         assert.equal(r.values.enabled, false, JSON.stringify(off));
         assert.equal(r.problems.length, 1);
-        assert.match(r.problems[0], /^enabled is no longer a setting of the session bridge, and while its row says enabled: \S+ the bridge does not start\. To switch it off, use its switch in Plugins \(DSH then shows it Off\); to have it listen, take enabled out of its row and switch it off and on in Plugins\.$/);
+        assert.match(r.problems[0], /^enabled is no longer a setting of the session bridge, and while its row says enabled: \S+ the bridge does not start\. To switch it off, use its switch in Plugins \(DSH then shows it Off\); to have it listen, take enabled out of its row \(if Plugins still shows it failed, switch it off and on there\)\.$/);
     }
     for (const on of [true, 'yes', 1]) {
         const r = checkSettings({ enabled: on }, DEFAULTS);
@@ -70,7 +70,7 @@ test('settings: enabled is no longer a setting (DSH\'s switch in Plugins is): a 
     assert.deepEqual(checkSettings({ enabled: undefined }, DEFAULTS).problems, []);
     const index = readFileSync(join(PLUGIN_DIR, 'lib', 'index.js'), 'utf8');
     assert.doesNotMatch(index, /enabled: z\.any\(\)\.default/, 'no default, or every row would read as having it');
-    assert.match(index, /if \(!settings\.values\.enabled\) \{[\s\S]*?throw new Error\(`Session Bridge is not listening: \$\{why\}/, 'off in its row: the start fails with the reason, so DSH never shows it Running');
+    assert.match(index, /if \(!settings\.values\.enabled\) \{[\s\S]*?throw new Error\(`Session Bridge is not listening on \$\{bridge\.socketPath\}: \$\{why\}/, 'off in its row: the start fails with the reason, so DSH never shows it Running');
 });
 
 test('settings: a socket path the system cannot take is refused', () => {

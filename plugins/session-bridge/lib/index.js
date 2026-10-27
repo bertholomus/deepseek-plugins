@@ -53,13 +53,14 @@ const VERSION = (() => {
 })();
 
 /** What to do after a failed start, as the start error says it. */
-const AGAIN ='then switch Session Bridge off and on in Plugins, or restart DSH (saving the fixed row starts it again only when that row differs from the last one that ran)';
+const AGAIN = 'then switch Session Bridge off and on in Plugins, or restart DSH; saving the fixed row alone may leave it failed';
 
 /**
  * Start the bridge. When it cannot listen (a refused socket path, a socket another program answers on, a row that
  * still says `enabled: false`), apply fails with the reason, so DSH shows the plugin as failed ("Problem" on its
  * Plugins page, never "Running") and logs why. Switching the plugin off and on in Plugins, or restarting DSH,
- * always tries again; saving a fixed row does only when that row differs from the last one that ran.
+ * always tries again. Saving a fixed row does when it differs from the row that last ran; when it is that row
+ * again, DSH may leave the plugin failed (it does after a refused socket).
  */
 export async function apply(ctx, config) {
     const settings = checkSettings(config, {
@@ -84,8 +85,8 @@ export async function apply(ctx, config) {
             ctx.logger.warn('session-bridge: %s', problem);
             bridge.log(`setting: ${problem}`);
         }
-        bridge.log(`not listening: ${why}`);
-        throw new Error(`Session Bridge is not listening: ${why}, ${AGAIN}.`);
+        bridge.log(`not listening on ${bridge.socketPath}: ${why}`);
+        throw new Error(`Session Bridge is not listening on ${bridge.socketPath}: ${why}, ${AGAIN}.`);
     }
     // A request that waits for news is woken by DSH's own events. Nothing here may throw into DSH's dispatch.
     ctx.on('session/event', (session, event) => {
@@ -99,7 +100,7 @@ export async function apply(ctx, config) {
     let disposed = false;
     const started = bridge.start().catch((error) => {
         failure = errorText(error);
-        bridge.log(`not listening: ${failure}`);
+        bridge.log(`not listening on ${bridge.socketPath}: ${failure}`);
         return false;
     });
     ctx.effect(() => async () => {
