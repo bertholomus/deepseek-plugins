@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, recommendationIn, spanWords, stateWord, timeWords } from '../shared/host/words.js';
+import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, holdCode, plainError, plainLine, recommendationIn, spanWords, stateWord, timeWords, unholdCode } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -162,6 +162,52 @@ test('words: what a reply asks a person: a decision line, then a BLOCKED line, t
     assert.equal(blockedIn('BLOCKED: one\ntext\nBLOCKED: two'), 'two');
     assert.equal(blockedIn('Not blocked at all.'), undefined);
     assert.equal(blockedIn('UNBLOCKED: fine'), undefined);
+});
+
+test('words: a question keeps its words when a dot sits in it (a file, a version, an address, a number, "e.g."), and nothing in a code span ends it', () => {
+    const asked = (text) => askIn(text)?.question;
+    // Each of these gave only the words after its last dot ("py` first?", "3`?", "com now?").
+    assert.equal(asked('I found two failing tests in the parser suite. Should I fix the bug in `parser.py` first?'), 'Should I fix the bug in `parser.py` first?');
+    assert.equal(asked('Both builds pass. Which do you want to release: `v1.2` or `v1.3`?'), 'Which do you want to release: `v1.2` or `v1.3`?');
+    assert.equal(asked('Should I bump the version to 2.0.0 and tag it?'), 'Should I bump the version to 2.0.0 and tag it?');
+    assert.equal(asked('Should I deploy to https://staging.example.com now?'), 'Should I deploy to https://staging.example.com now?');
+    assert.equal(asked('Do you want a PR against main, e.g. with only the fix?'), 'Do you want a PR against main, e.g. with only the fix?');
+    assert.equal(asked('Want me to run the migration now (it takes about 2.5 minutes)?'), 'Want me to run the migration now (it takes about 2.5 minutes)?');
+    assert.equal(asked('The cache is ready. Should I enable it in config.yaml for production?'), 'Should I enable it in config.yaml for production?');
+    assert.equal(asked('Should I use a managed database, e.g. Postgres on RDS?'), 'Should I use a managed database, e.g. Postgres on RDS?', 'an abbreviation before a capital ends nothing');
+    assert.equal(asked('Tests are green.\n\n**Should I merge `feature/v2.1` into main?**'), 'Should I merge `feature/v2.1` into main?');
+    // A sentence still ends where one ends, and the question is the last one that asks.
+    assert.equal(asked('Which one do you prefer? I can also do both.'), 'Which one do you prefer?');
+    assert.equal(asked('Did the tests pass? No. Should I fix them?'), 'Should I fix them?');
+    assert.equal(asked('The parser is done. Tests pass. Should I also write the docs? I can start now.'), 'Should I also write the docs?');
+    assert.equal(asked('"Use v2." Should I follow that note?'), 'Should I follow that note?');
+    // Nothing inside a code span ends a sentence or asks.
+    assert.equal(asked('Should I run `make build. Then deploy` again?'), 'Should I run `make build. Then deploy` again?');
+    assert.equal(asked('I added `cache?.get()`. Should I keep the old path too?'), 'Should I keep the old path too?');
+    assert.equal(askIn('Use `x ?? y` there. Should I?').question, 'Should I?');
+});
+
+test('words: code spans keep identifiers whole: dunders, double stars and dashes stay in the question, the pick and the lines', () => {
+    assert.deepEqual(decisionIn('DECISION NEEDED: Should I rename `__init__.py` to main.py? — recommend: keep `__init__.py`'), { question: 'Should I rename __init__.py to main.py?', recommendation: 'keep __init__.py' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: delete `__pycache__` and `__init__.py`? — recommend: `__pycache__` only'), { question: 'delete __pycache__ and __init__.py?', recommendation: '__pycache__ only' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Rename `my__var`? — recommend: `my_var`'), { question: 'Rename my__var?', recommendation: 'my_var' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Is `a**b` the right power operator here? — recommend: `pow(a, b)`'), { question: 'Is a**b the right power operator here?', recommendation: 'pow(a, b)' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Pass `**kwargs` on? — recommend: `**kwargs`'), { question: 'Pass **kwargs on?', recommendation: '**kwargs' }, 'a span that starts or ends with marks keeps them');
+    assert.deepEqual(decisionIn('DECISION NEEDED: Push with `--force-with-lease`? — recommend: yes'), { question: 'Push with --force-with-lease?', recommendation: 'yes' }, 'a dash in code is not the dash before the pick');
+    assert.deepEqual(decisionIn('`DECISION NEEDED: Ship it? — recommend: yes`'), { question: 'Ship it?', recommendation: 'yes' }, 'a marker line written in code still counts');
+    assert.equal(decisionIn('Write `DECISION NEEDED: <question>` at the end of a reply.'), undefined, 'a marker inside a sentence is not one, in code or not');
+    assert.equal(blockedIn('BLOCKED: no `__init__.py` in `src/` yet'), 'no __init__.py in src/ yet');
+    assert.deepEqual(recommendationIn('Two configs exist.\nWhich wins? Recommend: `__main__.py`'), { question: 'Two configs exist.\nWhich wins?', recommendation: '__main__.py' });
+    assert.equal(plainLine('Rename `my__var`, keep `__init__.py`, is `a**b` right? my__var and a**b stay; **bold** and __this__ go'),
+        'Rename my__var, keep __init__.py, is a**b right? my__var and a**b stay; bold and this go');
+    assert.equal(plainLine('**DECISION NEEDED:** keep `file_name.py`? — *Monday*'), 'DECISION NEEDED: keep file_name.py? — Monday', 'marks around words still go');
+    assert.equal(plainLine('Use ``a`b`` and ` padded `'), 'Use a`b and padded', 'a span of two backticks, and the padding inside one');
+    // The spans are held while a line is read, and given back as words or as written.
+    const held = holdCode('Use `a.b` or ``c`d``.');
+    assert.equal(held.text, 'Use \u00010\u0002 or \u00011\u0002.');
+    assert.equal(unholdCode(held.text, held.spans), 'Use a.b or c`d.');
+    assert.equal(unholdCode(held.text, held.spans, { written: true }), 'Use `a.b` or ``c`d``.');
+    assert.deepEqual(holdCode('odd \u0001 text `x`'), { text: 'odd \u0001 text `x`', spans: [] }, 'a text with a placeholder\'s mark in it is read as it is');
 });
 
 test('words: a provider\'s error in plain words, its JSON reduced to the message', () => {
