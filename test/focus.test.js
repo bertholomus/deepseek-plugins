@@ -240,6 +240,7 @@ test('pause keeps the time left, resume runs on from it, reset and set make it i
     time.advance(60000);
     const resumed = await op(focus, { op: 'resume' });
     assert.equal(resumed.body.timer.endAt, time.now() + 900000);
+    assert.match(logOf(dir), /resume focus at 900s left, ends 2026-10-26T17:26:00\.000Z/, 'resume logs its end, as start does');
     for (const o of [{ op: 'start', kind: 'short', durationMs: 300000 }, { op: 'set', kind: 'short', durationMs: 300000 }]) {
         const refused = await post(focus, { op: o, settings: { chime: false } });
         assert.equal(refused.status, 409, o.op);
@@ -270,6 +271,103 @@ test('revision: up by one on each change, the same when nothing changed', async 
     assert.deepEqual([moved.body.changed, moved.body.rev, moved.body.settings.focusMin], [true, r0 + 1, 30]);
     assert.match(logOf(dir), /settings: focusMin=30/);
     focus.stop();
+});
+
+test('seen: an end stays unseen until a window shows it (op seen), once; a restart keeps the mark; the next timer, Reset or Set clears it', async () => {
+    const dir = tempDir('focus-seen');
+    const time = fakeTime();
+    const first = host(dir, time);
+    assert.equal(first.state.timer.doneSeen, false);
+    assert.equal((await op(first, { op: 'seen' })).body.changed, false, 'nothing ended: nothing to see');
+    await op(first, { op: 'start', kind: 'focus', durationMs: 60000 });
+    assert.equal((await op(first, { op: 'seen' })).body.changed, false, 'running: nothing to see');
+    time.advance(60100);
+    const ended = (await call(first)).body;
+    assert.deepEqual([ended.timer.running, ended.timer.doneAt, ended.timer.doneSeen], [false, T0 + 60000, false], 'ended by the host, not seen');
+    first.stop();
+    const second = host(dir, time);
+    assert.equal(second.state.timer.doneSeen, false, 'a restart keeps it unseen');
+    const seen = await op(second, { op: 'seen' });
+    assert.deepEqual([seen.status, seen.body.changed, seen.body.timer.doneSeen, seen.body.timer.doneAt, seen.body.rev], [200, true, true, T0 + 60000, ended.rev + 1]);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).timer.doneSeen, true, 'saved');
+    const again = await op(second, { op: 'seen' });
+    assert.deepEqual([again.body.changed, again.body.rev], [false, seen.body.rev], 'seen once');
+    assert.equal(count(logOf(dir), / seen: the end of focus at 2026-10-26T17:01:00\.000Z/g), 1);
+    const next = await op(second, { op: 'start', kind: 'short', durationMs: 300000 });
+    assert.deepEqual([next.body.timer.doneAt, next.body.timer.doneSeen], [null, false], 'the next timer: no end to mark');
+    time.advance(300100);
+    assert.deepEqual([second.state.timer.doneAt, second.state.timer.doneSeen], [T0 + 60100 + 300000, false], 'its own end is unseen');
+    for (const o of [{ op: 'reset' }, { op: 'set', kind: 'focus', durationMs: 1500000 }]) {
+        time.advance(1000);
+        await op(second, { op: 'start', kind: 'custom', durationMs: 10000 });
+        time.advance(10100);
+        assert.equal(second.state.timer.doneSeen, false);
+        const cleared = await op(second, o);
+        assert.deepEqual([cleared.body.timer.doneAt, cleared.body.timer.doneSeen], [null, false], o.op);
+    }
+    second.stop();
+});
+
+test('undo: a Reset of a started timer comes back within a minute while nothing changed, to the same end; otherwise a 409 in words that changes nothing', async () => {
+    const dir = tempDir('focus-undo');
+    const time = fakeTime();
+    const focus = host(dir, time);
+    const NO = 'There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.';
+    await op(focus, { op: 'start', kind: 'focus', durationMs: 1500000 });
+    time.advance(600000);
+    const reset = await op(focus, { op: 'reset' });
+    assert.deepEqual([reset.body.timer.running, reset.body.timer.remainingMs, focus.armed], [false, 1500000, false]);
+    assert.match(logOf(dir), /reset focus to 1500s \(it was running with 900s left; Undo can bring it back for 60s\)/);
+    time.advance(20000);
+    const back = await op(focus, { op: 'undo' });
+    assert.deepEqual([back.status, back.body.changed, back.body.timer.running, back.body.timer.endAt, back.body.rev], [200, true, true, T0 + 1500000, reset.body.rev + 1], 'running again, to the same end');
+    assert.equal(focus.armed, true, 'and the host ends it');
+    assert.match(logOf(dir), /undo reset: focus running again, ends 2026-10-26T17:25:00\.000Z/);
+    assert.deepEqual([(await op(focus, { op: 'undo' })).status, (await op(focus, { op: 'undo' })).body.error], [409, NO], 'once');
+
+    // Paused, Reset, Undo: paused again with the same time left.
+    await op(focus, { op: 'pause' });
+    const left = focus.state.timer.remainingMs;
+    await op(focus, { op: 'reset' });
+    const paused = await op(focus, { op: 'undo' });
+    assert.deepEqual([paused.status, paused.body.timer.running, paused.body.timer.remainingMs], [200, false, left]);
+    assert.match(logOf(dir), new RegExp(`undo reset: focus paused again at ${Math.round(left / 1000)}s left`));
+
+    // Anything changed after the Reset: nothing to undo, and a refused request changes nothing.
+    await op(focus, { op: 'reset' });
+    await post(focus, { settings: { chime: false } });
+    const moved = await post(focus, { op: { op: 'undo' }, settings: { focusMin: 40 } });
+    assert.deepEqual([moved.status, moved.body.error, focus.state.settings.focusMin, focus.state.timer.remainingMs], [409, NO, 25, 1500000]);
+
+    // More than a minute after the Reset.
+    await op(focus, { op: 'start', kind: 'short', durationMs: 300000 });
+    time.advance(1000);
+    await op(focus, { op: 'reset' });
+    time.advance(UNDO_MS + 1);
+    assert.equal((await op(focus, { op: 'undo' })).status, 409, 'past its minute');
+
+    // A Reset of a timer that had not started has nothing to undo.
+    await op(focus, { op: 'set', kind: 'focus', durationMs: 1500000 });
+    await op(focus, { op: 'reset' });
+    assert.equal((await op(focus, { op: 'undo' })).status, 409, 'nothing had started');
+
+    // A running timer whose end came while it was reset: it comes back ended, as of its end, and counted.
+    const sessions = focus.state.sessions.focus;
+    const startedAt = time.now();
+    await op(focus, { op: 'start', kind: 'focus', durationMs: 60000 });
+    time.advance(50000);
+    await op(focus, { op: 'reset' });
+    time.advance(30000);
+    const due = await op(focus, { op: 'undo' });
+    assert.deepEqual([due.status, due.body.timer.running, due.body.timer.doneAt, due.body.timer.doneSeen, due.body.sessions.focus], [200, false, startedAt + 60000, false, sessions + 1]);
+
+    // Kept in memory only: a restart forgets it.
+    await op(focus, { op: 'start', kind: 'focus', durationMs: 1500000 });
+    await op(focus, { op: 'reset' });
+    focus.stop();
+    const restarted = host(dir, time);
+    assert.equal((await op(restarted, { op: 'undo' })).status, 409, 'a restart forgets it');
+    restarted.stop();
 });
 
 test('refusals: a 400 in words for each bad input, 405 with Allow, every answer no-store', async () => {
@@ -371,6 +469,7 @@ function fakeCtx({ register = true } = {}) {
     const disposers = [];
     const routes = [];
     const warns = [];
+    const infos = [];
     const connection = register ? {
         fetch: {
             register(route) {
@@ -380,20 +479,21 @@ function fakeCtx({ register = true } = {}) {
         },
     } : {};
     const ctx = {
-        logger: { warn: (...a) => warns.push(a), info: () => {} },
+        logger: { warn: (...a) => warns.push(a), info: (...a) => infos.push(a) },
         effect(fn) { const d = fn(); if (typeof d === 'function') disposers.push(d); },
         inject(names, cb) {
             assert.deepEqual(names, ['connection']);
             cb({ get: (n) => (n === 'connection' ? connection : undefined), effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); } });
         },
     };
-    return { ctx, routes, warns, dispose: () => disposers.splice(0).reverse().forEach((d) => d()) };
+    return { ctx, routes, warns, infos, dispose: () => disposers.splice(0).reverse().forEach((d) => d()) };
 }
 
 test('apply: serves GET and POST /api/focus/state (buffered), says a wrong setting to DSH\'s logger, and leaves nothing running when disposed', async () => {
     const dir = tempDir('focus-apply');
-    const { ctx, routes, warns, dispose } = fakeCtx();
+    const { ctx, routes, warns, infos, dispose } = fakeCtx();
     await apply(ctx, { dataDir: dir, colour: 'red' });
+    assert.deepEqual(infos, [['focus: %s', `its folder: ${dir}`]], 'the window\'s words name no folder; DSH\'s log does');
     assert.equal(routes.length, 1);
     assert.deepEqual([routes[0].path, routes[0].methods, routes[0].requestBody], ['/api/focus/state', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], 'buffered']);
     assert.deepEqual(warns, [['focus: %s', 'colour is not a setting of Focus and is ignored (its one setting is dataDir).']]);
@@ -402,6 +502,7 @@ test('apply: serves GET and POST /api/focus/state (buffered), says a wrong setti
     assert.equal(body.timer.running, true);
     assert.deepEqual(body.problems, ['colour is not a setting of Focus and is ignored (its one setting is dataDir).']);
     assert.match(logOf(dir), /setting: colour is not a setting of Focus[\s\S]*started; serving \/api\/focus\/state \(GET, POST\)/);
+    assert.ok(logOf(dir).includes(`started; serving /api/focus/state (GET, POST) from ${dir}`), 'focus.log names its folder');
     dispose();
     assert.equal(routes[0].gone, true, 'the route goes with the plugin');
 });
@@ -463,7 +564,7 @@ async function window(answer, { stateful = false, shortcuts, globals = {} } = {}
     client.apply({
         effect,
         slots: { inject: (slot, fn) => fn(), register: (opts, comp) => { regs.push({ opts, comp }); return () => {}; } },
-        ...(shortcuts ? { inject: (names, fn) => { assert.deepEqual(names, ['shortcuts']); fn({ effect, shortcuts }); } } : {}),
+        ...(shortcuts ? { inject: (names, fn) => { assert.deepEqual(Array.from(names), ['shortcuts']); fn({ effect, shortcuts }); } } : {}),
     });
     const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r)); };
     await settle();
@@ -473,6 +574,8 @@ async function window(answer, { stateful = false, shortcuts, globals = {} } = {}
         /** The window hidden or shown again, as the browser says it (visibilitychange). */
         async show(state) { document.visibilityState = state; listeners.get('visibilitychange')?.(); await settle(); },
         button: () => slot('sidebar.footer.action').comp({}),
+        /** The footer entry as DSH draws it, with its props ({ wide }: false in the folded rail). */
+        footer: (props) => slot('sidebar.footer.action').comp(props),
         overlay: () => slot('shell.overlay').comp({}),
         close: () => disposers.splice(0).reverse().forEach((d) => d()),
     };
@@ -648,6 +751,301 @@ test('after a timer ends the main button offers the next step: a short break, a 
     w.close();
 });
 
+const until = async (pred, ms = 4000) => { const end = Date.now() + ms; while (!pred()) { if (Date.now() > end) return false; await new Promise((r) => setTimeout(r, 20)); } return true; };
+const dots = (tree) => all(tree, (e) => e.type === 'span' && /fc-dot/.test(e.props.className ?? '')).map((e) => e.props.className);
+const doneState = (over = {}, timer = {}) => STATE({ rev: 5, sessions: { date: '2026-10-26', focus: 1 }, ...over, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: null, running: false, doneAt: Date.now() - 2000, doneSeen: false, ...timer } });
+
+/** A stand-in AudioContext that counts what is made and played. */
+function audio() {
+    const made = [];
+    class AudioContext {
+        constructor() { made.push(this); this.state = 'running'; this.currentTime = 0; this.destination = {}; this.notes = 0; }
+        createOscillator() { const ac = this; return { frequency: {}, connect() {}, start() { ac.notes += 1; }, stop() {} }; }
+        createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+        resume() { return Promise.resolve(); }
+        close() {}
+    }
+    return { made, AudioContext };
+}
+
+test('an end leaves a mark on the footer button until a panel shows it: a green dot, its name and tooltip say what ended; the open panel tells the host once', async () => {
+    let state = doneState();
+    const w = await window(({ body }) => {
+        if (body?.op?.op === 'seen') state = { ...state, rev: state.rev + 1, timer: { ...state.timer, doneSeen: true } };
+        return [200, state];
+    });
+    let tree = w.button();
+    const button = footerButton(tree);
+    assert.match(button.props['aria-label'], /^Focus timer: Focus session done at \d{1,2}:\d{2}\s?[AP]M$/);
+    assert.equal(button.props['data-focus-mark'], 'ended');
+    assert.match(find(tree, (e) => e.type === 'Tooltip').props.label, /^Focus session done at \d{1,2}:\d{2}\s?[AP]M$/);
+    assert.deepEqual(dots(tree), ['fc-dot fc-dot-done'], 'the done mark');
+    await w.settle();
+    assert.equal(w.calls.filter((c) => c.method === 'POST').length, 0, 'the panel is closed: not seen');
+    button.props.onClick({ currentTarget: null });
+    await w.settle();
+    assert.deepEqual(w.calls.filter((c) => c.method === 'POST').map((c) => c.body), [{ op: { op: 'seen' } }], 'the open panel shows it: seen, once');
+    tree = w.button();
+    assert.deepEqual([footerButton(tree).props['aria-label'], footerButton(tree).props['data-focus-mark'], dots(tree).length], ['Focus timer', 'done', 0], 'the mark is gone');
+    assert.equal(find(tree, (e) => e.type === 'Tooltip').props.label, 'Focus timer');
+    footerButton(tree).props.onClick({ currentTarget: null });
+    await w.settle();
+    assert.equal(w.calls.filter((c) => c.method === 'POST').length, 1, 'seen once');
+    w.close();
+
+    // Seen in another window: the mark goes here with the next read; each kind says its own words.
+    for (const [kind, words] of [['short', 'Short break'], ['long', 'Long break'], ['custom', 'Timer']]) {
+        let other = doneState({}, { kind, durationMs: 300000, remainingMs: 300000 });
+        const x = await window(() => [200, other]);
+        assert.match(footerButton(x.button()).props['aria-label'], new RegExp(`^Focus timer: ${words} done at `), kind);
+        other = { ...other, rev: other.rev + 1, timer: { ...other.timer, doneSeen: true } };
+        x.listeners.get('visibilitychange')();
+        await x.settle();
+        assert.equal(footerButton(x.button()).props['aria-label'], 'Focus timer', `${kind}: seen elsewhere`);
+        x.close();
+    }
+    // An end saved without the flag (an older host) has no mark.
+    const old = await window(() => [200, STATE({ timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: null, running: false, doneAt: Date.now() - 2000 } })]);
+    assert.deepEqual([footerButton(old.button()).props['aria-label'], dots(old.button()).length], ['Focus timer', 0]);
+    old.close();
+});
+
+test('a hidden window chimes at the end and says it when shown again, with its time; nothing is said if it was seen or replaced meanwhile; no sound before a click', async () => {
+    const { made, AudioContext } = audio();
+    for (const meanwhile of [null, 'seen', 'replaced']) {
+        let state = STATE({ rev: 2, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: Date.now() + 150, running: true, doneAt: null, doneSeen: false } });
+        const w = await window(({ body }) => {
+            if (body?.op?.op === 'complete') state = doneState({ rev: 3 }, { doneAt: Date.now() - 100 });
+            return [200, state];
+        }, { globals: {} });
+        w.win.AudioContext = AudioContext;
+        const before = made.length;
+        await new Promise((r) => setTimeout(r, 30));
+        assert.equal(made.length, before, 'no AudioContext before a click');
+        w.listeners.get('click')(); // the first click in the window
+        assert.equal(made.length, before + 1, 'made on the first click');
+        const ac = made.at(-1);
+        await w.show('hidden');
+        assert.ok(await until(() => w.calls.some((c) => c.body?.op?.op === 'complete')), 'at zero the window asks the host');
+        await w.settle();
+        const toast = () => find(w.overlay(), (e) => e.type === 'Toast');
+        assert.equal(toast(), undefined, 'hidden: nothing said yet');
+        assert.equal(ac.notes, 2, 'the chime at the end, heard while hidden');
+        if (meanwhile === 'seen') state = { ...state, rev: 4, timer: { ...state.timer, doneSeen: true } };
+        if (meanwhile === 'replaced') state = STATE({ rev: 4, timer: { kind: 'short', durationMs: 300000, remainingMs: 300000, endAt: Date.now() + 300000, running: true, doneAt: null, doneSeen: false } });
+        await w.show('visible');
+        if (meanwhile) assert.equal(toast(), undefined, `${meanwhile} meanwhile: nothing said`);
+        else {
+            assert.match(toast()?.props.text, /^Focus session done at \d{1,2}:\d{2}\s?[AP]M\. Time for a break\.$/, 'said when shown, with its time');
+            assert.deepEqual([toast().props.holdMs, Array.from(toast().props.actions, (a) => a.label)], [12000, ['Start short break']]);
+        }
+        assert.equal(ac.notes, 2, 'no second chime when shown');
+        w.close();
+    }
+
+    // A visible window: the toast and the chime at once; an end it learns of late: its time, no chime.
+    let state = doneState({ rev: 1 }, { doneAt: Date.now() - 3600000, doneSeen: true });
+    const w = await window(() => [200, state]);
+    w.win.AudioContext = AudioContext;
+    w.listeners.get('click')();
+    const ac = made.at(-1);
+    const toast = () => find(w.overlay(), (e) => e.type === 'Toast');
+    state = doneState({ rev: 2 }, { doneAt: Date.now() - 300 });
+    w.listeners.get('visibilitychange')();
+    await w.settle();
+    assert.deepEqual([toast()?.props.text, ac.notes], ['Focus session done. Time for a break.', 2]);
+    state = doneState({ rev: 3 }, { kind: 'short', durationMs: 300000, remainingMs: 300000, doneAt: Date.now() - 5 * 60000 });
+    w.listeners.get('visibilitychange')();
+    await w.settle();
+    assert.match(toast()?.props.text, /^Break over at \d{1,2}:\d{2}\s?[AP]M\. Ready to focus\?$/);
+    assert.equal(ac.notes, 2, 'found late: no chime');
+    w.close();
+});
+
+test('the end\'s toast starts the next step; Reset of a started timer says so, with Undo for 10 seconds; an Undo the host refuses is said', async () => {
+    let state = doneState();
+    let undo = 'ok';
+    const w = await window(({ body }) => {
+        const o = body?.op?.op;
+        if (o === 'start') state = STATE({ rev: state.rev + 1, timer: { kind: body.op.kind, durationMs: body.op.durationMs, remainingMs: body.op.durationMs, endAt: Date.now() + body.op.durationMs, running: true, doneAt: null, doneSeen: false } });
+        if (o === 'reset') state = STATE({ rev: state.rev + 1, timer: { ...state.timer, running: false, endAt: null, remainingMs: state.timer.durationMs, doneAt: null, doneSeen: false } });
+        if (o === 'undo' && undo !== 'ok') return [409, { error: 'There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.' }];
+        return [200, state];
+    });
+    const toast = () => find(w.overlay(), (e) => e.type === 'Toast');
+    state = doneState({ rev: 6 }, { doneAt: Date.now() - 200 });
+    w.listeners.get('visibilitychange')();
+    await w.settle();
+    const [next] = toast().props.actions;
+    assert.equal(next.label, 'Start short break');
+    next.onClick();
+    await w.settle();
+    assert.deepEqual(w.calls.at(-1).body, { op: { op: 'start', kind: 'short', durationMs: 300000 } }, 'the next step, from the toast');
+    assert.equal(toast(), undefined, 'the toast goes with its click');
+
+    // Reset of the running break: the toast says it, with Undo.
+    footerButton(w.button()).props.onClick({ currentTarget: null });
+    await w.settle();
+    const footer = () => find(w.overlay(), (e) => e.type === 'Modal').props.footer;
+    find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
+    await w.settle();
+    assert.deepEqual(w.calls.at(-1).body, { op: { op: 'reset' } });
+    assert.deepEqual([toast()?.props.text, toast()?.props.tone, toast()?.props.holdMs, Array.from(toast().props.actions, (a) => a.label)], ['Short break reset.', 'success', 10000, ['Undo']]);
+    toast().props.actions[0].onClick();
+    await w.settle();
+    assert.deepEqual(w.calls.at(-1).body, { op: { op: 'undo' } });
+    assert.equal(toast(), undefined);
+
+    // Paused, reset, and the host refuses the Undo (a minute went by): said in its words.
+    state = STATE({ rev: 20, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 600000, endAt: null, running: false, doneAt: null, doneSeen: false } });
+    w.listeners.get('visibilitychange')();
+    await w.settle();
+    find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
+    await w.settle();
+    assert.equal(toast()?.props.text, 'Focus session reset.');
+    undo = 'refused';
+    toast().props.actions[0].onClick();
+    await w.settle();
+    assert.deepEqual([toast()?.props.text, toast()?.props.tone, toast()?.props.holdMs], ['Not changed: There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.', undefined, 8000], 'a warning (DSH\'s warning look), held 8 s');
+
+    // A Reset of an ended timer (nothing running or paused) has nothing to undo: no toast.
+    toast().props.onDone();
+    state = doneState({ rev: 30 }, { doneAt: Date.now() - 3600000, doneSeen: true });
+    w.listeners.get('visibilitychange')();
+    await w.settle();
+    assert.equal(toast(), undefined, 'an end found late that a panel showed already is not said again');
+    find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
+    await w.settle();
+    assert.equal(toast(), undefined, 'nothing to undo');
+    w.close();
+});
+
+test('the done clock shows the next step\'s length and names it; the custom field has its name beside it', async () => {
+    let rev = 40;
+    const settings = { focusMin: 30, shortMin: 6, longMin: 20, chime: true };
+    let state = STATE();
+    const w = await window(() => [200, state]);
+    footerButton(w.button()).props.onClick({ currentTarget: null });
+    await w.settle();
+    const panel = () => w.overlay();
+    assert.equal(find(panel(), (e) => 'data-focus-next' in e.props), undefined, 'ready: no caption');
+    for (const [kind, focus, durationMs, clockShown, caption] of [
+        ['focus', 1, 1800000, '6:00', 'Short break next'],
+        ['focus', 4, 1800000, '20:00', 'Long break next'],
+        ['short', 4, 360000, '30:00', 'Focus next'],
+        ['long', 4, 1200000, '30:00', 'Focus next'],
+        ['custom', 4, 120000, '2:00', 'Custom again'],
+    ]) {
+        state = STATE({ rev: (rev += 1), settings, sessions: { date: '2026-10-26', focus }, timer: { kind, durationMs, remainingMs: durationMs, endAt: null, running: false, doneAt: Date.now() - 3600000, doneSeen: true } });
+        w.listeners.get('visibilitychange')();
+        await w.settle();
+        assert.deepEqual([textIn(find(panel(), (e) => 'data-focus-time' in e.props)), textIn(find(panel(), (e) => 'data-focus-next' in e.props))], [clockShown, caption], `${kind} after ${focus}`);
+    }
+    const field = find(panel(), (e) => e.type === 'label' && /fc-custom-field/.test(e.props.className ?? ''));
+    assert.equal(textIn(find(field, (e) => e.type === 'span' && e.props.className === 'fc-custom-name')), 'Custom', 'its name, shown');
+    assert.ok(find(field, (e) => 'data-focus-custom' in e.props), 'beside its field, in its label');
+    w.close();
+});
+
+/** A few DOM nodes, enough for the footer's seat: boxes, parents, earlier siblings and closest(). */
+function node(parent = null, { box = [0, 0], slot = null } = {}) {
+    const n = { parentElement: parent, children: [], box, slot };
+    n.getBoundingClientRect = () => ({ width: n.box[0], height: n.box[1] });
+    n.closest = (sel) => { for (let at = n; at; at = at.parentElement) if (at.slot && sel === `[data-slot="${at.slot}"]`) return at; return null; };
+    Object.defineProperty(n, 'previousElementSibling', { get() { const s = n.parentElement ? n.parentElement.children : []; const i = s.indexOf(n); return i > 0 ? s[i - 1] : null; } });
+    if (parent) parent.children.push(n);
+    return n;
+}
+
+test('the rail: Focus gives its footer seat to a button drawn before it in DSH\'s footer outlet, and takes it back when that one goes', async () => {
+    const w = await window(() => [200, STATE()]);
+    const { seatTaken } = w.client.logic;
+    const outlet = () => node(null, { slot: 'sidebar.footer.action' });
+    assert.equal(seatTaken(null), false);
+    assert.equal(seatTaken(node()), false, 'not in DSH\'s footer outlet');
+    let o = outlet();
+    assert.equal(seatTaken(node(o)), false, 'alone');
+    o = outlet();
+    node(o, { box: [32, 32] });
+    assert.equal(seatTaken(node(o)), true, 'a button before it');
+    o = outlet();
+    const wrapper = node(o); // a box-less wrapper (display: contents) around the neighbour's button
+    node(node(wrapper), { box: [32, 32] });
+    const inner = node(node(o)); // Focus's seat inside a wrapper of its own
+    assert.equal(seatTaken(inner), true, 'a button inside a wrapper, before Focus\'s wrapper');
+    o = outlet();
+    const mine = node(o);
+    node(o, { box: [32, 32] });
+    assert.equal(seatTaken(mine), false, 'a button after it keeps its own seat');
+    o = outlet();
+    node(o);
+    assert.equal(seatTaken(node(o)), false, 'an empty entry before it');
+    o = outlet();
+    const broken = node(o);
+    broken.getBoundingClientRect = () => { throw new Error('gone'); };
+    assert.equal(seatTaken(node(o)), false, 'a failing measure keeps the seat');
+    w.close();
+
+    // Mounted as DSH draws it: wide, then the folded rail ({ wide: false }) with a neighbour, which goes and comes back.
+    const observers = [];
+    class MutationObserver {
+        constructor(cb) { this.cb = cb; this.on = false; observers.push(this); }
+        observe(target, opts) { this.target = target; this.opts = JSON.stringify(opts); this.on = true; }
+        disconnect() { this.on = false; }
+    }
+    const x = await window(() => [200, STATE()], { stateful: true, globals: { MutationObserver } });
+    const view = x.mount((p) => x.footer(p), { wide: true });
+    const seat = () => find(view.tree, (e) => e.type === 'span' && e.props.className === 'fc-seat');
+    assert.deepEqual([seat().props['data-focus-seat'], Boolean(footerButton(view.tree))], ['kept', true]);
+    const rail = outlet();
+    const neighbour = node(rail, { box: [32, 32] });
+    seat().props.ref.current = node(rail);
+    view.update({ wide: false });
+    assert.deepEqual([seat().props['data-focus-seat'], footerButton(view.tree)], ['given', undefined], 'the neighbour keeps the seat');
+    assert.deepEqual([observers.length, observers[0].target === rail, observers[0].opts, observers[0].on], [1, true, '{"childList":true,"subtree":true}', true]);
+    rail.children.splice(rail.children.indexOf(neighbour), 1);
+    observers[0].cb();
+    assert.deepEqual([seat().props['data-focus-seat'], Boolean(footerButton(view.tree))], ['kept', true], 'the neighbour went: Focus\'s button is back');
+    rail.children.unshift(neighbour);
+    observers[0].cb();
+    assert.equal(seat().props['data-focus-seat'], 'given', 'and gives way again');
+    view.update({ wide: true });
+    assert.deepEqual([seat().props['data-focus-seat'], Boolean(footerButton(view.tree)), observers[0].on], ['kept', true, false], 'unfolded: its seat, and no watch left');
+    x.close();
+});
+
+test('DSH\'s keyboard shortcut "Open the Focus timer" (Shift+Alt+primary+F) opens the panel; with its keys taken it is listed without keys; it goes with the plugin', async () => {
+    const commands = [];
+    let gone = 0;
+    const w = await window(() => [200, STATE()], { shortcuts: { register: (c) => { commands.push(c); return () => { gone += 1; }; } } });
+    assert.equal(commands.length, 1);
+    const [c] = commands;
+    assert.deepEqual([c.id, c.label(), Array.from(c.regions), c.modals.length], ['dsh-plugin-focus.open', 'Open the Focus timer', ['page', 'editable'], 0]);
+    assert.deepEqual(Object.keys(c.defaults).sort(), ['desktop:linux', 'desktop:macos', 'desktop:windows', 'web:macos', 'web:windows']);
+    for (const keys of Object.values(c.defaults)) assert.deepEqual([keys.code, Array.from(keys.modifiers)], ['KeyF', ['primary', 'alt', 'shift']]);
+    assert.equal(find(w.overlay(), (e) => e.type === 'Modal'), undefined, 'closed');
+    const reads = w.calls.length;
+    const hit = c.resolve();
+    assert.equal(hit.status, 'handled');
+    hit.run();
+    await w.settle();
+    assert.ok(find(w.overlay(), (e) => e.type === 'Modal'), 'the shortcut opened the panel');
+    assert.equal(w.calls.length, reads + 1, 'and read the host');
+    c.resolve().run();
+    await w.settle();
+    assert.equal(w.calls.length, reads + 1, 'open already: nothing more');
+    w.close();
+    assert.equal(gone, 1, 'off: the shortcut goes');
+
+    const tried = [];
+    const x = await window(() => [200, STATE()], { shortcuts: { register: (cmd) => { tried.push(cmd); if (Object.keys(cmd.defaults).length) throw new Error('Conflicting shortcut defaults'); return () => {}; } } });
+    assert.deepEqual(tried.map((cmd) => [cmd.id, Object.keys(cmd.defaults).length]), [['dsh-plugin-focus.open', 5], ['dsh-plugin-focus.open', 0]], 'its keys taken: listed without keys, to bind');
+    x.close();
+    const y = await window(() => [200, STATE()], { shortcuts: { register: () => { throw new Error('no shortcuts here'); } } });
+    assert.ok(footerButton(y.button()), 'a DSH that refuses it: the footer button is still the door');
+    y.close();
+});
+
 test('error states: no state at all says what to check, with Try again; a later failed read keeps the state and says it may be out of date; a refusal is a toast in the host\'s words', async () => {
     let mode = 'down';
     const w = await window(({ method }) => {
@@ -779,6 +1177,6 @@ test('the README is the code\'s: its setting, ops, kinds, limits, status codes, 
     assert.ok(words.includes('Only within 60 s of that Reset') && words.includes('has an Undo button for 10 seconds') && src.includes('holdMs: 10000, actions: [action(TEXT.undo'), 'Undo');
     for (const said of ['There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.']) assert.ok(words.includes(said) && text('lib/impl.js').includes(said), said);
     for (const said of ['Start again', 'Focus session reset.', 'Short break next']) assert.ok(words.includes(said), `README: ${said}`);
-    assert.ok(src.includes('"Start again"') && src.includes('resetSaid: (kind) => `${ENDED[kind] || ENDED.custom} reset.`') && src.includes('nextCaption: (kind) => `${KIND[kind] || KIND.custom} next`'));
+    assert.ok(src.includes('"Start again"') && src.includes('resetSaid: (kind) => `${ENDED[kind] || ENDED.custom} reset.`') && src.includes('nextCaption: (kind) => (KIND[kind] && kind !== "custom" ? `${KIND[kind]} next` : "Custom again")'));
     assert.ok(words.includes('git archive 3859b8d plugins/focus | tar -x -C <folder>') && words.includes('git archive 5c0d8da plugins/focus | tar -x -C <folder>'), 'where the older versions are');
 });

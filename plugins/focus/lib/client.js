@@ -44,7 +44,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			retry: "Try again",
 			start: "Start", pause: "Pause", resume: "Resume", reset: "Reset", undo: "Undo",
 			startNext: (kind) => (kind === "focus" ? "Start focus" : kind === "long" ? "Start long break" : kind === "short" ? "Start short break" : "Start again"),
-			nextCaption: (kind) => `${KIND[kind] || KIND.custom} next`,
+			nextCaption: (kind) => (KIND[kind] && kind !== "custom" ? `${KIND[kind]} next` : "Custom again"),
 			lengths: "Length",
 			custom: "Custom",
 			customLabel: "Custom length in minutes",
@@ -165,7 +165,8 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			const done = v.timer && !v.timer.running ? v.timer.doneAt : null;
 			if (seenDone !== undefined && done && done !== seenDone) {
 				const late = Date.now() - done > LATE_MS;
-				if (visible()) sayEnd(v, late);
+				// An end found late that a panel has shown already (in another window) is not said again.
+				if (late && v.timer.doneSeen === true) { /* seen */ } else if (visible()) sayEnd(v, late);
 				else pending = { doneAt: done }; // hidden: said when the window is shown again, with its time
 				// The chime sounds at the end even in a hidden window (it is heard); never for an end found late.
 				if (!late && v.settings && v.settings.chime) chime();

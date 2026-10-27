@@ -31,7 +31,7 @@ a mark on the footer button until you have seen it.
   chimes at the end and says it when it is shown again, with the time it ended ("Focus session done
   at 10:25 AM. Time for a break."), unless the end was seen in another window meanwhile. An end a
   window learns of more than a minute late (it was closed, or did not know the timer ran) is said
-  the same way, with its time and without the chime.
+  the same way, with its time and without the chime, unless a panel has shown it already.
 - **Live.** While a window is visible it reads the host's state every 5 seconds (one small GET; it
   redraws only when the state's revision moved), so a timer started or ended elsewhere shows within
   seconds. The countdown itself ticks in the window every second.
@@ -178,7 +178,7 @@ The ops (`op.op`):
 | `set` | `kind`, `durationMs` | An idle timer of that kind and length. Refused (409) while one runs. |
 | `complete` | | Asks the host to end the timer now if its end has come (within 1.5 s); otherwise nothing. |
 | `seen` | | A window showed the end in its panel: `doneSeen` becomes true, and every window drops the footer mark. Nothing to do if there is no unseen end. |
-| `undo` | | Brings back the timer as it was before the last Reset of a started timer (a running one to the same `endAt`). Only within 60 s of that Reset and while nothing changed since; refused (409) otherwise. Kept in memory, so a restart forgets it. |
+| `undo` | | Brings back the timer as it was before the last Reset of a started timer: a running one to the same `endAt` (if that end came meanwhile, it ends as of it, and a focus session counts). Only within 60 s of that Reset and while nothing changed since; refused (409) otherwise. Kept in memory, so a restart forgets it. |
 
 `kind` is one of `focus`, `short`, `long`, `custom`; `durationMs` is a number of milliseconds, kept
 within 10 s to 3 h. Everything in a request is checked before anything changes, so a refused request
