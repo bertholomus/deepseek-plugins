@@ -29,7 +29,7 @@ import { accessSync, constants, existsSync, statSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 import { STYLES, STYLE_IDS, argvOf, dataFolder, expandHome, findFlagsTranscript, findNewTranscript, findTranscriptById, launchLine, pickShell, programName, transcriptPath } from './launch.js';
 import { whereIs } from './detect.js';
-import { Tail, closeOver, emptyFold, foldEntry, oneLine, parseLines, provenIn, statusOf } from './transcripts.js';
+import { Tail, closeOver, emptyFold, foldEntry, oneLine, parseLines, proofs, statusOf } from './transcripts.js';
 import { MAX_MESSAGE, plainMessage } from './typist.js';
 import { clip, errorText, isRecord, later } from './shared/safe.js';
 
@@ -1366,9 +1366,9 @@ export class AgentTerminals {
                 // Stopped: the next start looks for its proof (lateProof); it presses no Enter.
                 if (this.era !== era || !this.records[record.key]) return;
                 this.read(record);
-                const proof = provenIn(live.fold, item.text, since);
+                const proof = this.proofsOf(record, live.fold).get(item.id);
                 if (proof) {
-                    this.settle(record, item, 'delivered', `Its transcript shows it${item.enters > 1 ? `, after Enter ${item.enters} times (the first was swallowed)` : ''}.`, { provenAt: proof.at || this.now() });
+                    this.settle(record, item, 'delivered', `Its transcript shows it${item.enters > 1 ? `, after Enter ${item.enters} times (the first was swallowed)` : ''}.`, provedBy(proof, this.now()));
                     this.log({ kind: 'proof', agent: record.key, sessionId: record.sessionId, text: `${record.name} has the message`, why: `Its own transcript shows “${clip(item.text, 120)}”.`, state: 'done', by: 'Agent Terminals' });
                     this.publish(record);
                     return;
@@ -1417,24 +1417,48 @@ export class AgentTerminals {
     }
 
     /**
+     * The transcript's proof for every message of an agent still looking
+     * for one (typed in, or not proven within a day), each line proving one
+     * message only, the oldest message first; the places that proved its
+     * delivered messages stay theirs.
+     * @returns {Map<string, { at: number, key: string, from: number, to: number }>} by message id.
+     */
+    proofsOf(record, fold) {
+        const now = this.now();
+        const wanted = [];
+        const claimed = [];
+        for (const d of record.deliveries) {
+            if (d.state === 'delivered') {
+                if (isRecord(d.proof) && typeof d.proof.key === 'string') claimed.push(d.proof);
+                else if (Number.isFinite(d.provenAt)) claimed.push({ at: d.provenAt, text: d.text });
+            } else if (Number.isFinite(d.typedAt) && (d.state === 'typed' || (d.state === 'not proven' && now - d.typedAt <= LATE_PROOF_MS))) {
+                wanted.push({ id: d.id, text: d.text, since: d.typedAt });
+            }
+        }
+        return proofs(fold, wanted, claimed);
+    }
+
+    /**
      * A message typed in before Agent Terminals stopped (a plugin reload)
      * still has its proof looked for, without pressing Enter again.
      */
     lateProof(record, live) {
         if (!live.fold || STYLES[record.style]?.format === 'none') return;
+        // Worked out once for every message still looking (one line proves one message, the oldest first).
+        const found = this.proofsOf(record, live.fold);
         for (const item of record.deliveries) {
             if (!item.typedAt || live.proving.has(item.id)) continue;
             const late = item.state === 'not proven';
             if (item.state !== 'typed' && !(late && this.now() - item.typedAt <= LATE_PROOF_MS)) continue;
-            const proof = provenIn(live.fold, item.text, item.typedAt);
+            const proof = found.get(item.id);
             if (proof && late) {
-                this.settle(record, item, 'delivered', 'Its transcript shows it, later than Agent Terminals looked for it (it was marked not proven).', { provenAt: proof.at || this.now() });
+                this.settle(record, item, 'delivered', 'Its transcript shows it, later than Agent Terminals looked for it (it was marked not proven).', provedBy(proof, this.now()));
                 this.log({ kind: 'proof', agent: record.key, sessionId: record.sessionId, text: `${record.name} has the message after all`, why: `Its own transcript shows “${clip(item.text, 120)}”, later than Agent Terminals looked for it.`, state: 'done', by: 'Agent Terminals' });
                 if (item.noProof) {
                     try { this.journal.set(item.noProof, { state: 'done', reason: 'Seen later: its transcript shows it.' }); } catch {}
                 }
             } else if (proof) {
-                this.settle(record, item, 'delivered', 'Its transcript shows it.', { provenAt: proof.at || this.now() });
+                this.settle(record, item, 'delivered', 'Its transcript shows it.', provedBy(proof, this.now()));
             } else if (!late && this.now() - item.typedAt > PROOF_WHILE_WORKING_MS) {
                 this.settle(record, item, 'not proven', 'Typed in 30 minutes ago, and its transcript still does not show it. Look at its terminal.');
             }
@@ -1460,10 +1484,13 @@ export class AgentTerminals {
         } catch (error) {
             this.logger?.warn?.(`agent-terminals: could not read the transcript of ${record.name}: ${errorText(error)}`);
         }
+        // One line proves one message: a line an earlier message was proven by (the same words sent twice,
+        // or words inside an earlier message) proves nothing more, so a message the program never read is typed again.
+        const found = this.proofsOf(record, fold);
         for (const item of typed) {
-            const proof = provenIn(fold, item.text, item.typedAt);
+            const proof = found.get(item.id);
             if (proof) {
-                this.settle(record, item, 'delivered', 'Its transcript shows it.', { provenAt: proof.at || this.now() });
+                this.settle(record, item, 'delivered', 'Its transcript shows it.', provedBy(proof, this.now()));
             } else if (item.again) {
                 this.settle(record, item, 'failed', 'DSH restarted twice before the agent read it, and each time its program ended with the message unread in its input line. Send it again.');
                 this.log({ kind: 'restart', agent: record.key, sessionId: record.sessionId, text: `A message for ${record.name} was lost`, why: `DSH restarted twice before the agent read “${clip(item.text, 120)}”.`, state: 'failed', by: 'Agent Terminals' });
@@ -1588,6 +1615,9 @@ export class AgentTerminals {
         });
     }
 }
+
+/** What a delivered message keeps of its proof: when the line was written, and which place in which line (so no other message is proven by it). */
+const provedBy = (proof, now) => ({ provenAt: proof.at || now, proof: { key: proof.key, from: proof.from, to: proof.to } });
 
 /** How a session's turn ended, in words (Session Watch's turn end). */
 export function turnEnd(end) {

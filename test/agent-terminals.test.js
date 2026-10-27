@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import {
     STYLES, argvOf, dataFolder, eventsMeta, findNewTranscript, findTranscriptById, folderKey, launchLine, pickShell, programName, shellWord, transcriptPath,
 } from '../plugins/agent-terminals/lib/launch.js';
-import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
+import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, proofs, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
 import { PASTE_END, PASTE_START, Typist, messageKeys, pasteSwitch } from '../plugins/agent-terminals/lib/typist.js';
 import { AgentTerminals, checkLaunch, exitWords, parseData, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedSince, changedWords, checkConfig, profileEntry, savedEntry, settingsSnapshot } from '../plugins/agent-terminals/lib/config.js';
@@ -104,7 +104,8 @@ const at = (s) => new Date(Date.UTC(2026, 9, 17, 3, 0, s)).toISOString();
 const msgLine = (type, message, s, extra = {}) => ({ type, message, timestamp: at(s), uuid: `u${s}`, sessionId: 'c1', ...extra });
 
 test('transcripts: a messages-style file reads as user words, calls, results and replies', () => {
-    assert.deepEqual(entriesOf('messages', msgLine('user', { role: 'user', content: 'Fix the tests' }, 1)), [{ kind: 'user', at: Date.parse(at(1)), text: 'Fix the tests' }]);
+    assert.deepEqual(entriesOf('messages', msgLine('user', { role: 'user', content: 'Fix the tests' }, 1)), [{ kind: 'user', at: Date.parse(at(1)), text: 'Fix the tests', key: 'u1' }], 'with the line\'s own id');
+    assert.equal(entriesOf('messages', { ...msgLine('user', { role: 'user', content: 'x' }, 1), uuid: undefined })[0].key, undefined, 'a line without an id has none');
     assert.deepEqual(entriesOf('messages', msgLine('user', { role: 'user', content: '<command-name>/clear</command-name>' }, 1)), [], 'a command echo is not the person\'s words');
     assert.deepEqual(entriesOf('messages', msgLine('user', { role: 'user', content: '<system-reminder>x</system-reminder>' }, 1)), [], 'wrapped context is not the person\'s words');
     assert.deepEqual(entriesOf('messages', msgLine('user', { role: 'user', content: 'hi' }, 1, { isMeta: true })), []);
@@ -173,8 +174,14 @@ test('transcripts: the fold says what the agent does now', () => {
     assert.equal(fold.turns, 3);
     const same = foldEntry(fold, { kind: 'user', at: now + 5000, text: 'Yes' });
     assert.equal(same.turns, 4, 'the same words later are a new message');
-    const echo = foldEntry(same, { kind: 'user', at: now + 5500, text: 'Yes' });
-    assert.equal(echo.turns, 4, 'the same words logged twice in a moment are one message');
+    const echo = foldEntry(same, { kind: 'user', at: now + 5000, text: 'Yes' });
+    assert.equal(echo.turns, 4, 'one line read twice (the same words at the same moment) is one message');
+    const quick = foldEntry(same, { kind: 'user', at: now + 5400, text: 'Yes' });
+    assert.deepEqual([quick.turns, quick.users.length - same.users.length], [5, 1], 'the same words sent again a moment later are a message of their own');
+    const keyed = foldEntry(foldEntry(fold, { kind: 'user', at: now + 6000, text: 'Go', key: 'line-a' }), { kind: 'user', at: now + 6001, text: 'Go', key: 'line-a' });
+    assert.equal(keyed.turns, 4, 'the same line id twice is one message');
+    const twoLines = foldEntry(foldEntry(fold, { kind: 'user', at: now + 6000, text: 'Go', key: 'line-a' }), { kind: 'user', at: now + 6000, text: 'Go', key: 'line-b' });
+    assert.equal(twoLines.turns, 5, 'two line ids are two messages, even at the same moment');
     assert.equal(foldEntry(fold, { kind: 'unknown' }), fold);
 });
 
@@ -223,6 +230,49 @@ test('transcripts: proof is the agent\'s own transcript showing the words, after
     const long = 'x'.repeat(500);
     fold = foldEntry(fold, { kind: 'user', at: 2000, text: `${long} (trimmed by the CLI)` });
     assert.ok(provenIn(fold, long, 2000), 'the first 160 characters are enough');
+});
+
+test('transcripts: one line proves one message, the oldest first, so the same words sent twice need two lines', () => {
+    const user = (at, text, key) => ({ kind: 'user', at, text, ...(key ? { key } : {}) });
+    // Round 4: "dup two" sent twice back to back; the agent has read only the first.
+    let fold = foldEntry(emptyFold(), user(1000, 'dup two #work=6000', 'L1'));
+    const both = [{ id: 'm1', text: 'dup two #work=6000', since: 900 }, { id: 'm2', text: 'dup two #work=6000', since: 1300 }];
+    let found = proofs(fold, both);
+    assert.deepEqual([found.get('m1')?.key, found.has('m2')], ['L1', false], 'the first line proves the first message only, though it is within 2 s of the second');
+    found = proofs(fold, [both[1]], [{ key: 'L1', from: 0, to: 18 }]);
+    assert.equal(found.has('m2'), false, 'a line a delivered message was proven by proves nothing more');
+    fold = foldEntry(fold, user(7000, 'dup two #work=6000', 'L2'));
+    found = proofs(fold, [both[1]], [{ key: 'L1', from: 0, to: 18 }]);
+    assert.deepEqual([found.get('m2')?.key, found.get('m2')?.at], ['L2', 7000], 'the second is proven by its own line');
+    found = proofs(fold, both);
+    assert.deepEqual([found.get('m1')?.key, found.get('m2')?.key], ['L1', 'L2'], 'each message its own line, the oldest first');
+    // Order: the oldest message gets the first line, whatever order they are asked in.
+    found = proofs(fold, [both[1], both[0]]);
+    assert.deepEqual([found.get('m1')?.key, found.get('m2')?.key], ['L1', 'L2']);
+    // A message inside an earlier one's words: not proven by that line.
+    let inner = foldEntry(emptyFold(), user(1000, 'fix the build, then run the tests', 'B1'));
+    const contained = [{ id: 'a', text: 'fix the build, then run the tests', since: 900 }, { id: 'b', text: 'run the tests', since: 1500 }];
+    found = proofs(inner, contained);
+    assert.deepEqual([found.has('a'), found.has('b')], [true, false], 'the line holds the first message whole');
+    inner = foldEntry(inner, user(2500, 'run the tests', 'B2'));
+    assert.equal(proofs(inner, contained).get('b')?.key, 'B2', 'proven by its own line');
+    // Two messages that went in as one line (the first sat in the input box when the second was typed): both.
+    const merged = foldEntry(emptyFold(), user(5000, 'dup dup', 'M1'));
+    found = proofs(merged, [{ id: 'x', text: 'dup', since: 4000 }, { id: 'y', text: 'dup', since: 4500 }]);
+    assert.deepEqual([found.get('x')?.from, found.get('y')?.from], [0, 4], 'each one place in the line');
+    assert.equal(proofs(merged, [{ id: 'z', text: 'dup', since: 4000 }], [{ key: 'M1', from: 0, to: 3 }, { key: 'M1', from: 4, to: 7 }]).has('z'), false, 'no third place');
+    // The 2 s allowance is for a line no earlier message claims; later than that, never.
+    const early = foldEntry(emptyFold(), user(1000, 'Please run the tests'));
+    assert.ok(proofs(early, [{ id: 'p', text: 'Please run the tests', since: 2900 }]).has('p'), 'a line 1.9 s before the typing, unclaimed: proof (clocks)');
+    assert.equal(proofs(early, [{ id: 'p', text: 'Please run the tests', since: 3100 }]).has('p'), false, 'more than 2 s before: an older message');
+    // A state file from before kept only the proof's time: that line stays its message's.
+    assert.equal(proofs(fold, [both[1]], [{ at: 1000, text: 'dup two #work=6000' }]).get('m2')?.key, 'L2', 'an older delivery\'s line, found by its time');
+    // Lines without an id are told apart by their time.
+    const plainLines = foldEntry(foldEntry(emptyFold(), user(1000, 'go')), user(1400, 'go'));
+    found = proofs(plainLines, [{ id: 'g1', text: 'go', since: 900 }, { id: 'g2', text: 'go', since: 1200 }]);
+    assert.deepEqual([found.get('g1')?.at, found.get('g2')?.at], [1000, 1400]);
+    assert.deepEqual(proofs(undefined, both), new Map(), 'no transcript, no proof');
+    assert.deepEqual(proofs(fold, [{ id: 'e', text: '  ', since: 0 }]), new Map(), 'no words, no proof');
 });
 
 test('transcripts: a call waiting for its result is said in steps, so its line does not change every few seconds', () => {
@@ -1131,6 +1181,87 @@ test('engine: a message typed in but not yet read when DSH restarts is typed in 
     }
 });
 
+/** The messages with these words, oldest first. */
+const allByText = (record, words) => record.deliveries.filter((d) => d.text.includes(words));
+
+test('engine: the same words sent twice are two messages, each proven by its own line of the transcript', async () => {
+    // Round 4, finding 1: the second was "delivered" on the first one's line, before the agent read it.
+    for (const typeWhileWorking of [true, false]) {
+        const { agents, controller, dir } = engine({ config: { typeWhileWorking } });
+        agents.start();
+        try {
+            const { agent } = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Twice' });
+            const record = agents.records[agent.key];
+            await until(() => agents.view(record).status === 'idle', 'ready', 20000);
+            // While it works on the first (2.5 s), the second waits in its input (typeWhileWorking) or in the queue.
+            const words = typeWhileWorking ? '#work=2500 dup two' : '#work=30 dup quick';
+            agents.send(agent.key, words);
+            agents.send(agent.key, words);
+            const [one, two] = allByText(record, words.split(' ').at(-1));
+            await until(() => one.state === 'delivered', 'the first proven', 20000);
+            if (typeWhileWorking) {
+                await until(() => two.state === 'typed', 'the second typed in while it works', 20000);
+                await sleep(1000);
+                assert.equal(two.state, 'typed', 'not proven by the first one\'s line');
+            }
+            await until(() => two.state === 'delivered', 'the second proven by its own line', 20000);
+            assert.equal(toldTimes(record, dir, words), 2, 'the agent read it twice');
+            assert.notEqual(two.proof.key, one.proof.key, 'two lines, one each');
+            assert.ok(two.provenAt > one.provenAt, `its own line is the later one (${one.provenAt} then ${two.provenAt})`);
+            if (typeWhileWorking) assert.ok(two.provenAt - one.provenAt >= 2000, 'read after the first job ended');
+            // Words inside the message before: not proven by its line either.
+            agents.send(agent.key, '#work=30 fix the build, then run the tests');
+            agents.send(agent.key, 'run the tests');
+            const [whole] = allByText(record, 'fix the build');
+            const inner = record.deliveries.find((d) => d.text === 'run the tests');
+            await until(() => whole.state === 'delivered' && inner.state === 'delivered', 'both proven', 20000);
+            assert.notEqual(inner.proof.key, whole.proof.key);
+            assert.equal(toldTimes(record, dir, 'run the tests'), 2);
+        } finally {
+            agents.stop();
+            controller.restart();
+        }
+    }
+});
+
+test('engine: the second of two same messages, unread when DSH restarts, is typed in again once and proven by its own line', async () => {
+    const dir = tmp('lost-twice');
+    const controller = new FakeController();
+    const watch = fakeWatch();
+    const first = engine({ dir, watch, controller, config: { typeWhileWorking: true } });
+    first.agents.start();
+    let key;
+    try {
+        const { agent } = await first.agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder: dir, name: 'Twice' });
+        key = agent.key;
+        const record = first.agents.records[key];
+        await until(() => first.agents.view(record).status === 'idle', 'ready', 20000);
+        first.agents.send(key, '#work=60000 dup three');
+        first.agents.send(key, '#work=60000 dup three');
+        const [one, two] = allByText(record, 'dup three');
+        await until(() => one.state === 'delivered' && two.state === 'typed', 'the first read, the second typed in while it works', 20000);
+        await sleep(800);
+        assert.equal(two.state, 'typed', 'the second is not proven by the first one\'s line');
+    } catch (error) {
+        first.agents.stop();
+        throw error;
+    }
+    const second = restartDsh(first, { dir, watch, controller, key, config: { typeWhileWorking: true } });
+    try {
+        const again = second.agents.records[key];
+        const [one, two] = allByText(again, 'dup three');
+        assert.equal(one.state, 'delivered');
+        await until(() => two.state === 'delivered', 'typed in again after the restart and proven', 30000);
+        assert.deepEqual([two.again, two.enters], [true, 1], 'typed in again once');
+        assert.equal(toldTimes(again, dir, 'dup three'), 2, 'its transcript has it twice: the first, and the second once, after the restart');
+        assert.notEqual(two.proof.key, one.proof.key);
+        assert.equal(second.journal.get(two.entry).state, 'delivered');
+    } finally {
+        second.agents.stop();
+        controller.restart();
+    }
+});
+
 test('engine: an answer whose Enter was swallowed when DSH restarted is typed in again, and Decisions hears it delivered', async () => {
     const dir = tmp('lost-answer');
     const controller = new FakeController();
@@ -1209,11 +1340,18 @@ test('engine: a message lost to a second restart failed; an answer that did not 
         assert.match(item.why, /^DSH restarted twice before the agent read it/);
         assert.deepEqual(watch.outcomes.at(-1).slice(0, 1).concat(watch.outcomes.at(-1)[1].state), ['q-lost', 'not delivered']);
         assert.equal(journal.list().filter((e) => e.kind === 'restart' && /was lost/.test(e.text)).length, 1);
-        // One its transcript shows was delivered after all: nothing is typed again.
-        const seen = { id: 'm-seen', text: 'Take the fast path', by: 'you', at: Date.now() - 60000, state: 'typed', typedAt: Date.now() - 60000, enters: 1 };
-        record.deliveries.push(seen);
+        // One its transcript shows was delivered after all (DSH quit before Agent Terminals saw the proof): nothing is typed again.
+        const seen = byText(record, 'Take the fast path');
+        seen.state = 'typed';
+        delete seen.proof;
+        delete seen.provenAt;
         agents.lostWithRestart(record);
         assert.equal(seen.state, 'delivered');
+        // The same words sent again, which the agent never read, are not proven by that line: typed in again.
+        const repeat = { id: 'm-repeat', text: 'Take the fast path', by: 'you', at: seen.typedAt + 500, state: 'typed', typedAt: seen.typedAt + 500, enters: 1 };
+        record.deliveries.push(repeat);
+        agents.lostWithRestart(record);
+        assert.deepEqual([repeat.state, repeat.again], ['queued', true], 'its line proves the first one only');
     } finally {
         agents.stop();
         controller.restart();
