@@ -32,7 +32,8 @@
  */
 import { actionLabel, answerNote, carryOnNote, errorNote, nudgeNote, question, whyBackOff, whyErrorNote, whyGiveUp, whyHeld, whyNudge, whyRearmError, whyRearmIdle, whyResume } from './notes.js';
 import { clip, errorText, isRecord } from './shared/safe.js';
-import { asksSomeone, cutOff } from './shared/words.js';
+import { asksForAnswer, cutOff } from './shared/words.js';
+import { handOverIn } from './ends.js';
 
 export const RULES = Object.freeze(['auto', 'ask', 'off']);
 /** The rules in the window's words. */
@@ -755,7 +756,9 @@ export class Pilot {
                 if (end.kind !== 'completed' && end.kind !== 'max-tokens') return none('its last turn did not end normally');
                 const quiet = now - end.at;
                 if (!force && quiet < this.idleMs() - 1000) return none('not quiet long enough yet');
-                if (asksSomeone(state.text)) return none('its last reply asks you something');
+                // Only an ask, or an offer that hands the next step to the person, holds the note (lib/ends.js).
+                if (asksForAnswer(state.text)) return none('its last reply asks you something');
+                if (handOverIn(state.text)) return none('its last reply leaves the next step to you');
                 if (startable) return { action: 'rearm', kind: 'rearm', ...base, why: whyRearmIdle(state, quiet), summary: 'Started its goal again' };
                 if (spent && (state.todos?.open ?? 0) === 0) return { ...none(`its goal used all ${state.goal.max} of its rounds; raise its round limit to let it go on`, true), ...base };
                 if ((state.todos?.open ?? 0) > 0) {
@@ -1161,8 +1164,15 @@ export class Pilot {
         if (!cut && state.goal?.phase === 'blocked') return 'waits for you: its goal is blocked';
         if (end.kind === 'aborted' && !cut) return 'you stopped its last turn, so Autopilot leaves it to you';
         if (end.kind === 'blocked') return 'waits for you: its last turn was blocked';
-        const asking = typeof state.text === 'string' ? asksSomeone(state.text) : isRecord(state.ask) && state.ask.turn === end.turn;
-        if ((end.kind === 'completed' || end.kind === 'max-tokens') && asking) return 'waits for you: its last reply asks you something';
+        if (end.kind === 'completed' || end.kind === 'max-tokens') {
+            // Without the reply's text (an old saved state), the ask Session Watch read from it: an offer counts only
+            // when its own words hand the next step over.
+            const text = typeof state.text === 'string' ? state.text : undefined;
+            const ask = isRecord(state.ask) && state.ask.turn === end.turn ? state.ask : undefined;
+            if (text !== undefined ? asksForAnswer(text) : Boolean(ask) && ask.soft !== true) return 'waits for you: its last reply asks you something';
+            const handOver = text !== undefined ? handOverIn(text) : ask?.soft === true ? handOverIn(ask.question) : undefined;
+            if (handOver) return `waits for you: its last reply leaves the next step to you (“${handOver.length > 90 ? `${handOver.slice(0, 89)}…` : handOver}”)`;
+        }
         if ((state.inAt ?? 0) > end.at) return undefined;
         const trigger = cut ? 'resume' : end.kind === 'error' ? 'error' : 'idle';
         if (s?.done?.[`${trigger}:${end.turn}:${end.at}`]) return 'Autopilot already handled its last turn; it looks again after the next one';

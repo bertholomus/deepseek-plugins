@@ -145,6 +145,38 @@ test('idle: no note when the last reply asks the person, an approval waits, noth
     assert.equal(pilot.plan('paused', 'idle', { force: true }).why, 'its goal is paused');
 });
 
+test('idle: an offer holds the note only when it hands the next step to the person; one that says the agent goes on does not', async () => {
+    const { dsh, clock, pilot, watch, journal, config } = setup();
+    // Round 5's false holds: each gets its note now.
+    const goesOn = {
+        happy: 'All tests pass. Happy to keep going with the next todo.',
+        report: 'I am happy to report the build is green. Moving on to the docs next.',
+        free: 'Feel free to review the diff; I will carry on with the remaining two todos.',
+        rename: 'If you would like a different name, say so. Next up: the README.',
+        questions: 'The lexer is done.\nLet me know if you have any questions.',
+    };
+    for (const [id, reply] of Object.entries(goesOn)) idleWithTodos(dsh, id, { reply });
+    // Hand-overs from the stack's own sessions: each is left alone, and its row quotes the words.
+    const handsOver = {
+        cont: 'Step 1 is done. Let me know if you want me to continue with steps 2 and 3.',
+        word: 'The fix is ready but unverified. If you want confirmation, say the word and I\'ll run them.',
+        colour: 'The blouse is now sage, with everything else unchanged. Happy to try another color, a print, or a fabric next.',
+    };
+    for (const [id, reply] of Object.entries(handsOver)) idleWithTodos(dsh, id, { reply });
+    await clock.advance(10 * MIN);
+    for (const id of Object.keys(goesOn)) assert.equal(notesIn(dsh, id).length, 1, id);
+    for (const id of Object.keys(handsOver)) assert.deepEqual(notesIn(dsh, id), [], id);
+    assert.match(entries(journal, 'nudge').find((e) => e.sessionId === 'happy').why, /and its last reply asked you nothing\.$/);
+    assert.equal(pilot.plan('cont', 'idle', { force: true }).why, 'its last reply leaves the next step to you');
+    const view = await pageState({ pilot, watch, journal, config });
+    const holds = Object.fromEntries(view.sessions.filter((r) => Object.hasOwn(handsOver, r.sessionId)).map((r) => [r.sessionId, r.hold]));
+    assert.deepEqual(holds, {
+        cont: 'waits for you: its last reply leaves the next step to you (“Let me know if you want me to continue with steps 2 and 3.”)',
+        word: 'waits for you: its last reply leaves the next step to you (“If you want confirmation, say the word and I\'ll run them.”)',
+        colour: 'waits for you: its last reply leaves the next step to you (“Happy to try another color, a print, or a fabric next.”)',
+    });
+});
+
 test('idle with an active goal that stopped: the goal starts again, proven by the round it begins', async () => {
     const { dsh, clock, journal, watch } = setup();
     dsh.add('g', { title: 'Goal session' });

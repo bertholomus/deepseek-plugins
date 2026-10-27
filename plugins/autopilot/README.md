@@ -22,14 +22,42 @@ gives up or asks you something.
 | DSH restarted, crashed or reloaded under a running turn | Puts a short carry-on note in: which turn was cut off and when its last step was, what is still open. If a tool was waiting for approval, the note says it did not run and to make the call again; if a question waited in DSH's question box, it quotes the question and says to ask again. An active goal starts again once the turn that note started has ended without an error. | The note read into a turn; then a round of the goal's new revision |
 | A session went quiet (`idleSeconds`) with open todos, and its last reply asked you nothing | One nudge naming the next todo. Two nudges in a row with no progress (no todo done, no goal round) and it backs off until you write there. | The note read into a turn |
 | A session went quiet with an active goal that is not running (a restart or an error stops a goal) | Starts the goal again; its *Why* line says which round the start begins (*round 3 of 20*). A goal that has used all its rounds is never started (DSH would refuse): the log and the session's row say to raise its round limit. | A round carrying the revision this start wrote (DSH's start writes the goal's next revision, so another start's round never counts) |
-| A turn failed with open work | After `errorRetrySeconds` (2, 10 and 30 minutes by default) it tells the session to carry on, naming the error. A note costs no goal round, so it always goes first: a goal the error stopped starts again only once a turn ends without an error, so an outage never spends the goal's rounds. When the last try fails it gives up at once, tells you, and tags the session *gave up*. | The note read into a turn; then the goal's round |
+| A turn failed with open work: open todos, an active goal, or the work a stop cut off (the turn was part of the carry-on after DSH stopped, as when DSH comes back before its gateway) | After `errorRetrySeconds` (2, 10 and 30 minutes by default) it tells the session to carry on, naming the error (and, after a stop, that it was carrying on). A note costs no goal round, so it always goes first: a goal the error stopped starts again only once a turn ends without an error, so an outage never spends the goal's rounds. When the last try fails it gives up at once, tells you, and tags the session *gave up*, with Try again. A carry-on after a stop is done once a turn of it ends without an error, or you write in the session. A failed turn with nothing open is yours: its row says so. | The note read into a turn; then the goal's round |
 
 It leaves a session alone while its turn waits on you (a tool waiting for
 approval, or a question in DSH's question box: its row says *waiting for
-approval* or *waiting for your answer*), when its last reply asks you
-something (a question, `DECISION NEEDED`, `BLOCKED:`), when you paused
-its goal or the agent marked it blocked, when you stopped its last turn,
-when anything was written in it since, and for subagents' sessions; the session's row on its page says which. Every note starts with
+approval* or *waiting for your answer*), when its last reply waits on you
+(below), when you paused its goal or the agent marked it blocked, when you
+stopped its last turn, when anything was written in it since, and for
+subagents' sessions; the session's row on its page says which.
+
+A last reply waits on you when its last six lines ask you something (a
+question at the end, `DECISION NEEDED`, `BLOCKED:`, *should I*, *do you
+want*, *your call*, *please confirm*, *waiting for your …*) or hand the
+next step to you: *let me know if you want me to …*, *tell me which …*,
+*say the word and I'll …*, *… if you'd like*, *if you'd prefer X, I can …*,
+*once you confirm, I'll …*, *I'll wait for your review*, *happy to try
+another colour next*. An offer that hands nothing over does not hold the
+note: *happy to keep going*, *happy to report*, *feel free to review the
+diff*, *let me know if you have any questions*, or advice such as *If you
+want a stricter check, use …*. Nor does any offer when the reply's last
+sentence says what the agent does next (*Next: the CLI.*, *Moving on to
+the docs.*, *I will carry on with the remaining todos.*). The row quotes the
+words that held it (*Waits for you: its last reply leaves the next step to
+you (“Let me know if you want me to continue with steps 2 and 3.”).*).
+Measured on 32 endings written after the rule was frozen
+(`test/autopilot-ends.test.js`, `test/fixtures/autopilot/endings.json`):
+no false hold among the 16 that do not wait on you, and 3 misses among the
+16 that do (*If you're OK with the rename, I'll update all the imports.*,
+*I need the API token for the sandbox before I can go on.*, *I can add
+retries as well, if that's useful.*): such a session gets one note, which
+asks the agent to end with a `DECISION NEEDED` line if it is blocked. The
+84 real endings from the suite's DSH Test sessions, the round-5 judge's
+nine and 84 written ones that the rule was built on all read right. The
+suite's broader rule (any offer in the last six lines) held 24 of the 122
+endings that do not wait on you, and missed 26 of the 87 that do.
+
+Every note starts with
 `[Autopilot]` and asks the agent to end with a `DECISION NEEDED` line if it
 is blocked, which Decisions picks up when it runs. In the chat, DSH shows
 each note the way it shows any message a plugin sends: a collapsed *Plugin
@@ -66,7 +94,8 @@ note, or read it on Autopilot's page under *What it sent*.
   next (*next: gives up at 6:24 PM* when the tries are spent) or why it
   leaves the session to you (*Waits for you: its last reply asks you
   something.*, *Waits for your answer: Autopilot asked whether to tell it to
-  carry on.*), its last action as it ended (*DSH refused to start its
+  carry on.*, *Its last turn failed with nothing left open (no todos, no
+  goal), so Autopilot leaves it to you.*), its last action as it ended (*DSH refused to start its
   goal*, *its note was not delivered*) with the time it ended, and its own
   rule. *Open work* lists the ones it could act on; *All* lists every
   recent session.
@@ -81,11 +110,14 @@ note, or read it on Autopilot's page under *What it sent*.
   switched off in Plugins, is marked *withdrawn* with that reason (after a
   crash or a forced quit, as Autopilot next starts, before it looks at any
   session); if it still applies, it is asked again under the same entry,
-  with the time it was first asked, and with no second notification. At
+  with the time and the *Why* it was first asked, and with no second
+  notification. At
   that start it also checks what a crash left open against each session's
   log: a note the session read is *delivered*; one still in the session's
-  queue, which DSH keeps in that log, is *not proven* and never sent again
-  (the session may still read it); one that never reached the session is
+  queue, which DSH keeps in that log, is *not proven* and never sent again;
+  Autopilot reads that session's log again as it moves (for up to a week),
+  and once the session reads the note, the entry turns *delivered*, with
+  the turn that read it. One that never reached the session is
   *not delivered* (and sent again if it still applies). A goal start whose
   round began is *started*, one whose round never began is *not started*.
   Times such as *4 min ago* keep up while the page is open.
@@ -124,7 +156,7 @@ setting to fix.
 | `idleWindowHours` (At start, look back) | `2` | 1 to 168 hours | Plugins | At start, idle sessions whose last turn ended within this many hours are looked at. |
 | `errorRetrySeconds` (Waits before each try after an error) | `120, 600, 1800` | 1 to 10 waits, each 0 to 86400 seconds | Plugins | The wait before each try after a failed turn; one try (a carry-on note) per wait. When the last try fails it gives up at once. |
 | `defaultRule` | `auto` | `auto`, `ask` or `off` | Profile | The rule for sessions without their own until you pick one on its page, which then wins. |
-| `startDelaySeconds` | `20` | 0 to 600 seconds | Profile | How long after DSH starts it first looks. |
+| `startDelaySeconds` | `20` | 0 to 600 seconds | Profile | How long after it starts it first looks: after DSH starts, after a wrong setting is fixed, or after it is switched back on; a row waiting for that look says which. |
 | `enabled` | `true` | `true` or `false` | Profile | `false` keeps Autopilot loaded but idle: it watches nothing, and its page says so and how to change it. |
 
 *Profile* settings go in the `autopilot` row of the profile's
