@@ -1413,6 +1413,9 @@ test('drafts: Discard moves a draft, as written, to the vault\'s .trash under a 
     const vault = await readVault(dir);
     assert.ok(!vault.drafts().some((d) => d.path.startsWith('.trash/')));
     assert.ok(!vault.search('gateway idle connections keepalive timeouts').results.some((r) => r.path.startsWith('.trash/')));
+    // The active notes on a draft's subject: one that covers what it says; none for a project's name alone.
+    assert.deepEqual(vault.related({ title: 'Port notes', body: 'Ports the harbor gateway uses: 8443 and 8080. To be checked.' }), [{ path: 'Projects/harbor-gateway/Gateway ports.md', title: 'Gateway ports' }]);
+    assert.deepEqual(vault.related({ title: 'Gateway timeouts', body: 'The harbor gateway drops idle connections after 60 seconds; clients that poll must send a keepalive.', folder: '/work/Projects/harbor-gateway' }), []);
     const other = vaultCopy();
     const outside = tempDir('canon-trash-outside');
     rmSync(join(other, '.trash'), { recursive: true, force: true });

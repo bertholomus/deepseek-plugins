@@ -115,6 +115,8 @@ const inFolder = (rel, folder) => Boolean(folder) && (rel.toLowerCase() === fold
 /** How much of a draft's words the page shows: in its row, and when a person opens the whole draft. */
 const PREVIEW_CHARS = 240;
 export const DRAFT_BODY_CHARS = 8000;
+/** A note shares a draft's subject when it covers this much of what the draft says (search.js's share). */
+const RELATED_SHARE = 1 / 3;
 
 /**
  * Markdown as the plain words a person reads in a preview: no title line,
@@ -433,7 +435,12 @@ export class Vault {
         const words = `${draft?.title ?? ''}\n\n${plainText(draft?.body ?? '').slice(0, 1500)}`.trim();
         if (!words) return [];
         try {
-            return this.search(words, { folder: draft.folder ?? '', limit }).results.slice(0, limit).map((r) => ({ path: r.path, title: r.title }));
+            // Named only when it shares the subject, not just a project's name: two words of its own and a third of
+            // what the draft says.
+            const names = this.index.projectWords();
+            return this.search(words, { folder: draft.folder ?? '', limit: 10 }).results
+                .filter((r) => r.share >= RELATED_SHARE && new Set(r.matched.filter((t) => !names.has(t))).size >= 2)
+                .slice(0, limit).map((r) => ({ path: r.path, title: r.title }));
         } catch {
             return [];
         }
