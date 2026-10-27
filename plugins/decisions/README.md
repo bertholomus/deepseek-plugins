@@ -391,5 +391,7 @@ button puts the cursor in Session Watch's field, flagged there; one
 profile (while it is off, the open page asks no endpoint that is not
 there), checks `enabled: false` (its log and its page say it was switched off),
 sets it back to true in the profile while DSH runs (DSH applies the file,
-and the log says it was switched on again), and checks the file modes. It reads the running DSH's fingerprint before and after and
-fails if it moved; pictures go to `.e2e/shots/decisions/<version>/`.
+and the log says it was switched on again), and checks the file modes.
+It reads the running DSH's fingerprint before and after and fails if it
+moved; pictures go to `.e2e/shots/decisions/<version>/` (or to the folder
+in `SHOTS`).
