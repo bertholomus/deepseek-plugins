@@ -36,7 +36,7 @@
  * - Questions for a person: raised, answered once (the asker's handler gets
  *   the answer), refused a second time in words, and an answer's outcome told.
  * - An outside agent's state shows on its session's row, and goes.
- * - Its folder is 700 and running.json 600.
+ * - Its folder is 700, running.json and its journal (deliveries.jsonl) 600.
  * - A number in quotes in the profile (#32): Session Watch starts, works
  *   with its default, and `status` names the setting and the value. In the
  *   window, its page in Plugins flags the value as the form opens, says the
@@ -451,10 +451,14 @@ try {
         const cleared = await windowRow(ids.todos);
         check('cleared, the row reads as before', !cleared?.external && cleared?.word === 'idle', JSON.stringify({ word: cleared?.word, external: cleared?.external }));
     });
-    await step('private folder and file', async () => {
+    await step('private folder and files', async () => {
         const dir = join(run.home, 'session-watch');
         const file = join(dir, 'running.json');
-        check('the watcher\'s folder is 700 and running.json 600', modeOf(dir) === 0o700 && modeOf(file) === 0o600, `${modeOf(dir).toString(8)} ${modeOf(file).toString(8)}`);
+        const journal = join(dir, 'deliveries.jsonl');
+        check('the watcher\'s folder is 700, and running.json and its journal deliveries.jsonl are 600', modeOf(dir) === 0o700 && modeOf(file) === 0o600 && modeOf(journal) === 0o600, `${modeOf(dir).toString(8)} ${modeOf(file).toString(8)} ${modeOf(journal).toString(8)}`);
+        const lines = readFileSync(journal, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        const quitNote = lines.find((l) => l.add?.delivery === noteQ.id)?.add;
+        check('the journal holds each message put in, with its session, sender and first words', quitNote?.sessionId === ids.quit && quitNote.from === 'probe' && quitNote.preview === 'Probe note Q: sent while the migration ran.', JSON.stringify(quitNote));
     });
 
     // ── A number in quotes (#32) ───────────────────────────────────────
