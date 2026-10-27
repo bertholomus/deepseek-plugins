@@ -2043,15 +2043,43 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             : ({ children }) => children;
         /** The words DSH's Markdown puts on a code block's controls. */
         const MARKDOWN_LABELS = Object.freeze({ code: { copyLabel: 'Copy', copiedLabel: 'Copied', toolbarLabels: { codeLabel: 'Code', wrapLabel: 'Wrap lines', unwrapLabel: 'Don\'t wrap lines' } }, footnotes: 'Footnotes' });
+        /** A code block's fence: three or more backticks or tildes at a line's start. */
+        const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+        /** The fence of the code block a text ends inside ('' when it ends outside one). */
+        function openFence(text) {
+            let open = '';
+            for (const line of text.split('\n')) {
+                const m = FENCE.exec(line);
+                if (!m) continue;
+                if (!open) open = m[1];
+                else if (m[1][0] === open[0] && m[1].length >= open.length && line.slice(m[0].length).trim() === '') open = '';
+            }
+            return open;
+        }
+        /**
+         * A reply the index keeps in two parts (its first 3,000 characters, a line "…", its last 9,000) as Markdown that
+         * draws the way the chat drew it: a code block the first part ends inside is closed there, and one the last
+         * part starts inside is opened again, so code and words do not trade places past the cut.
+         */
+        function wholeBlocks(text) {
+            const at = text.indexOf('\n…\n');
+            if (at < 0) return text;
+            const head = text.slice(0, at);
+            const tail = text.slice(at + 3);
+            const closing = openFence(head);
+            // A last part that seems to end inside a block began inside one: its first fence closed that block.
+            const first = openFence(tail) ? FENCE.exec(tail.split('\n').find((l) => FENCE.test(l)) ?? '')?.[1] ?? '' : '';
+            return `${head}${closing ? `\n${closing}` : ''}\n\n…\n\n${first ? `${first}\n` : ''}${tail}`;
+        }
         /**
          * A reply or a note's section as DSH's chat draws it: DSH's own Markdown (bold, code, lists, links, headings),
          * so it reads as it did in the chat. A DSH without that part, or text it cannot draw, shows the words plain.
          */
-        function Prose({ text, empty }) {
+        function Prose({ text, empty, cut = false }) {
             const plainText = h('div', { className: `${P}-read-text` }, text || empty);
             if (!text || !ui.MarkdownText) return plainText;
             return h(Guard, { fallback: plainText },
-                h('div', { className: `${P}-read-md`, 'data-recall-markdown': '' }, h(ui.MarkdownText, { text, labels: MARKDOWN_LABELS })));
+                h('div', { className: `${P}-read-md`, 'data-recall-markdown': '' }, h(ui.MarkdownText, { text: cut ? wholeBlocks(text) : text, labels: MARKDOWN_LABELS })));
         }
 
         /** One turn or note section in full, with the turns beside it, and the way into its session. */
@@ -2112,7 +2140,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     h('h4', { key: 'al', className: `${P}-read-label` }, 'Asked'),
                     h('div', { key: 'at', className: `${P}-read-text` }, tilded(t.prompt, home) || 'No words were kept for this request.'),
                     h('h4', { key: 'rl', className: `${P}-read-label` }, 'Reply'),
-                    h(Prose, { key: 'rt', text: tilded(t.reply, home), empty: stateOf(t) === 'running' ? 'No reply yet.' : 'This turn has no reply text.' }),
+                    h(Prose, { key: 'rt', text: tilded(t.reply, home), cut: true, empty: stateOf(t) === 'running' ? 'No reply yet.' : 'This turn has no reply text.' }),
                     t.tools ? h('h4', { key: 'tl', className: `${P}-read-label` }, 'Commands and files it used') : null,
                     t.tools ? h('div', { key: 'tt', className: `${P}-read-text ${P}-code` }, tilded(t.tools, home)) : null,
                 ],
@@ -2716,7 +2744,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         // For the plugin's own tests.
         module.exports.internals = {
             kit, TEXT, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, KIND_WORD, TONE, finder, jump, views,
-            folderList, folderSpec, specOf, homeless, cutPath, folderLabel, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle, Prose, Guard, cardQuery, rangeLabel,
+            folderList, folderSpec, specOf, homeless, cutPath, folderLabel, titleOf, metaParts, snippetParts, askedLine, countLine, endLine, stateSentence, indexLine, rootWords, callArgs, failureText, runningTitle, doneTitle, Prose, Guard, wholeBlocks, cardQuery, rangeLabel,
             openAt, openResult, endJump, land, landWithoutMark, applySettings,
             RecallPage, RecallMark, RecallDock, RecallIcon, RecallToolView, SettledToolView, PreparingToolView, SearchCard, ResultRow, ReadingView, IndexCard, HistoryCard, HeaderCard, ThreadState, Filters, FilterMenu, NoResults,
         };

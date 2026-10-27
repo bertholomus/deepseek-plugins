@@ -753,6 +753,35 @@ test('reading view: a reply and a note\'s section in DSH\'s Markdown; plain word
     }
 });
 
+test('reading view: a reply kept in two parts keeps its code blocks whole across the cut, in Markdown only', async (t) => {
+    const { client: bare } = loadClient(CLIENT);
+    const { wholeBlocks } = bare.internals;
+    // The first part ends inside a code block, and the last part starts inside the same one.
+    const head = `Here is the fix:\n\n\`\`\`js\nconst a = 1;\n${'// a line\n'.repeat(3)}const b`;
+    const tail = '= 2;\n}\n```\n\nThen run **the tests**.\n\n~~~sh\nnpm test\n~~~\n';
+    assert.equal(wholeBlocks(`${head}\n…\n${tail}`), `${head}\n\`\`\`\n\n…\n\n\`\`\`\n${tail}`, 'closed before the cut, opened again after it');
+    assert.equal(wholeBlocks('~~~~\ncode\n…\nmore words'), '~~~~\ncode\n~~~~\n\n…\n\nmore words', 'a tilde block is closed with its own fence');
+    assert.equal(wholeBlocks('All **done**.\n…\nThe end.'), 'All **done**.\n\n…\n\nThe end.', 'nothing open: the cut on a line of its own');
+    assert.equal(wholeBlocks('No cut.\n```\ncode\n```'), 'No cut.\n```\ncode\n```', 'a reply kept whole is drawn as it is');
+    for (const markdown of [true, false]) {
+        const { react, mount } = statefulReact();
+        const { client } = loadClient(CLIENT, { react, ui: markdown ? {} : { MarkdownText: undefined } });
+        const { kit, ReadingView, endJump } = client.internals;
+        const reply = `${head}\n…\n${tail}`;
+        connect(kit, { turn: () => ({ ...OWN, prompt: 'fix it', reply, tools: '', prev: 3, next: 5, count: 9 }) });
+        t.after(() => { kit.setConnection(undefined); endJump(); });
+        const view = mount(ReadingView, { id: '3.4', home: HOME, onBack: () => {} });
+        t.after(() => view.unmount());
+        await settle(5);
+        const md = elementsOf(view.tree).filter((e) => e.type === 'MarkdownText');
+        if (markdown) assert.equal(md[0].props.text, wholeBlocks(reply));
+        else {
+            assert.equal(md.length, 0);
+            assert.ok(textIn(view.tree).includes(reply), 'plain text shows the reply as kept, with no fences added');
+        }
+    }
+});
+
 test('reading view: Back puts the focus on the button that opened it, even after Turn before or after; else on its row, else the search box', async () => {
     const focused = [];
     const present = new Set(['[data-recall-other="9.3"]', '[data-recall-open="9.2"]']);
