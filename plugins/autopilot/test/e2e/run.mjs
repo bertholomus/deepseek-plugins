@@ -281,6 +281,11 @@ try {
     ids.off = await run.newSession(`E2E:todos ${todos(['Update the changelog', 'in_progress'])}\n#note=progress`, 'Changelog');
     ids.question = await run.newSession(`E2E:todos ${todos(['Deploy the fix', 'pending'])}\n#final=ask`, 'Deploy question');
     ids.fix = await run.newSession('E2E:goal Fix the failing build [r1=fail]', 'Build fix');
+    // Two sessions whose last reply is an offer (Off until it is written, so nothing acts on the reply before it).
+    ids.offerGo = await run.newSession(`E2E:todos ${todos(['Write the parser', 'in_progress'], ['Add tests', 'pending'])}\n#note=progress`, 'Offer, goes on');
+    await api('setRule', { sessionId: ids.offerGo, rule: 'off' });
+    ids.handOver = await run.newSession(`E2E:todos ${todos(['Write step 2', 'pending'], ['Write step 3', 'pending'])}`, 'Offer, hands over');
+    await api('setRule', { sessionId: ids.handOver, rule: 'off' });
     await api('setRule', { sessionId: ids.ask, rule: 'ask' });
     await api('setRule', { sessionId: ids.off, rule: 'off' });
 
@@ -323,10 +328,32 @@ try {
         const held = (await state()).sessions.find((x) => x.sessionId === ids.question);
         check('its row says why Autopilot leaves it to the person', held?.hold === 'waits for you: its last reply asks you something', JSON.stringify(held));
     });
+    await step('an offer holds the nudge only when it hands the next step to you; one that says the agent goes on gets its note', async () => {
+        const say = async (sessionId, text) => {
+            const s0 = await idleSession(sessionId);
+            await run.bridge('POST', `/sessions/${encodeURIComponent(sessionId)}/prompt`, { text: `E2E:say ${text}` });
+            await waitFor(async () => {
+                const s = await run.session(sessionId);
+                return s.status !== 'running' && s.turns.ended > s0.turns.ended ? s : null;
+            }, `${sessionId} to reply`, 30000);
+        };
+        await say(ids.offerGo, 'All tests pass. Happy to keep going with the next todo.');
+        await say(ids.handOver, 'Step 1 is done. Let me know if you want me to continue with steps 2 and 3.');
+        await api('setRule', { sessionId: ids.offerGo, rule: 'auto' });
+        await api('setRule', { sessionId: ids.handOver, rule: 'auto' });
+        const note = await entryReaches(ids.offerGo, 'nudge', 'delivered', 1, 40000);
+        check('a reply that offers more but goes on ("Happy to keep going with the next todo.") gets its note, read into a turn',
+            note.state === 'delivered' && /and its last reply asked you nothing\.$/.test(note.why ?? ''), JSON.stringify(note));
+        await sleep((IDLE + 3) * 1000);
+        check('a reply that hands the next step to you ("Let me know if you want me to continue …") gets none', (await count(ids.handOver, 'nudge')) === 0, `${await count(ids.handOver, 'nudge')} notes`);
+        const row = (await state()).sessions.find((x) => x.sessionId === ids.handOver);
+        check('its row quotes the words that hold it',
+            row?.hold === 'waits for you: its last reply leaves the next step to you (“Let me know if you want me to continue with steps 2 and 3.”)', JSON.stringify(row));
+    });
     await step('a goal stopped by a failed turn gets a carry-on note first (no goal round spent); once that turn ends cleanly, the goal starts again and its next round runs', async () => {
         const note = await entryReaches(ids.fix, 'error', 'delivered', 1, 40000);
         check('after the failed turn a carry-on note goes first, and its Why line names the error in plain words and says which round the goal starts with',
-            /^Turn 2 failed \(400: E2E: the scripted model refused this request\.\), which stops a goal; the goal “Fix the failing build \[r1=fail\]” is still active\. A note costs no goal round, so it goes first; the goal starts again \(round 2 of 6\) once a turn ends without an error\.$/.test(note.why ?? ''), note.why);
+            /^Turn 2 failed \(400: E2E: the scripted model refused this request\), which stops a goal; the goal “Fix the failing build \[r1=fail\]” is still active\. A note costs no goal round, so it goes first; the goal starts again \(round 2 of 6\) once a turn ends without an error\.$/.test(note.why ?? ''), note.why);
         check('the note is read into a turn', await readIntoTurn(ids.fix, '[Autopilot] Your last turn (turn 2) failed'));
         const rearm = await entryReaches(ids.fix, 'rearm', 'started', 1, 40000);
         check('once the note\'s turn ended without an error, the goal starts again, proven by a round of the revision it wrote', rearm.reason === 'round 2 of 6 began' && rearm.goal?.round === 2 && rearm.at > note.at, JSON.stringify(rearm));
@@ -423,7 +450,7 @@ try {
                     await page.locator('[data-autopilot-waiting]').evaluate((el) => el.classList.remove('dshap-main'));
                     const plain = await contrastsOf(page.locator(small('waiting')), { ground });
                     await page.locator('[data-autopilot-waiting]').evaluate((el) => el.classList.add('dshap-main'));
-                    lowTint[mode] = { ground, waiting: lowest(waiting), sessions: lowest(sessions), plain: lowest(plain), tags: lowest(tagsHere), count: waiting.length };
+                    lowTint[mode] = { ground, waiting: lowest(waiting), sessions: lowest(sessions), plain: lowest(plain), tags: lowest(tagsHere), tagCount: tagsHere.length, count: waiting.length };
                 }
             } finally {
                 await page.evaluate(() => document.documentElement.style.removeProperty('--wp-tint'));
@@ -433,6 +460,8 @@ try {
             check('at Wallpaper\'s tint .2 over a mid picture, the small text on the Waiting and Sessions cards (amber "waits for you" lines too) reads at 4.5:1 or more, light and dark',
                 ['light', 'dark'].every((mode) => lowTint[mode].count > 0 && lowTint[mode].waiting >= 4.5 && lowTint[mode].sessions >= 4.5), JSON.stringify(lowTint));
             check('on the plain tint the same text would read under 4.5:1 there, so the check can fail', ['light', 'dark'].every((mode) => lowTint[mode].plain < 4.5), JSON.stringify(lowTint));
+            check('at that tint the Waiting card\'s tags (backed off, gave up) read at 4.5:1 or more too, on their solid chips, light and dark',
+                ['light', 'dark'].every((mode) => lowTint[mode].tagCount > 0 && lowTint[mode].tags >= 4.5), JSON.stringify(lowTint));
             await page.locator('[data-autopilot-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             // A narrow window: the page reflows, nothing spills sideways.
             await page.setViewportSize({ width: 760, height: 900 });
@@ -614,8 +643,11 @@ try {
     const openAsk = await entryReaches(ids.askQuit, 'ask', 'asked you', 1, 40000);
     const openAskAt = (await state()).asks.find((a) => a.sessionId === ids.askQuit)?.at;
     ids.cut = await run.newSession('E2E:slow', 'Long migration');
+    // No todos and no goal; DSH comes back before its gateway, so every note it gets fails.
+    ids.blip = await run.newSession('E2E:slow\n#note=fail', 'Power blip');
     ids.cutGoal = await run.newSession('E2E:goal Write the summary [r1=slow]', 'Summary goal');
     await waitFor(async () => (await run.session(ids.cut)).status === 'running', 'the long turn to run', 30000);
+    await waitFor(async () => (await run.session(ids.blip)).status === 'running', 'the power blip\'s turn to run', 30000);
     // The round has begun once its message is in the log (DSH opens the turn first, then writes the round's message).
     await waitFor(async () => {
         const s = await run.session(ids.cutGoal);
@@ -626,7 +658,7 @@ try {
     const reportNotes = await count(ids.report, 'nudge');
     const quitAt = Date.now();
     await run.stop();
-    check('DSH quits (SIGTERM) under four running turns', !run.alive(), `quit took ${Date.now() - quitAt} ms`);
+    check('DSH quits (SIGTERM) under five running turns', !run.alive(), `quit took ${Date.now() - quitAt} ms`);
     prompts.close();
     await run.boot('after a quit');
     await waitFor(async () => (await api('state')).ok, 'Autopilot\'s endpoints after the quit', 30000);
@@ -641,6 +673,18 @@ try {
         const rearm = await entryReaches(ids.cutGoal, 'rearm', 'started', 1, 40000);
         check('once the note\'s turn has ended, its goal starts again, proven by a round of the revision it wrote', rearm.reason === 'round 2 of 6 began' && rearm.at > goalNote.at, JSON.stringify(rearm));
         check('its Why line says which round the start begins', rearm.why === 'Its goal was active when DSH stopped, and the turn after its carry-on note has ended, so its goal goes on: this start begins round 2 of 6.', rearm.why);
+    });
+    await step('after a quit, an outage too (DSH back before its gateway): a carry-on turn with no todos and no goal that fails is tried again note-first, then given up, with Try again', async () => {
+        const resume = await entryReaches(ids.blip, 'resume', 'delivered', 1, 40000);
+        const giveup = await entryReaches(ids.blip, 'giveup', 'gave up', 1, 60000);
+        const notes = await entriesOf(ids.blip, 'error');
+        check('its carry-on note is read, its turn fails, and two tries follow, each a note saying it was carrying on after DSH stopped',
+            resume.state === 'delivered' && notes.length === 2 && notes.every((e) => /You were carrying on after DSH stopped under turn 1: check what already finished/.test(e.note ?? ''))
+                && /^Turn 2 failed \(400: E2E: the scripted model refused this request\) while it carried on after DSH stopped under turn 1, so the work that stop cut off is still open\.$/.test(notes.at(-1)?.why ?? notes[0]?.why ?? ''),
+            JSON.stringify({ resume: resume.state, notes: notes.map((e) => [e.state, e.why]) }));
+        check('then Autopilot gives up as the last try fails, and says why', giveup.why === 'It failed again after 2 tries, so Autopilot stops retrying and leaves it to you.', JSON.stringify(giveup));
+        const row = (await state()).sessions.find((x) => x.sessionId === ids.blip);
+        check('its row says gave up, which puts it in the Waiting card with Try again', row?.word === 'gave up' && Boolean(row.gaveUp) && row.next === undefined, JSON.stringify(row));
     });
     await step('after a quit: the notes for a tool that waited for approval and a question that waited say what did not happen', async () => {
         const approval = await entryReaches(ids.cutApproval, 'resume', 'delivered', 1, 40000);
@@ -671,7 +715,7 @@ try {
         await sleep((IDLE * 2 + 2) * 1000);
         const s = await state();
         const fresh = s.log.slice(0, s.log.length - before);
-        const repeats = fresh.filter((e) => ![ids.cut, ids.cutGoal, ids.cutApproval, ids.cutQuestion].includes(e.sessionId) && e.kind !== 'skip');
+        const repeats = fresh.filter((e) => ![ids.cut, ids.cutGoal, ids.cutApproval, ids.cutQuestion, ids.blip].includes(e.sessionId) && e.kind !== 'skip');
         check('nothing handled before the quit is done again', repeats.length === 0 && (await count(ids.report, 'nudge')) === reportNotes, JSON.stringify(repeats.map((e) => [e.kind, e.title, e.state])));
         check('the rules survive the quit', (await state()).sessions.find((x) => x.sessionId === ids.ask)?.rule === 'ask');
     });
