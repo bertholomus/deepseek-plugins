@@ -1415,6 +1415,15 @@ try {
         check('B1: the user\'s folder moved into one the thread made still asks before it goes, and a Reject keeps it',
             existsSync(join(ws, 'old', 'legacy', 'notes.txt')) && deleteAsks(tidyId) === 1
             && tidyAsk.request.displayReason?.en === 'This command deletes old (rm). A thread asks you before each command that deletes files it didn\'t create.', JSON.stringify(tidyAsk.request));
+        // Round-1 finding 6: a move out of its folder asks as a delete does and says where it goes; a Reject keeps the file.
+        mark = model.requests.length;
+        await say(coord, call('thread_send', { thread: tidyId, text: call('bash', { command: `cd ${ws} && mv old/legacy/notes.txt /tmp/`, description: 'Move the notes away' }) }));
+        const moveAsk = await prompts.next('the Tidy move prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command moves old/legacy/notes.txt to /tmp/ (mv)'));
+        await prompts.answer(moveAsk, 'rejected');
+        await coordinatorSaw(mark, 'SAW-IDLE', 'the Tidy move idle note');
+        check('a thread\'s move out of its folder asks, saying what goes where, and a Reject keeps the file',
+            existsSync(join(ws, 'old', 'legacy', 'notes.txt'))
+            && moveAsk.request.displayReason?.en === 'This command moves old/legacy/notes.txt to /tmp/ (mv). A thread asks you before each command that deletes files it didn\'t create or moves them out of its folder.', JSON.stringify(moveAsk.request));
         mkdirSync(join(ws, 'packages', 'web', 'src'), { recursive: true });
         writeFileSync(join(ws, 'packages', 'web', 'src', 'main.js'), 'console.log(1);\n');
         const webId = readId;
@@ -1424,11 +1433,13 @@ try {
             await coordinatorSaw(mark, 'SAW-IDLE', 'the working directory idle note');
             mark = model.requests.length;
             await say(coord, call('thread_send', { thread: webId, text: call('bash', { command: 'rm -rf src', description: 'Remove the old sources' }) }));
-            const webAsk = await prompts.next('the Web delete prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command deletes src (rm)'));
+            // Said from the thread's folder (round-1 finding 4), so which src goes is plain.
+            const webAsk = await prompts.next('the Web delete prompt', (r) => r.toolName === 'bash' && r.reason?.startsWith('the command deletes packages/web/src (rm)'));
             await prompts.answer(webAsk, 'rejected');
             await coordinatorSaw(mark, 'SAW-IDLE', 'the Web delete idle note');
-            check('M2: after working_directory, a relative delete is judged where it runs: it asks, and a Reject keeps it',
-                existsSync(join(ws, 'packages', 'web', 'src', 'main.js')) && deleteAsks(webId) === 1, `${deleteAsks(webId)}`);
+            check('M2: after working_directory, a relative delete is judged where it runs: it asks, says the path from the thread\'s folder, and a Reject keeps it',
+                existsSync(join(ws, 'packages', 'web', 'src', 'main.js')) && deleteAsks(webId) === 1
+                && webAsk.request.displayReason?.en?.startsWith('This command deletes packages/web/src (rm). '), `${deleteAsks(webId)} ${JSON.stringify(webAsk.request)}`);
         } else {
             console.log('  (this DSH has no working_directory tool: the M2 check is for DSH 0.2.1)');
         }

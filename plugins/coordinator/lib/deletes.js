@@ -841,14 +841,18 @@ export function deletesWhat(items, { folders = [] } = {}) {
 function pathWords(d, folders) {
     // `within`: some of what is in a place, said in words of its own ("untracked files", "what it finds in .").
     if (typeof d.full === 'string' && !d.within) {
+        // By the paths as given and by their real ones (macOS's /var is /private/var).
+        const fulls = [...new Set([d.full, realOf(d.full)])];
         for (const folder of folders) {
             if (typeof folder !== 'string' || folder === '') continue;
-            const base = resolve(folder);
-            if (d.full === base) return `the whole folder ${basename(base)}`;
-            if (!inside(d.full, base)) continue;
-            const rel = relative(base, d.full);
-            // As the command names it when that is already the same ("build/"), else from the folder.
-            return middleCut(d.path.replace(/^(?:\.\/)+/, '').replace(/\/+$/, '') === rel ? d.path : rel);
+            for (const base of new Set([resolve(folder), realOf(resolve(folder))])) {
+                const full = fulls.find((f) => f === base || inside(f, base));
+                if (full === undefined) continue;
+                if (full === base) return `the whole folder ${basename(base)}`;
+                const rel = relative(base, full);
+                // As the command names it when that is already the same ("build/"), else from the folder.
+                return middleCut(d.path.replace(/^(?:\.\/)+/, '').replace(/\/+$/, '') === rel ? d.path : rel);
+            }
         }
     }
     return middleCut(d.path);

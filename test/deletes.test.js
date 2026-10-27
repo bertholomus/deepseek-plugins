@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lstatSync, mkdtempSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, mkdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deletesOf, codeDeletesOf, deletesWhat, isFree, madeDirsOf, identityOf, middleCut } from '../plugins/coordinator/lib/deletes.js';
@@ -132,6 +132,14 @@ test('deletes: a prompt names the file: from the thread\'s folder when it is in 
     assert.equal(middleCut(`${ws}/README.md`), '/Users/someone/Projects/…/judge/coordinator-r1/ws/README.md');
     assert.equal(middleCut('x'.repeat(100)).length, 60);
     assert.ok(middleCut('x'.repeat(100)).includes('…'));
+});
+
+test('deletes: a path is said from the folder whether it or the folder is named by its real path (macOS\'s /var is /private/var)', () => {
+    const work = mkdtempSync(join(tmpdir(), 'deletes-real-'));
+    writeFileSync(join(work, 'a.txt'), 'x');
+    const real = realpathSync(work);
+    assert.equal(deletesWhat(deletesOf(`rm ${join(real, 'a.txt')}`, { cwd: work }), { folders: [work] }), 'deletes a.txt (rm)');
+    assert.equal(deletesWhat(deletesOf(`rm ${join(work, 'a.txt')}`, { cwd: work }), { folders: [real] }), 'deletes a.txt (rm)');
 });
 
 test('deletes: a move out of the thread\'s folders asks as a delete of what moves; a move inside them is a rename (round-1 finding 6)', () => {
