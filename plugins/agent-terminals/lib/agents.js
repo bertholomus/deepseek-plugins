@@ -111,6 +111,28 @@ export function parseData(value) {
 
 export const terminalIdOf = (key, launches) => `agent-${key}-${launches}`;
 
+/** A path as people read it: under the home folder as ~/…, else as it is. */
+export function homeForm(path, home) {
+    const text = String(path ?? '');
+    const base = typeof home === 'string' ? home.replace(/\/+$/, '') : '';
+    if (!base || !isAbsolute(base)) return text;
+    return text === base ? '~' : text.startsWith(`${base}/`) ? `~/${text.slice(base.length + 1)}` : text;
+}
+
+/** A program as people read it: its name when it was given as one, else its path as ~/…. */
+export const programForm = (program, home) => (String(program ?? '').includes('/') ? homeForm(program, home) : String(program ?? ''));
+
+/**
+ * The one message a new agent's session gets so that DSH lists it in its
+ * sidebar: its model is given the one line to answer, and told that
+ * nothing waits on it or on anyone, so its reply asks nobody anything (a
+ * reply that asks would make a card in Decisions for nothing).
+ */
+export function listingNote(record, home) {
+    const where = homeForm(record.folder, home) || 'this session\'s folder';
+    return `A coding agent runs in this session's terminal tab: ${programName(record.program)} in ${where}, started by Agent Terminals. This message only lets DSH list the session in its sidebar: there is no task for you, and nobody waits on an answer from you. Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.`;
+}
+
 /**
  * Check what the start form sent, in words.
  * @returns {{ program: string, args: string[], style: string, data?: string, folder?: string, sessionId?: string, name: string, task?: string }}
@@ -140,7 +162,7 @@ export function checkLaunch(input, { home } = {}) {
         try {
             isFolder = statSync(folder).isDirectory();
         } catch {}
-        if (!isFolder) throw new Error(`There is no folder at ${folder}: create it first, or choose another.`);
+        if (!isFolder) throw new Error(`There is no folder at ${homeForm(folder, home)}: create it first, or choose another.`);
     }
     const name = String(input.name ?? '').trim().slice(0, 80) || `${programName(program)}${folder ? ` · ${basename(folder)}` : ''}`;
     const task = typeof input.task === 'string' && plainMessage(input.task).trim() ? plainMessage(input.task).trim() : undefined;
@@ -313,7 +335,7 @@ export class AgentTerminals {
                 continue;
             }
             if (info) {
-                this.ended(record, info.state === 'failed' ? 'failed' : 'exited', info.state === 'failed' ? `Its terminal failed${info.error ? `: ${info.error}` : ''}.` : exitWords(record, info.exitCode, this.againWords(record), this.lastWords(record)), info.exitCode);
+                this.ended(record, info.state === 'failed' ? 'failed' : 'exited', info.state === 'failed' ? `Its terminal failed${info.error ? `: ${info.error}` : ''}.` : exitWords(record, info.exitCode, this.againWords(record), this.lastWords(record), this.home), info.exitCode);
                 continue;
             }
             // DSH restarted: its terminals ended with it, and so did what was typed in but not yet read.
@@ -391,7 +413,7 @@ export class AgentTerminals {
         if (record.wanted === 'running' && live.launchAt && !live.launching && !live.exited) {
             const info = this.terminalInfo(record);
             if (!info) this.ended(record, 'closed', `Its terminal was closed (closing an agent's terminal tab ends the agent). ${this.againWords(record)}`);
-            else if (info.state === 'exited') this.ended(record, 'exited', exitWords(record, info.exitCode, this.exitAgain(record, live, info.exitCode), this.lastWords(record)), info.exitCode);
+            else if (info.state === 'exited') this.ended(record, 'exited', exitWords(record, info.exitCode, this.exitAgain(record, live, info.exitCode), this.lastWords(record), this.home), info.exitCode);
             else if (info.state === 'failed') this.ended(record, 'failed', `Its terminal failed${info.error ? `: ${info.error}` : ''}.`);
         }
         this.read(record);
@@ -422,7 +444,7 @@ export class AgentTerminals {
         // A path that is not a program is said before a session is made for it.
         if (spec.program.includes('/')) {
             const path = expandHome(spec.program, this.home);
-            if (!findProgram(path, this.home).found) throw new Error(`There is no program at ${path}: check the path, and that the file is executable.`);
+            if (!findProgram(path, this.home).found) throw new Error(`There is no program at ${homeForm(path, this.home)}: check the path, and that the file is executable.`);
         }
         let sessionId = spec.sessionId;
         let folder = spec.folder;
@@ -434,7 +456,7 @@ export class AgentTerminals {
             folder = row.cwd ?? folder ?? '';
         } else {
             sessionId = await this.sessions.create(folder).catch((error) => {
-                throw new Error(`DSH could not make a session in ${folder}: ${errorText(error)}`);
+                throw new Error(`DSH could not make a session in ${homeForm(folder, this.home)}: ${errorText(error)}`);
             });
         }
         const key = randomUUID().replace(/-/g, '').slice(0, 8);
@@ -458,7 +480,8 @@ export class AgentTerminals {
         };
         this.records[key] = record;
         this.store.change();
-        const why = `${by === 'you' ? 'You' : by} started ${record.program} in ${folder || 'its session\'s folder'}${spec.sessionId ? '' : ', in a new session'}.`;
+        // Paths as people read them (~/…): the card's command shows the whole of it on hover.
+        const why = `${by === 'you' ? 'You' : by} started ${programForm(record.program, this.home)} in ${homeForm(folder, this.home) || 'its session\'s folder'}${spec.sessionId ? '' : ', in a new session'}.`;
         const entry = this.log({ kind: 'start', agent: key, sessionId, text: `Starting ${record.name}`, why, state: 'starting', by, program: record.program, pid: this.pid });
         if (!spec.sessionId) {
             try {
@@ -484,7 +507,7 @@ export class AgentTerminals {
             try {
                 this.journal.set(entry.id, problem
                     ? { text: `Could not start ${record.name}`, state: 'failed', reason: problem }
-                    : { text: `Started ${record.name}`, state: 'done', ...(look.found ? {} : { why: `${why} DSH did not find ${record.program} where it looks for programs; the shell in its terminal did.` }) });
+                    : { text: `Started ${record.name}`, state: 'done', ...(look.found ? {} : { why: `${why} DSH did not find ${programForm(record.program, this.home)} where it looks for programs; the shell in its terminal did.` }) });
             } catch {}
         }
         // The session gets its first turn (so DSH lists it) only once the program runs: none for one that is not there.
@@ -789,7 +812,7 @@ export class AgentTerminals {
      * when that turn ends.
      */
     async firstTurn(record) {
-        const note = `A coding agent runs in this session's terminal: ${record.program} in ${record.folder || 'this session\'s folder'}, started by Agent Terminals. Reply with one short line to say you see it; there is nothing else to do.`;
+        const note = listingNote(record, this.home);
         const entry = this.log({ kind: 'session', agent: record.key, sessionId: record.sessionId, text: 'Giving its session a first turn', why: 'DSH lists a session in its sidebar once a turn ran in it. The session\'s model answers one line.', state: 'sending', by: 'Agent Terminals', pid: this.pid });
         if (entry) this.firstTurns.add(entry.id);
         const set = (patch) => {
@@ -812,14 +835,29 @@ export class AgentTerminals {
             if (delivery?.state === 'failed') throw new Error(delivery.reason ?? 'the session did not take it');
             const end = await ended;
             if (!end) set({ text: 'Gave its session a first turn', state: 'done', reason: off ? 'Its session took the message; its turn had not ended 5 minutes later.' : 'Its session took the message.' });
-            else if (end.kind === 'completed') set({ text: 'Gave its session a first turn', state: 'done' });
-            else set({ text: 'Its session\'s first turn did not finish', state: 'failed', reason: `${turnEnd(end)}. The session is listed in the sidebar all the same.` });
+            else if (end.kind === 'completed') {
+                // Its model was told to ask nothing; one that asked all the same may have a card in Decisions: said, so it is not taken for the agent's.
+                const asked = await this.askedInFirstTurn(record);
+                set({ text: 'Gave its session a first turn', state: 'done', ...(asked ? { reason: `Its model's reply asked something all the same (“${clip(asked, 120)}”): Decisions may list it, though nothing waits on you there. Dismiss it in Decisions.` } : {}) });
+            } else set({ text: 'Its session\'s first turn did not finish', state: 'failed', reason: `${turnEnd(end)}. The session is listed in the sidebar all the same.` });
         } catch (error) {
             set({ text: 'Could not give its session a first turn', state: 'failed', reason: `${errorText(error)}. The session is listed once you open it and send something.` });
         } finally {
             clearTimeout(timer);
             try { off?.(); } catch {}
             if (entry) this.firstTurns.delete(entry.id);
+        }
+    }
+
+    /** What the session's model asked in its reply to the listing note, if it asked anything (Session Watch reads the reply). */
+    async askedInFirstTurn(record) {
+        try {
+            const state = await this.watch.fullState?.(record.sessionId);
+            const ask = state?.ask;
+            if (!isRecord(ask) || typeof ask.question !== 'string' || ask.soft === true) return undefined;
+            return !isRecord(state.end) || ask.turn === state.end.turn ? ask.question : undefined;
+        } catch {
+            return undefined;
         }
     }
 
@@ -883,7 +921,8 @@ export class AgentTerminals {
         }
         this.waitDeliveries(record, 'The agent is stopped: Start again and this is typed in.');
         this.store.change();
-        this.log({ kind: 'stop', agent: key, sessionId: record.sessionId, text: `Stopped ${record.name}`, why: closed ? 'Its terminal was closed, which ends the program in it.' : 'Its terminal could not be closed; it may still run until DSH ends it.', state: closed ? 'done' : 'failed', by });
+        const who = by === 'you' ? 'You' : by;
+        this.log({ kind: 'stop', agent: key, sessionId: record.sessionId, text: `Stopped ${record.name}`, why: closed ? `${who} stopped it; its terminal closed, which ends the program in it.` : `${who} stopped it, but its terminal could not be closed: it may still run until DSH ends it.`, state: closed ? 'done' : 'failed', by });
         this.publish(record);
         this.changed();
         return { agent: this.view(record) };
@@ -1607,11 +1646,16 @@ export class AgentTerminals {
         });
     }
 
-    /** Programs used before, each with its conversations folder in full when it is not the default one (so two that differ there read apart). */
+    /**
+     * Programs used before, each with its conversations folder when it is
+     * not the default one (so two that differ there read apart), and both
+     * as people read them (`shown`: ~/… for a path under the home folder).
+     */
     get recent() {
         return this.distinct(this.store.data.recent).map((r) => {
             const folder = dataFolder(r, this.home);
-            return { ...r, ...(r.data && folder !== dataFolder({ program: r.program }, this.home) ? { folder } : {}) };
+            const other = r.data && folder !== dataFolder({ program: r.program }, this.home);
+            return { ...r, ...(other ? { folder } : {}), shown: { program: programForm(r.program, this.home), ...(other ? { folder: homeForm(folder, this.home) } : {}) } };
         });
     }
 }
@@ -1627,9 +1671,9 @@ export function turnEnd(end) {
 }
 
 /** Why an agent's program ended, in words, from its exit code. */
-export function exitWords(record, code, again = 'Start again resumes its conversation.', last = undefined) {
-    if (code === 127) return `It exited with code 127: the shell could not find ${record.program}. Use its full path (“which ${programName(record.program)}” in a terminal shows it), or check the name.`;
-    if (code === 126) return `It exited with code 126: ${record.program} is not a program the shell can run. Check the path and that it is executable.`;
+export function exitWords(record, code, again = 'Start again resumes its conversation.', last = undefined, home = undefined) {
+    if (code === 127) return `It exited with code 127: the shell could not find ${programForm(record.program, home)}. Use its full path (“which ${programName(record.program)}” in a terminal shows it), or check the name.`;
+    if (code === 126) return `It exited with code 126: ${programForm(record.program, home)} is not a program the shell can run. Check the path and that it is executable.`;
     if (code === 0) return `It exited by itself (code 0). ${again}`;
     if (code === 130 || code === 129 || code === 143) return `It was interrupted (code ${code}). ${again}`;
     // What it printed last says why (its screen is gone once its terminal closes).

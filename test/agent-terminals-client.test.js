@@ -472,7 +472,7 @@ test('the start form: programs found and used before, how it resumes, where it w
             { program: 'helper', style: 'flags', conversations: 12, latest: now - 3600000, path: '/usr/local/bin/helper' },
             { program: 'worker', style: 'subcommand', data: '~/.worker', conversations: 1, latest: 0 },
         ],
-        recent: [{ program: 'tool', args: ['--model', 'small one'], style: 'plain' }, { program: '/opt/helper', args: [], style: 'flags', data: '~/elsewhere', folder: '/Users/me/elsewhere' }],
+        recent: [{ program: 'tool', args: ['--model', 'small one'], style: 'plain' }, { program: '/Users/me/bin/helper', args: [], style: 'flags', data: '~/elsewhere', folder: '/Users/me/elsewhere', shown: { program: '~/bin/helper', folder: '~/elsewhere' } }],
     };
     const started = [];
     const form = mount(StartCard, { data, onStarted: (agent, problem) => started.push([agent?.key, problem]), formRef: { current: undefined } });
@@ -485,7 +485,12 @@ test('the start form: programs found and used before, how it resumes, where it w
     assert.match(text, /1 conversation · not found where DSH looks for programs/);
     assert.match(text, /Used here before/);
     assert.match(text, /tool --model small one/);
-    assert.match(text, /Starts with --session-id, resumes with --resume · conversations in \/Users\/me\/elsewhere/, 'a program used with another conversations folder says which');
+    assert.match(text, /Starts with --session-id, resumes with --resume · conversations in ~\/elsewhere/, 'a program used with another conversations folder says which, as people read it');
+    // Paths as people read them on the chip, the whole of each on hover.
+    const chip = find((e) => e.props?.['data-agent-terminals-recent'] === '1');
+    assert.equal(textIn(chip), '~/bin/helperStarts with --session-id, resumes with --resume · conversations in ~/elsewhere');
+    assert.equal(chip.props.title, '/Users/me/bin/helper\nconversations in /Users/me/elsewhere');
+    assert.equal(find((e) => e.props?.['data-agent-terminals-recent'] === '0').props.title, 'tool --model small one', 'a program by its name: the command on hover');
     // Nothing to start yet: the button waits and says what is missing.
     assert.equal(startButton().props.disabled, true);
     assert.match(textIn(form.tree), /Name the program first\./);
@@ -576,7 +581,7 @@ test('session rows: the mark says what the agent does (in DSH\'s dots, and in wo
     const { client } = loadClient(CLIENT);
     const { AgentMark, AgentHover, AgentMenuItem, AgentsIcon, marks } = client.internals;
     const mark = (over) => ({ key: 'k1', sessionId: 's1', name: 'helper · app', terminalId: 'agent-k1-1', running: true, status: 'working', controlTakenAt: 0, ...over });
-    marks.set({ off: false, openTabs: true, agents: [mark(), mark({ key: 'k2', sessionId: 's2', status: 'waiting on you', detail: 'It asks you: Ship it?' }), mark({ key: 'k3', sessionId: 's3', status: 'idle' }), mark({ key: 'k4', sessionId: 's4', status: 'stopped', running: false })] });
+    marks.set({ off: false, openTabs: true, agents: [mark(), mark({ key: 'k2', sessionId: 's2', status: 'waiting on you', detail: 'It asks you: Ship it?' }), mark({ key: 'k3', sessionId: 's3', status: 'idle' }), mark({ key: 'k4', sessionId: 's4', status: 'stopped', running: false }), mark({ key: 'k5', sessionId: 's5', status: 'running', detail: 'Running in its terminal. It keeps no transcript.' })] });
     const dotIn = (tree) => elementsOf(tree).find((e) => e.type === 'StateDot')?.props.state;
     assert.equal(AgentMark({ sessionId: 'nope' }), null, 'a session with no agent: no mark');
     assert.equal(dotIn(AgentMark({ sessionId: 's1' })), 'ongoing');
@@ -594,6 +599,16 @@ test('session rows: the mark says what the agent does (in DSH\'s dots, and in wo
     const hover = AgentHover({ sessionId: 's2' });
     assert.equal(textIn(hover), 'Coding agent in its terminal: waiting on youIt asks you: Ship it?');
     assert.equal(AgentHover({ sessionId: 'nope' }), null);
+    assert.equal(dotIn(AgentHover({ sessionId: 's3' })), 'idle');
+    // A program with no transcript is only "running": nobody knows whether it works, so no working spinner anywhere.
+    const running = AgentMark({ sessionId: 's5' });
+    assert.equal(dotIn(running), undefined, 'running: never the working spinner');
+    assert.ok(elementsOf(running).some((e) => e.type === 'svg'), 'running: the steady terminal glyph');
+    assert.equal(textIn(running), 'Coding agent: running.');
+    const runningHover = AgentHover({ sessionId: 's5' });
+    assert.equal(dotIn(runningHover), undefined, 'its hover card has no spinner either');
+    assert.ok(elementsOf(runningHover).some((e) => e.type === 'svg'), 'but the same glyph as its mark');
+    assert.equal(textIn(runningHover), 'Coding agent in its terminal: runningRunning in its terminal. It keeps no transcript.');
     // The panel entry: how many wait on you, in a badge and in words.
     const icon = AgentsIcon({});
     assert.equal(icon.props['data-agent-terminals-icon'], '1');

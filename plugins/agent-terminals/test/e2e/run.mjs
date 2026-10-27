@@ -406,7 +406,9 @@ try {
         }, 'its session\'s first turn to end', 30000, 300);
         check('DSH has its session: named after the agent, in its folder', session.title === 'App agent' && real(session.cwd) === real(ws.app), json(session));
         const events = await run.events(ids.app);
-        const note = events.find((e) => e.type === 'user/message' && /^A coding agent runs in this session's terminal: standin in /.test(e.text ?? ''));
+        const note = events.find((e) => e.type === 'user/message' && /^A coding agent runs in this session's terminal tab: standin in /.test(e.text ?? ''));
+        // Its model is given the one line to answer and told nobody waits on it, so its reply asks nothing (a reply that asks would make a Decisions card for nothing).
+        check('the listing note gives its model the one line to answer and asks nothing of anyone', Boolean(note) && note.text.includes('Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.') && note.text.includes('nobody waits on an answer from you') && !/DECISION NEEDED|\?/.test(note.text), note?.text);
         // Session Watch reads DSH's list again when it is older than 1.5 s: the row turns from blank within a few seconds.
         const listed = await waitFor(async () => ((await watchRow(ids.app))?.blank === false ? true : null), 'its session\'s row to stop being blank', 10000, 300).catch(() => false);
         check('its session got one short turn by its model, so DSH lists it', Boolean(note) && session.turns.started >= 1 && session.turns.started === session.turns.ended && listed === true, json({ turns: session.turns, note: note?.text, blank: (await watchRow(ids.app))?.blank }));

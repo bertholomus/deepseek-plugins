@@ -1553,10 +1553,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('path', { d: 'M9 12H13' }));
         }
 
-        /** DSH's state dot for an agent's state, where it has one. */
+        /**
+         * DSH's state dot for an agent's state, where it has one. A program
+         * that keeps no transcript is only "running": nobody knows whether it
+         * works, so it gets the steady terminal glyph, never the working spinner.
+         */
         function dotOf(agent) {
             if (agent.status === 'waiting on you') return 'warning';
-            if (agent.status === 'working' || agent.status === 'starting' || agent.status === 'running') return 'ongoing';
+            if (agent.status === 'working' || agent.status === 'starting') return 'ongoing';
             return undefined;
         }
 
@@ -1888,13 +1892,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             onClick: () => pick(d),
                         }, h('span', { className: `${P}-code` }, d.program), h('span', { className: `${P}-chip-sub` }, [plural(d.conversations, 'conversation'), d.latest ? `last ${kit.agoText(d.latest)}` : '', d.path ? '' : 'not found where DSH looks for programs'].filter(Boolean).join(' · '))))) : null,
                         recent.length ? h('div', { className: `${P}-label`, id: `${P}-recent` }, 'Used here before') : null,
-                        recent.length ? h('div', { className: `${P}-chips`, role: 'group', 'aria-labelledby': `${P}-recent` }, ...recent.map((r, i) => h('button', {
-                            key: `r-${i}`,
-                            type: 'button',
-                            className: `${P}-chip`,
-                            'data-agent-terminals-recent': String(i),
-                            onClick: () => pick(r),
-                        }, h('span', { className: `${P}-code` }, [r.program, ...(r.args ?? [])].join(' ')), h('span', { className: `${P}-chip-sub` }, [data.styles.find((s) => s.id === r.style)?.label ?? '', typeof r.folder === 'string' && r.folder ? `conversations in ${r.folder}` : ''].filter(Boolean).join(' · '))))) : null) : null,
+                        recent.length ? h('div', { className: `${P}-chips`, role: 'group', 'aria-labelledby': `${P}-recent` }, ...recent.map((r, i) => {
+                            // Paths as people read them (~/…), the whole of each on hover.
+                            const shown = kit.isRecord(r.shown) ? r.shown : {};
+                            const program = typeof shown.program === 'string' && shown.program ? shown.program : r.program;
+                            const folder = typeof shown.folder === 'string' && shown.folder ? shown.folder : typeof r.folder === 'string' ? r.folder : '';
+                            return h('button', {
+                                key: `r-${i}`,
+                                type: 'button',
+                                className: `${P}-chip`,
+                                'data-agent-terminals-recent': String(i),
+                                title: [[r.program, ...(r.args ?? [])].join(' '), typeof r.folder === 'string' && r.folder ? `conversations in ${r.folder}` : ''].filter(Boolean).join('\n'),
+                                onClick: () => pick(r),
+                            }, h('span', { className: `${P}-code` }, [program, ...(r.args ?? [])].join(' ')), h('span', { className: `${P}-chip-sub` }, [data.styles.find((s) => s.id === r.style)?.label ?? '', folder ? `conversations in ${folder}` : ''].filter(Boolean).join(' · ')));
+                        })) : null) : null,
                     h('div', { className: `${P}-row2` },
                         h('div', { className: `${P}-field` },
                             h('label', { className: `${P}-label`, htmlFor: ids.program }, 'Program'),
@@ -2050,10 +2061,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const m = useStore(marks);
             const agent = m.off ? undefined : m.agents.find((a) => a.sessionId === sessionId);
             if (!agent) return null;
-            const dot = dotOf(agent) ?? 'idle';
+            const dot = dotOf(agent) ?? (agent.status === 'idle' ? 'idle' : undefined);
             return h('div', { className: `${P}-hover`, 'data-agent-terminals-hover': agent.status },
                 h('div', { className: `${P}-hover-head` },
-                    ui.StateDot ? h(ui.StateDot, { state: dot }) : null,
+                    dot && ui.StateDot ? h(ui.StateDot, { state: dot }) : h(TerminalGlyph, { size: 12, stopped: agent.status === 'stopped' }),
                     h('span', null, `Coding agent in its terminal: ${statusWord(agent)}`)),
                 agent.detail ? h('div', { className: `${P}-hover-line` }, String(agent.detail).length > 160 ? `${String(agent.detail).slice(0, 159)}…` : agent.detail) : null);
         }

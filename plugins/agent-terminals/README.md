@@ -48,8 +48,9 @@ their way of resuming and where DSH finds them. You can type any other
 program.
 
 Without a transcript (`continue`, `plain`) an agent is only *running* or
-*stopped*, a message counts as *typed in*, not proven read, and what it
-asks shows only in its terminal.
+*stopped* (*running* shows the steady terminal glyph, never the working
+spinner: nobody knows whether it works), a message counts as *typed in*,
+not proven read, and what it asks shows only in its terminal.
 
 Agent Terminals resumes only a conversation it can see: a `flags` program
 writes its transcript with its first message, so one that never got a
@@ -61,9 +62,13 @@ has no conversation to resume yet)*.
 
 **Starting.** **Start a coding agent** on the Coding agents page, or
 **Start a coding agent here** in a session's ⋯ menu. A new agent gets a new
-session in its folder, named after it, and the session's model answers one
-short line (`listNewSessions`): DSH lists a session in its sidebar only
-once a turn ran in it. In the session, Agent Terminals opens a terminal
+session in its folder, named after it, and the session gets one message
+(`listNewSessions`): DSH lists a session in its sidebar only once a turn
+ran in it. The message tells its model that a coding agent runs in the
+session's terminal tab, that there is no task and nobody waits on its
+answer, and the one line to reply with; it asks nothing, so the reply makes
+no card in Decisions. A model that asks something all the same is said in
+*What happened* (Decisions may list it: dismiss it there). In the session, Agent Terminals opens a terminal
 with zsh or bash, as DSH's terminals do (your shell's startup files run as
 in any terminal), and types `exec <program> <arguments>`, so the terminal
 ends when the agent does. The first message, if you wrote one, goes in once
@@ -71,7 +76,9 @@ the agent's screen settles. One agent per session.
 
 A program given as a path must be an executable file there, or the start
 is refused before any session is made; `~/` is your home folder, and the
-agent keeps the full path. Agent Terminals then watches the first moments:
+agent keeps the full path. Words on the page show a path under your home
+folder as `~/…`; the card's command and each **Used here before** chip show
+the whole of it on hover. Agent Terminals then watches the first moments:
 a program that ends at once (a name the shell cannot find, say) is *Could
 not start*, with why and what to do, and its session gets no first turn.
 The form keeps what you wrote, so you can fix it and start again (forget
@@ -173,7 +180,7 @@ its agents and when it picked them up again, where they were.
 terminal, which ends the program in it. Its card says so, and **Start
 again** brings it back in a new terminal and tab, resuming its
 conversation where it has one. **Stop** on the page does the same as
-closing the tab.
+closing the tab, and *What happened* says who stopped it.
 
 ## The page
 
@@ -217,7 +224,8 @@ cause is gone.
 ## On a session's row
 
 - **A mark** in the row's leading seat: DSH's state dot while the agent
-  works or waits on you, a terminal glyph when it is idle or stopped, and
+  works or waits on you, a terminal glyph when it is idle, only running
+  (no transcript) or stopped, and
   its state in words for screen readers. When another plugin's mark comes
   first, Agent Terminals leaves the seat to it and says its state in words
   only.

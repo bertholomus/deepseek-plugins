@@ -13,7 +13,7 @@ import {
 } from '../plugins/agent-terminals/lib/launch.js';
 import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, proofs, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
 import { PASTE_END, PASTE_START, Typist, messageKeys, pasteSwitch } from '../plugins/agent-terminals/lib/typist.js';
-import { AgentTerminals, checkLaunch, exitWords, parseData, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
+import { AgentTerminals, checkLaunch, exitWords, homeForm, listingNote, parseData, programForm, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedSince, changedWords, checkConfig, profileEntry, savedEntry, settingsSnapshot } from '../plugins/agent-terminals/lib/config.js';
 import { detectAgents, keepsProjects, keepsSessions } from '../plugins/agent-terminals/lib/detect.js';
 import { STYLE_CHOICES, pageState } from '../plugins/agent-terminals/lib/page.js';
@@ -469,7 +469,7 @@ test('start form: what is sent is checked in words', () => {
     assert.throws(() => checkLaunch({ program: 'agent', style: 'odd', folder: home }, { home }), /flags, subcommand, continue, plain/);
     assert.throws(() => checkLaunch({ program: 'agent', style: 'flags' }, { home }), /Choose the folder/);
     assert.throws(() => checkLaunch({ program: 'agent', style: 'flags', folder: 'rel/path' }, { home }), /full path/);
-    assert.throws(() => checkLaunch({ program: 'agent', style: 'flags', folder: join(home, 'none') }, { home }), /There is no folder at/);
+    assert.throws(() => checkLaunch({ program: 'agent', style: 'flags', folder: join(home, 'none') }, { home }), /^Error: There is no folder at ~\/none: create it first, or choose another\.$/, 'a folder under the home folder as people read it');
     assert.throws(() => checkLaunch({ program: 'agent', style: 'flags', folder: home, data: 'rel' }, { home }), /full path, such as ~\/.agent/);
     assert.throws(() => checkLaunch({ program: 'agent', style: 'flags', folder: home, args: '--x "open' }, { home }), /not closed/);
     const spec = checkLaunch({ program: 'agent', style: 'flags', folder: '~/app', args: '--model "big one" -v', task: '  Fix it  ' }, { home });
@@ -541,6 +541,28 @@ test('saved state: a broken or older file never stops it', () => {
     assert.equal(exitWords({ program: 'x' }, 1, 'Start again resumes its conversation.', 'No conversation found with session ID: c1'), 'It exited with code 1: “No conversation found with session ID: c1”. Start again resumes its conversation.');
     assert.equal(exitWords({ program: 'x' }, 1, 'Start again resumes its conversation.'), 'It exited with code 1. Start again resumes its conversation.');
     assert.equal(parseData({ agents: { k2: { sessionId: 's2', program: 'agent', cutAt: 42 } } }).agents.k2.cutAt, 42, 'the job cut last is kept, so it is logged once');
+});
+
+test('words: paths read as people read them (~/… under the home folder), a program given by name stays its name', () => {
+    assert.equal(homeForm('/Users/a/Projects/app', '/Users/a'), '~/Projects/app');
+    assert.equal(homeForm('/Users/a', '/Users/a/'), '~');
+    assert.equal(homeForm('/Users/ab/x', '/Users/a'), '/Users/ab/x', 'a folder that only starts with the same letters is not under it');
+    assert.equal(homeForm('/opt/tool', '/Users/a'), '/opt/tool');
+    assert.equal(homeForm('/Users/a/x', undefined), '/Users/a/x', 'no home folder known: as it is');
+    assert.equal(homeForm('', '/Users/a'), '');
+    assert.equal(programForm('/Users/a/.local/bin/agent', '/Users/a'), '~/.local/bin/agent');
+    assert.equal(programForm('agent', '/Users/a'), 'agent');
+    // Exit words name the program as people read it, and keep the name for "which".
+    assert.equal(exitWords({ program: '/Users/a/bin/nope' }, 127, undefined, undefined, '/Users/a'), 'It exited with code 127: the shell could not find ~/bin/nope. Use its full path (“which nope” in a terminal shows it), or check the name.');
+    assert.match(exitWords({ program: '/Users/a/bin/nope' }, 126, undefined, undefined, '/Users/a'), /^It exited with code 126: ~\/bin\/nope is not a program/);
+});
+
+test('listing note: its model gets the one line to answer and is told nobody waits on it, so its reply asks nothing', () => {
+    const note = listingNote({ program: '/Users/a/.local/bin/agent', folder: '/Users/a/Projects/app' }, '/Users/a');
+    assert.equal(note, 'A coding agent runs in this session\'s terminal tab: agent in ~/Projects/app, started by Agent Terminals. This message only lets DSH list the session in its sidebar: there is no task for you, and nobody waits on an answer from you. Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.');
+    // Session Watch counts a DECISION NEEDED line, or a question, in a reply's last lines as asking: the note names neither, so a model that echoes it asks nobody.
+    assert.doesNotMatch(note, /DECISION NEEDED|BLOCKED|\?/);
+    assert.match(listingNote({ program: 'agent', folder: '' }, '/Users/a'), /: agent in this session's folder, started by/);
 });
 
 // ── The stand-in agent on its own ──────────────────────────────────────
@@ -860,6 +882,43 @@ test('engine: start an agent, type its first message in, and prove it from its t
         assert.ok(journal.list().some((e) => e.kind === 'proof' && /has the message/.test(e.text)));
         assert.match(terminal.output, /exec .*fake-agent\.mjs --style flags/, 'it was started with exec');
         assert.match(terminal.output, new RegExp(`--session-id ${record.conversationId}`), 'with the id it gave it');
+    } finally {
+        agents.stop();
+        controller.restart();
+    }
+});
+
+test('engine: the listing turn asks nothing; one whose model asked all the same says so; paths read as ~/…; Stop says who stopped it', async () => {
+    const { agents, watch, controller, journal, dir } = engine();
+    const folder = join(dir, 'app');
+    mkdirSync(folder);
+    // What Session Watch read in each session's reply: the model of the first asked all the same, the second only softly.
+    const replies = new Map();
+    watch.fullState = async (sessionId) => replies.get(sessionId);
+    agents.start();
+    try {
+        const one = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder, name: 'One' });
+        const record = agents.records[one.agent.key];
+        assert.equal(watch.delivered[0].text, listingNote(record, dir));
+        assert.match(watch.delivered[0].text, /: fake-agent\.mjs in ~\/app, started by Agent Terminals\./, 'its folder as people read it');
+        assert.doesNotMatch(watch.delivered[0].text, /DECISION NEEDED|\?/);
+        const start = journal.list().find((e) => e.kind === 'start' && e.agent === record.key);
+        assert.equal(start.why, `You started ${FAKE} in ~/app, in a new session.`, 'a program outside the home folder in full, the folder as ~/…');
+        replies.set(record.sessionId, { ask: { question: 'Should I look at anything else?', turn: 1 }, end: { turn: 1, kind: 'completed' } });
+        watch.emit({ type: 'turn-end', sessionId: record.sessionId, end: { kind: 'completed' } });
+        const turn = (key) => journal.list().find((e) => e.kind === 'session' && e.agent === key);
+        await until(() => turn(record.key).state === 'done', 'the first turn done');
+        assert.equal(turn(record.key).reason, 'Its model\'s reply asked something all the same (“Should I look at anything else?”): Decisions may list it, though nothing waits on you there. Dismiss it in Decisions.');
+        const two = await agents.launch({ program: FAKE, args: fakeArgs(join(dir, 'data')), style: 'flags', data: join(dir, 'data'), folder, name: 'Two' });
+        const second = agents.records[two.agent.key];
+        replies.set(second.sessionId, { ask: { question: 'Let me know if you need more.', turn: 1, soft: true }, end: { turn: 1, kind: 'completed' } });
+        watch.emit({ type: 'turn-end', sessionId: second.sessionId, end: { kind: 'completed' } });
+        await until(() => turn(second.key).state === 'done', 'the second first turn done');
+        assert.equal(turn(second.key).reason, undefined, 'a soft line asks nobody: nothing to say');
+        await until(() => agents.view(record).status === 'idle' || agents.view(record).status === 'running', 'the agent running');
+        await agents.stopAgent(record.key);
+        const stop = journal.list().find((e) => e.kind === 'stop' && e.agent === record.key);
+        assert.deepEqual([stop.text, stop.why, stop.state], ['Stopped One', 'You stopped it; its terminal closed, which ends the program in it.', 'done']);
     } finally {
         agents.stop();
         controller.restart();
@@ -1838,4 +1897,9 @@ test('engine: programs used before are listed once, with their conversations fol
     assert.deepEqual(agents.recent.map((r) => r.folder), [join(dir, 'elsewhere'), undefined], 'one that differs says where');
     agents.store.data.recent = [...agents.store.data.recent, { program: '/x/standin', args: [], style: 'flags', data: join(dir, 'elsewhere') }];
     assert.equal(agents.recent.length, 2, 'an older list with look-alikes reads once each');
+    // The chips show paths as people read them; the whole path stays for the hover and for a start.
+    assert.deepEqual(agents.recent.map((r) => r.shown), [{ program: '/x/standin', folder: '~/elsewhere' }, { program: '/x/standin' }]);
+    agents.remember({ program: join(dir, 'bin', 'agent'), args: [], style: 'flags' });
+    assert.deepEqual(agents.recent[0].shown, { program: '~/bin/agent' });
+    assert.equal(agents.recent[0].program, join(dir, 'bin', 'agent'));
 });
