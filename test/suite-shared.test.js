@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, plainError, recommendationIn, spanWords, stateWord, timeWords } from '../shared/host/words.js';
+import { askIn, asksForAnswer, asksSomeone, blockedIn, count, cutOff, decisionIn, holdCode, plainError, plainLine, recommendationIn, spanWords, stateWord, timeWords, unfenced, unholdCode } from '../shared/host/words.js';
 import { Hub } from '../shared/host/hub.js';
 import { Journal } from '../shared/host/journal.js';
 import { JsonStore, ensurePrivateDir, readJson, writeAtomic } from '../shared/host/files.js';
@@ -162,6 +162,78 @@ test('words: what a reply asks a person: a decision line, then a BLOCKED line, t
     assert.equal(blockedIn('BLOCKED: one\ntext\nBLOCKED: two'), 'two');
     assert.equal(blockedIn('Not blocked at all.'), undefined);
     assert.equal(blockedIn('UNBLOCKED: fine'), undefined);
+});
+
+test('words: a question keeps its words when a dot sits in it (a file, a version, an address, a number, "e.g."), and nothing in a code span ends it', () => {
+    const asked = (text) => askIn(text)?.question;
+    // Each of these gave only the words after its last dot ("py` first?", "3`?", "com now?").
+    assert.equal(asked('I found two failing tests in the parser suite. Should I fix the bug in `parser.py` first?'), 'Should I fix the bug in `parser.py` first?');
+    assert.equal(asked('Both builds pass. Which do you want to release: `v1.2` or `v1.3`?'), 'Which do you want to release: `v1.2` or `v1.3`?');
+    assert.equal(asked('Should I bump the version to 2.0.0 and tag it?'), 'Should I bump the version to 2.0.0 and tag it?');
+    assert.equal(asked('Should I deploy to https://staging.example.com now?'), 'Should I deploy to https://staging.example.com now?');
+    assert.equal(asked('Do you want a PR against main, e.g. with only the fix?'), 'Do you want a PR against main, e.g. with only the fix?');
+    assert.equal(asked('Want me to run the migration now (it takes about 2.5 minutes)?'), 'Want me to run the migration now (it takes about 2.5 minutes)?');
+    assert.equal(asked('The cache is ready. Should I enable it in config.yaml for production?'), 'Should I enable it in config.yaml for production?');
+    assert.equal(asked('Should I use a managed database, e.g. Postgres on RDS?'), 'Should I use a managed database, e.g. Postgres on RDS?', 'an abbreviation before a capital ends nothing');
+    assert.equal(asked('Tests are green.\n\n**Should I merge `feature/v2.1` into main?**'), 'Should I merge `feature/v2.1` into main?');
+    // A sentence still ends where one ends, and the question is the last one that asks.
+    assert.equal(asked('Which one do you prefer? I can also do both.'), 'Which one do you prefer?');
+    assert.equal(asked('Did the tests pass? No. Should I fix them?'), 'Should I fix them?');
+    assert.equal(asked('The parser is done. Tests pass. Should I also write the docs? I can start now.'), 'Should I also write the docs?');
+    assert.equal(asked('"Use v2." Should I follow that note?'), 'Should I follow that note?');
+    // A question that leans on the one before it is read with that one, or it would not stand alone.
+    assert.equal(asked('Both pass. Should I merge `fix/parser` now? Or wait for the review?'), 'Should I merge `fix/parser` now? Or wait for the review?');
+    assert.equal(asked('Are both builds green? If so, should I tag v1.2?'), 'Are both builds green? If so, should I tag v1.2?');
+    assert.equal(asked('Is the cache warm? Should I deploy?'), 'Should I deploy?', 'a question that stands alone is read alone');
+    assert.equal(asked('Ready. Or not?'), 'Or not?', 'only a question leans on a question');
+    // Nothing inside a code span ends a sentence or asks.
+    assert.equal(asked('Should I run `make build. Then deploy` again?'), 'Should I run `make build. Then deploy` again?');
+    assert.equal(asked('I added `cache?.get()`. Should I keep the old path too?'), 'Should I keep the old path too?');
+    assert.equal(askIn('Use `x ?? y` there. Should I?').question, 'Should I?');
+});
+
+test('words: a fenced code block is shown, not asked: no marker or question in one counts, and a question before one is found', () => {
+    // A rule quoted from a rules file made a card "<question>" with the pick "<pick>".
+    const quoted = 'I added the rule to AGENTS.md:\n```\nDECISION NEEDED: <question> — recommend: <pick>\n```\nThat is all.';
+    assert.equal(decisionIn(quoted), undefined);
+    assert.equal(askIn(quoted), undefined);
+    assert.equal(asksSomeone(quoted), false);
+    assert.equal(askIn('Rules updated:\n~~~md\nBLOCKED: <what is missing>\n~~~'), undefined, 'a tilde fence too');
+    assert.equal(blockedIn('```\nBLOCKED: no key\n```'), undefined);
+    // A "?" in the code is not the question; the one around it is.
+    assert.deepEqual(askIn('The migration is ready.\n```sh\nread -p "Continue? " ok\nnpm run migrate\n```\nShould I run it on staging now?'), { kind: 'question', question: 'Should I run it on staging now?' });
+    assert.deepEqual(askIn('Should I run this on staging?\n```sh\nnpm run migrate\n```'), { kind: 'question', question: 'Should I run this on staging?' }, 'a question before the code that ends the reply');
+    assert.equal(asksForAnswer('Should I run this on staging?\n```sh\nnpm run migrate\n```'), true);
+    // The session's own marker after a block still counts, and so does one after a fence never closed.
+    assert.deepEqual(askIn('```sh\nnpm test\n```\nDECISION NEEDED: Ship it? — recommend: yes'), { kind: 'decision', question: 'Ship it?', recommendation: 'yes' });
+    assert.deepEqual(askIn('```\nDECISION NEEDED: Ship it? — recommend: yes'), { kind: 'decision', question: 'Ship it?', recommendation: 'yes' });
+    // Each line stays in its place (blank), a closing fence must match the opening one, and "```a```" is no fence.
+    assert.equal(unfenced('a\n````md\n```\nb\n````\nc'), 'a\n\n\n\n\nc');
+    assert.equal(unfenced('a\n```x```\nb'), 'a\n```x```\nb');
+    assert.equal(unfenced('a\n```js\nb\n~~~\nc'), 'a\n```js\nb\n~~~\nc', 'a tilde fence does not close a backtick one');
+});
+
+test('words: code spans keep identifiers whole: dunders, double stars and dashes stay in the question, the pick and the lines', () => {
+    assert.deepEqual(decisionIn('DECISION NEEDED: Should I rename `__init__.py` to main.py? — recommend: keep `__init__.py`'), { question: 'Should I rename __init__.py to main.py?', recommendation: 'keep __init__.py' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: delete `__pycache__` and `__init__.py`? — recommend: `__pycache__` only'), { question: 'delete __pycache__ and __init__.py?', recommendation: '__pycache__ only' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Rename `my__var`? — recommend: `my_var`'), { question: 'Rename my__var?', recommendation: 'my_var' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Is `a**b` the right power operator here? — recommend: `pow(a, b)`'), { question: 'Is a**b the right power operator here?', recommendation: 'pow(a, b)' });
+    assert.deepEqual(decisionIn('DECISION NEEDED: Pass `**kwargs` on? — recommend: `**kwargs`'), { question: 'Pass **kwargs on?', recommendation: '**kwargs' }, 'a span that starts or ends with marks keeps them');
+    assert.deepEqual(decisionIn('DECISION NEEDED: Push with `--force-with-lease`? — recommend: yes'), { question: 'Push with --force-with-lease?', recommendation: 'yes' }, 'a dash in code is not the dash before the pick');
+    assert.deepEqual(decisionIn('`DECISION NEEDED: Ship it? — recommend: yes`'), { question: 'Ship it?', recommendation: 'yes' }, 'a marker line written in code still counts');
+    assert.equal(decisionIn('Write `DECISION NEEDED: <question>` at the end of a reply.'), undefined, 'a marker inside a sentence is not one, in code or not');
+    assert.equal(blockedIn('BLOCKED: no `__init__.py` in `src/` yet'), 'no __init__.py in src/ yet');
+    assert.deepEqual(recommendationIn('Two configs exist.\nWhich wins? Recommend: `__main__.py`'), { question: 'Two configs exist.\nWhich wins?', recommendation: '__main__.py' });
+    assert.equal(plainLine('Rename `my__var`, keep `__init__.py`, is `a**b` right? my__var and a**b stay; **bold** and __this__ go'),
+        'Rename my__var, keep __init__.py, is a**b right? my__var and a**b stay; bold and this go');
+    assert.equal(plainLine('**DECISION NEEDED:** keep `file_name.py`? — *Monday*'), 'DECISION NEEDED: keep file_name.py? — Monday', 'marks around words still go');
+    assert.equal(plainLine('Use ``a`b`` and ` padded `'), 'Use a`b and padded', 'a span of two backticks, and the padding inside one');
+    // The spans are held while a line is read, and given back as words or as written.
+    const held = holdCode('Use `a.b` or ``c`d``.');
+    assert.equal(held.text, 'Use \u00010\u0002 or \u00011\u0002.');
+    assert.equal(unholdCode(held.text, held.spans), 'Use a.b or c`d.');
+    assert.equal(unholdCode(held.text, held.spans, { written: true }), 'Use `a.b` or ``c`d``.');
+    assert.deepEqual(holdCode('odd \u0001 text `x`'), { text: 'odd \u0001 text `x`', spans: [] }, 'a text with a placeholder\'s mark in it is read as it is');
 });
 
 test('words: a provider\'s error in plain words, its JSON reduced to the message', () => {
@@ -955,6 +1027,41 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.match(resetRule, /font-size:12px;line-height:1\.5;color:var\(--dsw-alias-label-secondary\)/, 'as DSH draws its own');
     assert.doesNotMatch(resetRule, /underline|--dsw-alias-link/);
     assert.ok(kit.css.includes('.dshx-settings .dshx-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}'), '"Changed" in the suite\'s secondary text, as on its pages');
+});
+
+test('kit: a number saved in quotes (#32) is flagged as the form opens, says the quotes are what is wrong, and the number typed without them saves', () => {
+    const kit = kitWith();
+    const fields = [
+        { name: 'wait', kind: 'number', title: 'Wait', hint: '', default: 600, min: 10, max: 86400 },
+        { name: 'waits', kind: 'numbers', title: 'Waits', hint: '', default: [120, 600], min: 0, max: 86400 },
+        { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
+    ];
+    const spec = kit.fieldSpec(fields[0]);
+    // The stored "600" shows as "600" with its quotes: it does not parse, so the form flags it at once.
+    const shown = spec.format('600');
+    assert.equal(spec.parse(shown), undefined);
+    // Typed back without the quotes, it is a change (the text differs from what is stored) and it parses to the number.
+    assert.notEqual('600', shown);
+    assert.deepEqual(spec.parse('600'), { kind: 'set', value: 600 });
+    assert.deepEqual(kit.fieldSpec(fields[1]).parse('120, 600'), { kind: 'set', value: [120, 600] });
+    const snap = {
+        writable: true, saving: false,
+        wait: { text: shown, overridden: true, invalid: false },
+        waits: { text: kit.fieldSpec(fields[1]).format('120, 600'), overridden: true, invalid: false },
+        resume: { text: kit.fieldSpec(fields[2]).format('yes'), overridden: true, invalid: false },
+    };
+    const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    const body = kit.SettingsBody({ form, name: 'X', fields });
+    const row = (name) => elementsOf(body).find((e) => e.props?.['data-suite-setting'] === name);
+    const field = (name) => elementsOf(row(name)).find((e) => e.type === 'SettingsValueField');
+    assert.equal(field('wait').props.invalid, true);
+    assert.equal(field('wait').props.text, '"600"');
+    assert.equal(field('wait').props.invalidLabel, 'It is saved as text, in quotes. Type a whole number from 10 to 86400, without the quotes, then save.');
+    assert.equal(row('wait').props['data-suite-invalid'], '');
+    assert.equal(field('waits').props.invalidLabel, 'It is saved as text, in quotes. Type up to 10 whole numbers from 0 to 86400, with commas between them, without the quotes, then save.');
+    assert.match(textIn(row('resume')), /The saved value is neither on nor off\. Switch it to the one you want, then save\./);
+    // A number out of range keeps its own words.
+    assert.equal(kit.invalidWords(fields[0], '3'), 'A whole number from 10 to 86400, or empty for the default (600).');
 });
 
 test('kit: a number saved in quotes (#32) is flagged as the form opens, says the quotes are what is wrong, and the number typed without them saves', () => {
