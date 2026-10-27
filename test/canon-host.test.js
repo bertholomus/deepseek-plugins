@@ -100,6 +100,7 @@ test('config: What happened gives a switch\'s, a number\'s and a choice\'s new v
     Object.assign(settings, { maxNotes: 30, recall: 'yes', draftsFolder: '../x' });
     const entry = savedEntry(check, [['maxNotes'], ['recall'], ['draftsFolder']]);
     assert.equal(entry.state, 'waiting on a setting');
+    assert.equal(entry.text, 'Settings changed: “Notes a turn, at most”, “Add notes to turns”, “Drafts folder”; Canon waits until a wrong one is fixed', 'a wrong setting is named without a value');
     assert.equal(entry.why, 'Drafts folder (draftsFolder) must be a folder inside the vault, such as Drafts or Canon/Drafts: letters, digits and spaces, no part starting with a dot, no .. (it is “../x”). 2 more are wrong: Add notes to turns (recall) must be true or false (it is “yes”). Notes a turn, at most (maxNotes) must be a whole number from 1 to 10 (it is 30).');
     assert.deepEqual(alsoWrong(check).map((p) => p.key), ['recall', 'maxNotes']);
     // One wrong: nothing more is said.
@@ -107,6 +108,8 @@ test('config: What happened gives a switch\'s, a number\'s and a choice\'s new v
     check.run();
     assert.deepEqual(alsoWrong(check), []);
     assert.doesNotMatch(savedEntry(check, [['maxNotes']]).why, /more are wrong|Also wrong/);
+    // A right setting saved while another is still wrong: its new value, and that Canon still waits (the round-4 nit).
+    assert.equal(savedEntry(check, [['maxNotes']]).text, 'Settings changed: “Notes a turn, at most” to 3; Canon waits until a wrong one is fixed');
     settings.draftsFolder = 'Drafts';
     check.run();
     assert.deepEqual(alsoWrong(check), [], 'none wrong');

@@ -1773,8 +1773,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'aria-label': undefined, 'data-canon-header': 'problem' } },
                                     fixed.text ? h(SaidLine, { key: 'said', text: fixed.text }) : null,
                                     h(kit.SettingsProblem, { name: 'Canon', packageName: BUNDLE, problem: data.problem }),
-                                    data.problem.also?.length ? h(AlsoWrong, { key: 'also', also: data.problem.also }) : null,
-                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed({ text, shown: false }); void live.refresh(); } })),
+                                    // Save it as N fixes the setting just named, so it sits right under it, before the others that are wrong.
+                                    h(QuotedFix, { key: `fix-${data.problem.key ?? ''}`, problem: data.problem, onSaved: (text) => { setFixed({ text, shown: false }); void live.refresh(); } }),
+                                    data.problem.also?.length ? h(AlsoWrong, { key: 'also', also: data.problem.also }) : null),
                                 h(HistoryCard, { key: 'history', data, titles }),
                             ]
                             : [

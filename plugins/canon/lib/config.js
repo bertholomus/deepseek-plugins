@@ -229,19 +229,21 @@ export function changedWords(paths) {
  */
 export function savedEntry(check, paths) {
     const entry = changedEntry(check, paths, { name: 'Canon', titles: SETTING_TITLES });
+    // A switch, a number or a choice is said with its new value: “Add notes to turns” off, “What Canon may write” to
+    // “Drafts”; a setting that is wrong, without one (the why says what is wrong with it).
+    const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
+    const said = (wrong) => keys.map((key) => {
+        const value = wrong.has(key) ? undefined : valueWords(key, check.settings?.[key]);
+        return `“${SETTING_TITLES[key] ?? key}”${value === undefined ? '' : ` ${value}`}`;
+    }).join(', ');
     if (entry?.state === 'waiting on a setting') {
-        // Every wrong setting, not only the first.
+        // Every wrong setting, not only the first; a right one saved meanwhile, with its new value.
         const also = alsoWrong(check);
-        return also.length ? { ...entry, why: `${entry.why} ${also.length === 1 ? 'Also wrong:' : `${also.length} more are wrong:`} ${also.map((p) => `${p.text}.`).join(' ')}` } : entry;
+        const text = entry.text.startsWith('Settings changed: ') ? `Settings changed: ${said(new Set([check.problem?.key, ...also.map((p) => p.key)]))}; Canon waits until a wrong one is fixed` : entry.text;
+        return { ...entry, text, ...(also.length ? { why: `${entry.why} ${also.length === 1 ? 'Also wrong:' : `${also.length} more are wrong:`} ${also.map((p) => `${p.text}.`).join(' ')}` } : {}) };
     }
     if (entry?.state !== 'done' || !entry.text.startsWith('Settings changed: ')) return entry;
-    // A switch, a number or a choice is said with its new value: “Add notes to turns” off, “What Canon may write” to “Drafts”.
-    const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
-    const words = keys.map((key) => {
-        const value = valueWords(key, check.settings?.[key]);
-        return `“${SETTING_TITLES[key] ?? key}”${value === undefined ? '' : ` ${value}`}`;
-    });
-    return { ...entry, text: `Settings changed: ${words.join(', ')}` };
+    return { ...entry, text: `Settings changed: ${said(new Set())}` };
 }
 
 /** A setting's value in What happened's words: a switch on or off, a number, a choice's name; undefined for others. */

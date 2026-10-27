@@ -535,6 +535,10 @@ test('the page: a number or true/false in quotes is saved without them through D
     t.after(() => { twoPage.unmount(); third.kit.setConnection(undefined); third.views.settings = undefined; });
     await settle(5);
     assert.match(textIn(twoPage.tree), /Also wrong:Characters a turn, at most \(maxChars\)/);
+    // Save it as 3 sits under the setting it fixes, before the list of the others (the round-4 nit).
+    const head2 = withAttr(twoPage.tree, 'data-canon-header')[0];
+    const order = elementsOf(head2).map((e) => (e.props?.['data-canon-fix'] !== undefined ? 'fix' : e.props?.['data-canon-also'] !== undefined ? 'also' : '')).filter(Boolean);
+    assert.deepEqual(order, ['fix', 'also']);
     button(twoPage.tree, 'Save it as 3').props.onClick();
     await settle(20);
     const kept = withAttr(twoPage.tree, 'data-canon-fixed')[0];
