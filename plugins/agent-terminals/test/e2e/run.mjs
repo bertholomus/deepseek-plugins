@@ -324,6 +324,95 @@ function endOurs() {
     return pids.length;
 }
 
+// ── Wallpaper, stood in for in this test window only ──
+
+/** Pictures for the Wallpaper stand-in: a light one and a dark one. */
+const PICTURES = {
+    light: 'radial-gradient(circle at 20% 25%,#fde68a 0,transparent 40%),radial-gradient(circle at 80% 70%,#bae6fd 0,transparent 45%),linear-gradient(135deg,#f5f0e6,#dde7ee)',
+    dark: 'radial-gradient(circle at 25% 30%,#1d4ed8 0,transparent 40%),radial-gradient(circle at 75% 70%,#9d174d 0,transparent 45%),linear-gradient(135deg,#0b1020,#1f2937)',
+};
+/** Wallpaper's public values on <body> (as DESIGN.md names them), a picture behind DSH, and DSH's frame clear. */
+const wallpaperOn = (page, picture, tint) => page.evaluate(({ picture, tint }) => {
+    const b = document.body;
+    b.classList.add('wp-on');
+    b.style.setProperty('--wp-blur', '22px');
+    b.style.setProperty('--wp-tint', String(tint));
+    let wall = document.getElementById('test-wall');
+    if (!wall) {
+        wall = document.createElement('div');
+        wall.id = 'test-wall';
+        document.body.prepend(wall);
+        const style = document.createElement('style');
+        style.id = 'test-wall-style';
+        style.textContent = 'body.wp-on #root{position:relative;z-index:1}'
+            + 'body.wp-on [class*="_frame"],body.wp-on [class*="_centerCol"],body.wp-on [class*="_sidebarCol"],body.wp-on [class*="_rightbarCol"],'
+            + 'body.wp-on [data-slot="main"]{background:transparent!important;border:0!important;box-shadow:none!important}';
+        document.head.append(style);
+    }
+    wall.style.cssText = `position:fixed;inset:0;z-index:0;background:${picture}`;
+}, { picture, tint });
+const wallpaperOff = (page) => page.evaluate(() => {
+    document.body.classList.remove('wp-on');
+    document.body.style.removeProperty('--wp-blur');
+    document.body.style.removeProperty('--wp-tint');
+    document.getElementById('test-wall')?.remove();
+    document.getElementById('test-wall-style')?.remove();
+});
+/**
+ * The lowest contrast of the page's small text (13 px and under) over what is behind it: its own layers down to an
+ * opaque one, or down to the page's root over `ground` (a picture's colour behind the glass). How many it measured,
+ * and the three lowest.
+ */
+const smallTextContrast = (page, ground) => page.evaluate((ground) => {
+    const root = document.querySelector('[data-agent-terminals-page]');
+    if (!root) return { count: 0, ratio: 0, low: [] };
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const c = canvas.getContext('2d', { willReadFrequently: true });
+    const pixel = () => [...c.getImageData(0, 0, 1, 1).data];
+    const alphaOf = (css) => {
+        c.clearRect(0, 0, 1, 1);
+        c.fillStyle = css;
+        c.fillRect(0, 0, 1, 1);
+        return pixel()[3];
+    };
+    const channel = (v) => {
+        const x = v / 255;
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    };
+    const lum = ([r, g, b]) => 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    const all = [];
+    for (const el of root.querySelectorAll('*')) {
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        const style = getComputedStyle(el);
+        if (!own || parseFloat(style.fontSize) > 13 || style.visibility === 'hidden' || !el.getClientRects().length) continue;
+        if (el.closest('.xterm, [aria-hidden="true"], [data-suite-settings]')) continue;
+        const layers = [];
+        for (let node = el; node; node = node.parentElement) {
+            const bg = getComputedStyle(node).backgroundColor;
+            const alpha = alphaOf(bg);
+            if (alpha > 0) layers.push(bg);
+            if (alpha === 255 || (ground && node === root)) break;
+        }
+        c.clearRect(0, 0, 1, 1);
+        c.fillStyle = ground ?? '#ffffff';
+        c.fillRect(0, 0, 1, 1);
+        for (const bg of [...layers].reverse()) {
+            c.fillStyle = bg;
+            c.fillRect(0, 0, 1, 1);
+        }
+        const back = pixel().slice(0, 3);
+        c.fillStyle = style.color;
+        c.fillRect(0, 0, 1, 1);
+        const text = pixel().slice(0, 3);
+        const [hi, lo] = [lum(text), lum(back)].sort((a, b) => b - a);
+        all.push({ word: el.textContent.trim().slice(0, 30), cls: [...el.classList].filter((x) => x.startsWith('dshat-')).join('.'), ratio: Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100 });
+    }
+    all.sort((a, b) => a.ratio - b.ratio);
+    return { count: all.length, ratio: all[0]?.ratio ?? 0, low: all.slice(0, 3).map((x) => `${x.cls || 'text'} “${x.word}” ${x.ratio}`) };
+}, ground ?? null);
+
 // ── The window ──
 
 let window;
@@ -613,6 +702,47 @@ try {
             await page.setViewportSize({ width: 1280, height: 860 });
         }, async () => {
             if (window?.page) await shot(window.page, shots, 'failed-page');
+        });
+
+        await step('Wallpaper on and off (a stand-in, in this window only): its page over a light and a dark picture at a low tint, light and dark; the small text measured', async () => {
+            const page = await openAgents();
+            await cardOf(page, agents.app).waitFor({ state: 'visible', timeout: 15000 });
+            await page.locator('[data-agent-terminals-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            const off = {};
+            for (const mode of ['light', 'dark']) {
+                await setDark(page, mode === 'dark');
+                await page.waitForTimeout(300);
+                off[mode] = await smallTextContrast(page);
+            }
+            // At a low tint (.2): pictures over each picture, light and dark; measured over a mid grey (lighter in dark,
+            // darker in light: where the glass carries the small text) and over each picture's far end.
+            const low = {};
+            const ends = {};
+            try {
+                for (const mode of ['light', 'dark']) {
+                    await setDark(page, mode === 'dark');
+                    for (const picture of ['light', 'dark']) {
+                        await wallpaperOn(page, PICTURES[picture], 0.2);
+                        await page.waitForTimeout(300);
+                        await shot(page, shots, `wallpaper-${mode}-on-${picture}-picture`);
+                    }
+                    low[mode] = await smallTextContrast(page, mode === 'dark' ? 'rgb(140, 140, 140)' : 'rgb(180, 180, 180)');
+                    ends[mode] = { overLight: (await smallTextContrast(page, 'rgb(240, 236, 228)')).ratio, overDark: (await smallTextContrast(page, 'rgb(20, 24, 36)')).ratio };
+                }
+            } finally {
+                await wallpaperOff(page);
+                await setDark(page, false);
+            }
+            await shot(page, shots, 'wallpaper-off-light');
+            console.log(`# small text, lowest contrast: Wallpaper off ${json(off)}; tint .2 over a mid grey ${json(low)}; over the pictures' far ends ${json(ends)}`);
+            check('Wallpaper off: the page\'s small text reads at 4.5:1 or more, light and dark', ['light', 'dark'].every((m) => off[m].count > 10 && off[m].ratio >= 4.5), json(off));
+            check('Wallpaper on at a low tint (.2) over a mid picture: the small text reads at 4.5:1 or more, light and dark', ['light', 'dark'].every((m) => low[m].count > 10 && low[m].ratio >= 4.5), json(low));
+        }, async () => {
+            if (window?.page) {
+                await wallpaperOff(window.page).catch(() => {});
+                await setDark(window.page, false).catch(() => {});
+                await shot(window.page, shots, 'failed-wallpaper');
+            }
         });
 
         await step('the session row: its mark, hover line and menu item, beside a neighbour\'s; the panel and the footer keep theirs', async () => {
