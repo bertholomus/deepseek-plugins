@@ -607,6 +607,8 @@ export class ProjectManager {
         this.turns = new Map();
         /** sessionId → (approval id → timer) for permission prompts not yet answered. */
         this.approvals = new Map();
+        /** Thread sessionId → (approval id → {what, tool}): its prompts not yet answered, for its roster line once they are. */
+        this.openPrompts = new Map();
         /** Thread sessionId → {callId, turn, step}: the send it asked the user about in its current step (holdSend). */
         this.pendingSends = new Map();
         /** Thread sessionId → (callId → {turn, step}), from its tool/call events: the model step each call came in. */
@@ -2295,11 +2297,19 @@ export class ProjectManager {
         if (event.type === 'approval/decided') {
             clearTimeout(this.approvals.get(agent.id)?.get(id));
             this.approvals.get(agent.id)?.delete(id);
+            const prompt = this.openPrompts.get(agent.id)?.get(id);
+            this.openPrompts.get(agent.id)?.delete(id);
             // The user answered its prompt (Allow once or Reject; a policy that never asks rejects by itself), so what
             // it does next is new: a turn that then ends without a handback gets its own nudge, as after their words.
             const outcome = event.data?.outcome;
             if ((outcome === 'allowed-once' || outcome === 'rejected') && this.approvalPolicyOf(agent.session) === 'ask') {
                 const t = this.store.thread(projectId, threadId);
+                // On its roster line until it hands back, so the chat's next reply doesn't say it still waits (round-1 finding 5).
+                if (t && !t.resolved) {
+                    const what = prompt?.what ? `its command that ${prompt.what}` : prompt?.tool ? `its ${prompt.tool} call` : 'its prompt';
+                    this.store.putThread(projectId, threadId, { lastAnswer: { outcome: outcome === 'rejected' ? 'declined' : 'allowed', what: what.slice(0, 240), at: new Date().toISOString() } });
+                    this.log(`prompt-decided ${projectId}/${threadId} ${outcome === 'rejected' ? 'declined' : 'allowed'}`);
+                }
                 if (t?.nudged || t?.stalled) {
                     this.store.putThread(projectId, threadId, { nudged: undefined, stalled: undefined });
                     this.log(`prompt-answered ${projectId}/${threadId} ${outcome}`);
@@ -2308,6 +2318,12 @@ export class ProjectManager {
             return;
         }
         if (event.type !== 'approval/asked') return;
+        // What it asks about, kept for when the user answers: the plugin's own words for a call it held (noteAsked).
+        const prompts = this.openPrompts.get(agent.id) ?? new Map();
+        const held = typeof event.data?.callId === 'string' ? this.askedCalls.get(agent.id)?.get(event.data.callId) : undefined;
+        prompts.set(id, { what: held ? withoutCredentials(held).trim() : undefined, tool: typeof event.data?.toolName === 'string' ? event.data.toolName.slice(0, 60) : undefined });
+        for (const key of [...prompts.keys()].slice(0, -20)) prompts.delete(key);
+        this.openPrompts.set(agent.id, prompts);
         const notice = () => {
             void this.noticeApproval(projectId, threadId, agent, event.data).catch((error) => {
                 this.log(`error approval ${projectId}/${threadId} ${String(error?.message ?? error).slice(0, 200)}`);

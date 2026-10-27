@@ -1799,6 +1799,46 @@ test('a permission prompt tells the coordinator at once', async () => {
     assert.equal(cp.length, 1);
 });
 
+test('the chat\'s roster says how the user answered a thread\'s prompt, and what it was, until the thread hands back (round-1 finding 5)', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'projects-answer-'));
+    mkdirSync(join(work, 'build'));
+    writeFileSync(join(work, 'build', 'app.o'), 'object\n');
+    const { host } = setup({}, undefined, { presets: true, gateway: true }, { folder: work });
+    host.services.approval = { effectivePolicy: () => 'ask' };
+    await tick();
+    const coord = coordinatorOf(host);
+    await coord.ctx.call('thread_start', { ask: 'Clean up this folder.', title: 'Clean', brief: 'List what looks like junk.' });
+    const thread = threadOf(host, coord);
+    const line = () => coord.ctx.section().split('\n').find((l) => l.startsWith('- t1 '));
+    // The plugin holds its rm, and DSH puts the prompt in front of the user.
+    const held = await host.waterfall('tools/pre-execute', { name: 'bash', arguments: { command: 'rm -rf build/' }, agent: thread, callId: 'c1' }, () => Promise.resolve({ kind: 'allow' }));
+    assert.equal(held.kind, 'ask');
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a1', toolName: 'bash', callId: 'c1', reason: held.reason } });
+    await tick();
+    assert.match(line(), / · no handback yet$/, 'nothing answered yet');
+    // Before, the line said only that until the thread's handback, so the chat's reply said it still waited on the user.
+    thread.ctx.sessionEvent({ type: 'approval/decided', data: { id: 'a1', outcome: 'rejected' } });
+    await tick();
+    assert.match(line(), /^- t1 · "Clean" · \w+ · no handback yet · the user declined its command that deletes build\/ \(rm\) at \d{1,2}:\d\d [AP]M \(it was told to hand back needs_decision\)$/);
+    // DSH's own prompt (no call the plugin held) is named by its tool; an Allow says so, with no hand-back note.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a2', toolName: 'write', reason: 'outside the workspace' } });
+    thread.ctx.sessionEvent({ type: 'approval/decided', data: { id: 'a2', outcome: 'allowed-once' } });
+    await tick();
+    assert.match(line(), / · the user allowed its write call at \d{1,2}:\d\d [AP]M$/);
+    // A prompt DSH cancelled (the turn stopped) is no answer of the user's.
+    thread.ctx.sessionEvent({ type: 'approval/asked', data: { id: 'a3', toolName: 'bash' } });
+    thread.ctx.sessionEvent({ type: 'approval/decided', data: { id: 'a3', outcome: 'cancelled' } });
+    await tick();
+    assert.match(line(), / · the user allowed its write call at /);
+    // The handback after it is the news: the answer leaves the line.
+    thread.ctx.emitStatus(thread, 'running');
+    await new Promise((r) => setTimeout(r, 5));
+    assert.equal(await thread.ctx.call('thread_handback', { status: 'needs_decision', summary: 'The user declined deleting build/; nothing else to clean.' }), 'Handback delivered to the coordinator.');
+    await tick();
+    assert.doesNotMatch(line(), /the user (allowed|declined)/);
+    assert.match(line(), /last handback: needs_decision/);
+});
+
 test('with approvalNoticeSeconds set, a permission prompt tells the coordinator once left unanswered that long', async () => {
     const { host } = setup({ approvalNoticeSeconds: 0.02 });
     await tick();

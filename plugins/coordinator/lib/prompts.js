@@ -89,6 +89,12 @@ const BRIEF_CANT = 'The brief can\'t allow any of these; only the user\'s words 
 
 const HOME_NOTE = ' (the user\'s home folder: put new files in a new subfolder, and never move or delete anything you did not create)';
 
+/** A time of day as the user reads it: "2:59 PM". */
+function clockOf(iso) {
+    const at = new Date(iso);
+    return Number.isNaN(at.getTime()) ? 'an unknown time' : at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 /** One roster line per thread for the coordinator. */
 export function rosterLines(threads, liveStatus) {
     const rows = Object.entries(threads ?? {})
@@ -109,7 +115,11 @@ export function rosterLines(threads, liveStatus) {
             : '';
         // Said first, so it is never read as the thread's own stop: it stays stopped until the user resumes it.
         const lead = ended && t.lastEnding.text === STOPPED_BY_USER ? ' · stopped by the user (they can resume it)' : '';
-        return `- ${id} · "${t.title}" · ${status}${lead}${last}${direct}${ended && !lead ? ended : ''}${asked}${changed ? ` · ${changed}` : ''}`;
+        // How the user answered its last prompt, until it hands back after that (round-1 finding 5).
+        const answer = !t.resolved && t.lastAnswer?.at && typeof t.lastAnswer.what === 'string' && !(t.lastHandback && t.lastHandback.at > t.lastAnswer.at)
+            ? ` · the user ${t.lastAnswer.outcome === 'declined' ? 'declined' : 'allowed'} ${clip(t.lastAnswer.what, 240)} at ${clockOf(t.lastAnswer.at)}${t.lastAnswer.outcome === 'declined' ? ' (it was told to hand back needs_decision)' : ''}`
+            : '';
+        return `- ${id} · "${t.title}" · ${status}${lead}${last}${direct}${answer}${ended && !lead ? ended : ''}${asked}${changed ? ` · ${changed}` : ''}`;
     });
 }
 

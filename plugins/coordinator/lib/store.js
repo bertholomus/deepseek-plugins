@@ -14,6 +14,7 @@
  *       lastHandback?: { status, summary, at }, lastDirect?: { at, reply }, handbackTimes: [ms],
  *       busy?: true while a turn runs, seenTurn?: key of the last turn reviewed,
  *       lastEnding?: { text, kind, at }: that turn, when it failed or stopped without a handback (prompts.js describeEnding),
+ *       lastAnswer?: { outcome: 'allowed' | 'declined', what, at }: how the user answered its last prompt (its roster line until it hands back),
  *       changes?: [{ turn, seq, added, deleted, total, files: [{ path, added, deleted, binary?, oversized?, created? }], turns? }] (changes.js; a shell command's via shell.js) } },
  *     home?: id of the DSH workspace the chat and its threads work in,
  *     archived?: { at, via: 'window' | 'dsh' | 'start' | 'hand', sessions?: the chat's and its threads' sessions the archive
