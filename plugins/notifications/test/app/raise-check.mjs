@@ -148,10 +148,15 @@ const first = await waitFor(status, 30000, 500);
 if (!first) throw new Error('the notifications plugin does not answer: load plugins/notifications and test/e2e/caller, then restart');
 say(`the plugin in DSH Test's app: sender ${first.sender}, can bring the window up: ${JSON.stringify(first.raise)}`);
 
-// Three chats with no turns (no model is asked anything), in a throwaway folder.
-const workspace = mkdtempSync(join(tmpdir(), 'raise-check-'));
-const chat = (title) => JSON.parse(dshTest('bridge', 'POST', '/sessions', JSON.stringify({ workspacePath: workspace, title }))).sessionId;
-const chats = { hidden: chat('Raise hidden'), minimised: chat('Raise minimised'), behind: chat('Raise behind') };
+// Three chats with no turns (no model is asked anything), each in a throwaway folder named for its case. DSH lists
+// a chat with no turns as "New Session", so the folder's name, which DSH shows above the chat's message box, is what
+// tells the pictures apart.
+const folders = {};
+const chat = (file, title) => {
+    folders[file] = mkdtempSync(join(tmpdir(), `raise-${file}-`));
+    return JSON.parse(dshTest('bridge', 'POST', '/sessions', JSON.stringify({ workspacePath: folders[file], title }))).sessionId;
+};
+const chats = { hidden: chat('hidden', 'Raise hidden'), minimised: chat('minimised', 'Raise minimised'), behind: chat('behind', 'Raise behind') };
 
 // 3. A bare debugging connection to the app's window.
 const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
@@ -235,6 +240,10 @@ async function clickCase(name, file, title) {
     const logged = await waitFor(async () => logLines().filter((line) => line.includes(`#${entry?.id} clicked`)).at(-1), 5000, 200);
     say(`[${name}] the plugin's log: ${logged ? logged.replace(/^\S+ /, '') : '(no click line)'}`);
     if (up) {
+        // The sidebar lists every folder once; the open chat's folder shows a second time, above its message box.
+        const folder = basename(folders[file]);
+        const seen = await evaluate(`document.body.innerText.split(${JSON.stringify(folder)}).length - 1`).catch(() => undefined);
+        say(`[${name}] the page names the chat's folder ${folder} ${seen ?? '?'} time(s) (twice when its chat is open)`);
         const path = join(shots, `${n}-${file}.png`);
         say(`[${name}] ${(await picture(path)) ? `picture of the DSH Test window's page: ${path}` : 'no picture (the page drew no frame in 8 s)'}`);
     }
