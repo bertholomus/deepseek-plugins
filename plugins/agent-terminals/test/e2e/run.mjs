@@ -1156,6 +1156,7 @@ try {
         const pids = programPids(before.conversationId);
         const typed = before.deliveries.length;
         const since = Date.now();
+        const errorsBefore = errors.length;
         const switches = (test) => readLog().filter((e) => e.kind === 'switch' && e.at >= since && test(e));
         const nextSwitch = (state, after, what) => waitFor(async () => switches((e) => e.state === state && e.at > after)[0] ?? null, what, 45000, 300);
         const pickedUp = async (what) => {
@@ -1248,6 +1249,14 @@ try {
         back = await pickedUp('the agent picked up after enabled: true');
         check('enabled back to true: its agent is picked up in place, the same terminal and program, nothing typed twice', back.ok, json({ terminalId: back.back.terminalId, launches: back.back.launches, typed: back.back.deliveries.length }));
         check('DSH reports no failure for Agent Terminals through all of it', !/agent-terminals[^\n]*(fail|error)/i.test(run.logText()), run.logText().split('\n').filter((l) => /agent-terminals/.test(l)).slice(-5).join('\n'));
+        // The window's errors meanwhile: none from Agent Terminals' browser half. Another plugin's, while the test had it
+        // switched off (Session Watch), are said here and left out of the run's last check, which is about the rest.
+        const fresh = errors.slice(errorsBefore);
+        const ours = fresh.filter((text) => /agent-terminals|dshat/i.test(text));
+        check('no error from Agent Terminals\' browser half while parts of DSH were switched off and on', ours.length === 0, ours.join('\n'));
+        const others = fresh.filter((text) => !ours.includes(text) && /session-watch|suite-kit/i.test(text));
+        if (others.length) console.log(`# while Session Watch was switched off, the window logged: ${others.slice(0, 3).join(' | ')}`);
+        for (const text of others) errors.splice(errors.indexOf(text), 1);
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-switched-off');
     });

@@ -465,5 +465,10 @@ terminal and a restart; a program that fails as it starts again after a
 restart (logged as not started, with what it printed); three restarts in a
 row after a cut job (logged once); the log entries an earlier run left
 open; Forget closing an agent's messages; **Send again**; a wrong type
-for every setting, named with its value; and an edit of DSH's profile,
-said once at the start that has it.
+for every setting, named with its value; an edit of DSH's profile,
+said once at the start that has it; the same words sent twice (each needs
+its own transcript line, the oldest first, through a restart too); the
+listing note and its replies read by Session Watch's own `askIn` (none
+asks); the cause of each stop and start of following, from stand-ins of
+DSH's parts; and an agent that still runs under `enabled: false`, listed
+on the page, not followed.
