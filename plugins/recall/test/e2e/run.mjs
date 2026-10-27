@@ -412,7 +412,8 @@ try {
                 bytes += text.length + 1;
             }
         };
-        fill(2.5 * 1048576);
+        // Its middle, between its first 1 MB and its last 3 MB, is the part that is not read.
+        fill(1.5 * 1048576);
         lines.push('', '## Middle run', 'The chinchilla build stalled.', '');
         fill(5 * 1048576);
         const newestLine = lines.length + 2;
@@ -530,7 +531,8 @@ try {
             const line = (await page.locator('[data-recall-index-line]').textContent()) ?? '';
             const held = (await pageState()).index.totals;
             const sections = held.sections ?? 0;
-            const heldWords = `${held.turns - sections} turn${held.turns - sections === 1 ? '' : 's'}${sections ? ` and ${sections} note section${sections === 1 ? '' : 's'}` : ''}`;
+            const many = (n) => n.toLocaleString('en-US');
+            const heldWords = `${many(held.turns - sections)} turn${held.turns - sections === 1 ? '' : 's'}${sections ? ` and ${many(sections)} note section${sections === 1 ? '' : 's'}` : ''}`;
             check('the header says what Recall holds, turns and note sections apart, and that it is up to date',
                 sections > 0 && line === `Recall has ${heldWords} from ${held.files} sessions and files. Up to date.`, `${line} | ${json(held)}`);
             await page.locator('[data-recall-result]').first().waitFor({ state: 'visible', timeout: 15000 });
