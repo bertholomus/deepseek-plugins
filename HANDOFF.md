@@ -4,11 +4,12 @@ _For the two accounts building these plugins only (see AGENTS.md). A session run
 
 # GOAL95 PASS 2: one more pass for every plugin but Reasoning Pill (branches goal95/*)
 
-Updated: 2026-10-26 6:44 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Updated: 2026-10-26 6:50 PM PDT by A (gmail), thread "Goal 9.5 builder"
 Goal: `briefs/GOAL-95-PASS2.md` (Albert 6:35 PM PDT via MiniMe: "Promote reasoning pill - Give all other plugins one more pass"). Reasoning Pill is done (MiniMe merged d24800a into claude/split-plugins as 909ac14). The other 19: one builder each from the RESULT commit (fix the top remaining finding plus the rest of the latest scorecard), one hand-over, then ONE fresh judge; no second fix round. Then `review/GOAL95-PASS2.md` (score before, score after, commit, branch, verdict, top remaining finding), commit, push, stop. Nothing deploys to live.
 
 ## Doing now (PASS 2)
 - 6:44 PM PDT: plan in `~/Projects/goal95/PASS2-PLAN.md` (start commits, latest scorecards, judge rounds and instance names); `~/Projects/goal95/briefs/RULES.md` has a PASS 2 section (live pid 64099 started 15:35:11; the gateway model check). Builders start now, hand over by 9:30 PM PDT; agent ids in `~/Projects/goal95/agents.txt`.
+- 6:50 PM PDT: all 19 pass-2 builders running (ids in `~/Projects/goal95/agents.txt`, "pass2-builder" lines; hand over by 9:30 PM PDT). Judges start per hand-over with `~/Projects/goal95/bin/pass2-assign.py <slug> <sha>` and the short prompt in PASS2-PLAN.md ("How to start a pass-2 judge").
 
 ## Next steps (PASS 2, in order)
 1. As each builder hands over (`COMMIT <sha>`): check the push, then start its judge from `~/Projects/goal95/briefs/judge-prompt-template.md` with the round and instance in PASS2-PLAN.md (Discord and dsh-site: no instance, throwaway homes, scorecards stay local).
