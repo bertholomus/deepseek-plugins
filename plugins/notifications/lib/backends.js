@@ -99,8 +99,9 @@ export function cliCommand(platform, { title, body }, icon) {
 
 /**
  * Send one notification through the platform's command. Fire and forget:
- * a stuck child is killed after timeoutMs, a missing command is reported
- * once through onError, and neither throws into the caller.
+ * a stuck child is killed after timeoutMs, and a missing command, a
+ * non-zero exit or the kill is reported once through onError; none of it
+ * throws into the caller.
  * @param {NodeJS.Platform} platform
  * @param {{title: string, body: string}} notification
  * @param {object} [options]
@@ -114,11 +115,21 @@ export function cliSend(platform, notification, { spawnImpl = spawn, timeoutMs =
         const child = spawnImpl(cmd.command, cmd.args, { stdio: 'ignore' });
         const timer = setTimeout(() => child.kill(), timeoutMs);
         timer.unref?.();
+        let reported = false;
+        const report = (error) => {
+            if (reported) return;
+            reported = true;
+            onError(error);
+        };
         child.on('error', (error) => {
             clearTimeout(timer);
-            onError(error);
+            report(error);
         });
-        child.on('close', () => clearTimeout(timer));
+        child.on('close', (code, signal) => {
+            clearTimeout(timer);
+            if (signal) report(new Error(`${cmd.command} was stopped after ${Math.round(timeoutMs / 1000)} s`));
+            else if (typeof code === 'number' && code !== 0) report(new Error(`${cmd.command} exited with code ${code}`));
+        });
         return true;
     } catch (error) {
         onError(error);
