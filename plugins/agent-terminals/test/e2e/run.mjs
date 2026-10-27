@@ -33,7 +33,9 @@
  *   as started and gives its session no turn; a path that is not a program
  *   is refused before anything is made.
  * - The window: the Coding agents page (counts, agents, messages, the start
- *   form with the programs found here), light and dark and narrow; the
+ *   form with the programs found here), light and dark and narrow; with a
+ *   Wallpaper stand-in over a light and a dark picture at tint .2 (every
+ *   card on tint + .2, the small text measured) and with Wallpaper off; the
  *   session row's mark, hover line and menu item beside the neighbour's; a
  *   terminal tab beside the session that shows the agent's screen.
  * - A tool call waiting in the terminal: waiting on you on the page, the
@@ -52,6 +54,11 @@
  * - A wrong setting saved while DSH runs: the agents keep running, read
  *   "running, not followed" with no buttons that would act, and are picked
  *   up where they are once it is fixed.
+ * - Switched off while DSH runs, as Plugins writes it: Session Watch, then
+ *   Agent Terminals itself (its mark leaves the row, the neighbour's stays),
+ *   then `enabled: false` (its cards still show, not followed, and open the
+ *   terminal): the same program keeps running, What happened names each
+ *   cause both ways, and each pick-up types nothing twice.
  * - A DSH restart in the middle of a job and of an approval prompt: the
  *   agents come back idle (the job said cut off), the messages held for
  *   them go in once and are proven, and no question is left in Decisions.
@@ -63,7 +70,8 @@
  * - A DSH restart: every running agent starts again under the same terminal
  *   id and resumes its conversation; a program that cannot resume is not
  *   started again, and says why; the window's tab shows the resumed agent;
- *   a restart inside a session's first turn leaves that entry settled.
+ *   a restart inside a session's first turn leaves that entry settled;
+ *   What happened logs it as DSH quitting, then starting it.
  * - Two restarts in a row after a job was cut: the cut is logged once.
  * - Typing through DSH's terminal input (`typing: attached`): on DSH 0.2.0
  *   a message goes in and the tab gets its keyboard back; on later builds,
@@ -354,11 +362,18 @@ const wallpaperOn = (page, picture, tint) => page.evaluate(({ picture, tint }) =
         style.textContent = 'body.wp-on #root{position:relative;z-index:1}'
             + 'body.wp-on [class*="_frame"],body.wp-on [class*="_centerCol"],body.wp-on [class*="_sidebarCol"],body.wp-on [class*="_rightbarCol"],'
             + 'body.wp-on [data-slot="main"]{background:transparent!important;border:0!important;box-shadow:none!important}'
-            + glass('[data-slot="sidebar"] > div') + glass('[data-slot="rightbar.session"] > [class*="_panel"]');
+            + glass('[data-slot="sidebar"] > div') + glass('[data-slot="rightbar.session"] > [class*="_panel"]')
+            // DSH's fades into its opaque grounds (the session list's foot, the composer's seat), which Wallpaper takes away.
+            + 'body.wp-on [data-slot="sidebar.workspaces"] [class*="_fade"],body.wp-on [data-slot="main.conversation"] [class*="_composerSeat"]{background:none!important}';
         document.head.append(style);
     }
     wall.style.cssText = `position:fixed;inset:0;z-index:0;background:${picture}`;
 }, { picture, tint });
+/** The page at its top, with nothing focused that would scroll it back. */
+const toTop = (page) => page.locator('[data-agent-terminals-page]').evaluate((el) => {
+    document.activeElement?.blur?.();
+    for (let node = el; node; node = node.parentElement) if (node.scrollHeight > node.clientHeight) node.scrollTop = 0;
+});
 const wallpaperOff = (page) => page.evaluate(() => {
     document.body.classList.remove('wp-on');
     document.body.style.removeProperty('--wp-blur');
@@ -735,12 +750,12 @@ try {
         await step('Wallpaper on and off (a stand-in, in this window only): its page over a light and a dark picture at a low tint, light and dark; its cards on the reading glass, the small text measured', async () => {
             const page = await openAgents();
             await cardOf(page, agents.app).waitFor({ state: 'visible', timeout: 15000 });
-            await page.locator('[data-agent-terminals-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             const off = {};
             for (const mode of ['light', 'dark']) {
                 await setDark(page, mode === 'dark');
                 await page.waitForTimeout(300);
                 off[mode] = await smallTextContrast(page);
+                await toTop(page);
                 await shot(page, shots, `wallpaper-off-${mode}`);
             }
             // At a low tint (.2): pictures over each picture, light and dark. Every card stands on tint + .2 (DESIGN.md:
@@ -756,6 +771,7 @@ try {
                     for (const picture of ['light', 'dark']) {
                         await wallpaperOn(page, PICTURES[picture], 0.2);
                         await page.waitForTimeout(300);
+                        await toTop(page);
                         await shot(page, shots, `wallpaper-${mode}-on-${picture}-picture`);
                     }
                     glass[mode] = await cardGlass(page);

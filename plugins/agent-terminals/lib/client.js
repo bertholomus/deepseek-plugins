@@ -1208,7 +1208,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-textarea::placeholder,.${P}-input::placeholder{color:var(--${P}-text-2)}`,
             `.${P}-hint{font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             `.${P}-details{margin-top:8px}`,
-            `.${P}-details>summary{cursor:pointer;font:var(--dsw-font-xs-13);color:var(--${P}-link);width:max-content;max-width:100%;border-radius:var(--dsw-radius-xs)}`,
+            // A disclosure in small type: the page's secondary text colour, which keeps 4.5:1 on Wallpaper's reading glass
+            // where the link colour does not (about 3.2:1 at a low tint over a mid picture in light).
+            `.${P}-details>summary{cursor:pointer;font:var(--dsw-font-xs-13);color:var(--${P}-text-2);width:max-content;max-width:100%;border-radius:var(--dsw-radius-xs)}`,
             `.${P}-details>summary:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
             `.${P}-msgs{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}`,
             `.${P}-msg{display:flex;align-items:flex-start;gap:8px;min-width:0}`,

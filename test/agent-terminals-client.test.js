@@ -94,6 +94,8 @@ test('browser half: loads as DSH loads it; its entry (order 4), page, row mark, 
     assert.equal(heads[0].attributes['data-plugin'], 'dsh-plugin-agent-terminals');
     const css = heads[0].textContent;
     assert.match(css, /\.dshat-card\{/);
+    // Small disclosures (Its screen now) in the secondary text colour, which keeps 4.5:1 on the reading glass; the link colour did not.
+    assert.match(css, /\.dshat-details>summary\{[^}]*color:var\(--dshat-text-2\)/);
     assert.match(css, /body\.wp-still/);
     assert.match(css, /prefers-reduced-motion/);
     // The session list: one mark in DSH's seat, giving way to a mark drawn before it there; every rule there ends in the plugin's own mark.
