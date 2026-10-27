@@ -2773,6 +2773,14 @@ try {
         await showDay(before);
         const runs = {};
         const hard = {};
+        // Secondary text deepens on thinner glass: the small month's weekday letters at the default tint and at .3.
+        const letters = async (tint) => {
+            await wallpaperOn(page, '#808080', tint);
+            const color = await page.evaluate(() => getComputedStyle(document.querySelector('[data-calendar-side] .dshcal-mini-wd')).color);
+            await wallpaperOff(page);
+            return color;
+        };
+        const deepens = { at55: await letters('0.55'), at30: await letters('0.3') };
         for (const dark of [false, true]) {
             await setDark(page, dark);
             for (const view of ['week', 'month', 'agenda']) {
@@ -2805,8 +2813,8 @@ try {
         // Over the grey wall the glass shows it: some text sits on glass all the way down to the wall. Week shows an ended event.
         const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (/grey wall/.test(k) && (!r.wall || r.glass < 10))
             || (/week$/.test(k) && !(r.past > 0)));
-        check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, events that have ended too, the side column too, without a wallpaper and over a mid-grey one at the default tint and at tint .3',
-            Boolean(ended) && bad.length === 0, JSON.stringify(Object.fromEntries(bad)));
+        check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, events that have ended too, the side column too, without a wallpaper and over a mid-grey one at the default tint and at tint .3, where secondary text is deeper',
+            Boolean(ended) && bad.length === 0 && deepens.at55 !== deepens.at30 && /^(rgb|color\()/.test(deepens.at30), JSON.stringify({ bad: Object.fromEntries(bad), deepens }));
     });
 
     // 20. A narrow window.
