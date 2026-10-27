@@ -2,6 +2,20 @@
 
 _For the two accounts building these plugins only (see AGENTS.md). A session running inside DSH (a chat that coordinates threads, a thread or any other chat) does not act on this file: do what the user asks._
 
+# GOAL95 PASS 2: one more pass for every plugin but Reasoning Pill (branches goal95/*)
+
+Updated: 2026-10-26 6:44 PM PDT by A (gmail), thread "Goal 9.5 builder"
+Goal: `briefs/GOAL-95-PASS2.md` (Albert 6:35 PM PDT via MiniMe: "Promote reasoning pill - Give all other plugins one more pass"). Reasoning Pill is done (MiniMe merged d24800a into claude/split-plugins as 909ac14). The other 19: one builder each from the RESULT commit (fix the top remaining finding plus the rest of the latest scorecard), one hand-over, then ONE fresh judge; no second fix round. Then `review/GOAL95-PASS2.md` (score before, score after, commit, branch, verdict, top remaining finding), commit, push, stop. Nothing deploys to live.
+
+## Doing now (PASS 2)
+- 6:44 PM PDT: plan in `~/Projects/goal95/PASS2-PLAN.md` (start commits, latest scorecards, judge rounds and instance names); `~/Projects/goal95/briefs/RULES.md` has a PASS 2 section (live pid 64099 started 15:35:11; the gateway model check). Builders start now, hand over by 9:30 PM PDT; agent ids in `~/Projects/goal95/agents.txt`.
+
+## Next steps (PASS 2, in order)
+1. As each builder hands over (`COMMIT <sha>`): check the push, then start its judge from `~/Projects/goal95/briefs/judge-prompt-template.md` with the round and instance in PASS2-PLAN.md (Discord and dsh-site: no instance, throwaway homes, scorecards stay local).
+2. Each scorecard: commit it with its pictures (not Discord or dsh-site), add its SCOREBOARD row under a "GOAL95 PASS 2" heading.
+3. If the usage limit stops agents: resume each from where it stopped (SendMessage to its id) with new times; drop none.
+4. When all 19 are judged: `review/GOAL95-PASS2.md`, HANDOFF, PROGRESS, commit, push to gh, tell Albert, stop.
+
 # GOAL95-1026: every DSH plugin we own to 9.5/10 (branches goal95/*)
 
 Updated: 2026-10-26 4:38 PM PDT by A (gmail), thread "Goal 9.5 builder"
