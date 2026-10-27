@@ -94,8 +94,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
-import { DshRun, checks, dismissNotices, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
+import { DshRun, checks, dismissNotices, dshBin, findPlaywright, modeOf, openWindow as harnessWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
 import { startFakeModel } from '../../../../test/e2e/fake-model.mjs';
+
+/**
+ * A window as the harness opens it, with 30 s for each step instead of 15: on a busy computer a picture
+ * taken just after the window changed size can wait longer than 15 s for the page to draw.
+ */
+async function openWindow(run, pw, options) {
+    const window = await harnessWindow(run, pw, options);
+    window.page.setDefaultTimeout(30000);
+    return window;
+}
 
 const bin = dshBin();
 if (!bin) {
@@ -560,7 +570,7 @@ try {
         check('a decision line keeps __init__.py whole in its question, its pick and its lines', cards.entry.question === 'Should I rename __init__.py to main.py?' && cards.entry.recommendation === 'keep __init__.py' && cards.entry.context === 'Two entry points exist.', json(cards.entry));
         cards.rules = await waitCard(ids.rules, 'reply');
         const rulesCards = (await state()).waiting.filter((c) => c.sessionId === ids.rules);
-        check('a DECISION NEEDED line quoted in a code block is no card: the card is the question after it', rulesCards.length === 1 && cards.rules.question === 'Should I add it to the README too?' && !cards.rules.recommendation, json(rulesCards));
+        check('a DECISION NEEDED line quoted in a code block is no card and gives no pick: the card is the question after it', rulesCards.length === 1 && cards.rules.question === 'Should I add it to the README too?' && !cards.rules.recommendation, json(rulesCards));
         const mine = [cards.parser, cards.version, cards.entry, cards.rules];
         const told = await waitFor(async () => {
             const fresh = (await state()).history.filter((e) => e.kind === 'new' && mine.some((c) => c.id === e.cardId));

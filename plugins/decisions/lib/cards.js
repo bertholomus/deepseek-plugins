@@ -18,7 +18,7 @@
  * @module dsh-plugin-decisions/cards
  */
 import { clip, isRecord } from './shared/safe.js';
-import { HELD_SPAN, cutOff, dropMarks, holdCode, recommendationIn, unholdCode } from './shared/words.js';
+import { HELD_SPAN, cutOff, dropMarks, holdCode, recommendationIn, unfenced, unholdCode } from './shared/words.js';
 
 /** Every kind of card, most urgent first: approvals and questions hold a running turn. */
 export const KINDS = Object.freeze(['approval', 'question', 'ask', 'decision', 'blocked', 'thread', 'reply']);
@@ -129,7 +129,8 @@ function questionLine(lines, question) {
 export function contextOf(text, question) {
     if (typeof text !== 'string' || typeof question !== 'string') return '';
     const lines = text.replace(/\r/g, '').split('\n');
-    const found = questionLine(lines, question);
+    // The question is looked for where it was asked, outside fenced code; the lines before it keep a block's code.
+    const found = questionLine(unfenced(lines.join('\n')).split('\n'), question);
     if (!found) return '';
     const { at, from } = found;
     const out = [];
@@ -216,7 +217,8 @@ const pickTidy = (words) => words.replace(/\s+/g, ' ').replace(/[\s,:;—–-]+$
  * nothing is recommended.
  */
 export function pickIn(text) {
-    const { flat, spans } = unmark(plainLinks(text));
+    // A fenced code block is shown, not said: a "recommend:" quoted in one is no pick.
+    const { flat, spans } = unmark(plainLinks(unfenced(text)));
     for (const lead of flat.matchAll(PICK_LEAD)) {
         const start = lead.index + lead[0].length;
         const from = start + /^\s*/.exec(flat.slice(start))[0].length;
@@ -258,10 +260,13 @@ export function dashedPick(question) {
     return pick && asked ? { question: asked, recommendation: clip(pick, 300) } : undefined;
 }
 
-/** The raw lines of a reply up to its question's line (marks kept, for a pick's bold or code span), or ''. */
+/**
+ * The raw lines of a reply up to its question's line (marks kept, for a pick's bold or code span), or ''. A fenced
+ * code block's lines are left out (blank) before the reply is cut, so a block the cut starts inside is still one.
+ */
 export function linesToQuestion(text, question) {
     if (typeof text !== 'string' || typeof question !== 'string') return '';
-    const lines = text.replace(/\r/g, '').split('\n');
+    const lines = unfenced(text.replace(/\r/g, '')).split('\n');
     const found = questionLine(lines, question);
     return found ? lines.slice(Math.max(0, found.at - CONTEXT_LINES * 2), found.at + 1).join('\n') : '';
 }

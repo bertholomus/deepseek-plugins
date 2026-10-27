@@ -1382,6 +1382,27 @@ test('cards: a plain question with a dot in it and a decision line with dunders 
     assert.equal(pickIn('Recommendation: `--force-with-lease`, as it checks the remote first.'), '--force-with-lease');
 });
 
+test('cards: a fenced code block is shown, not said: a pick or a question quoted in one is not the card\'s, and its code stays among the lines before the question', () => {
+    const now = Date.UTC(2026, 9, 26, 21);
+    const card = (text) => replyCard({ sessionId: 'r', title: 'Rules note', status: 'idle', state: { ask: { ...askIn(text), turn: 2 }, end: { kind: 'completed', turn: 2, at: now - MIN } } }, { now, reply: { text, turn: 2 } });
+    // A rule quoted from a rules file, then a plain question (the real-DSH run's "Rules note").
+    const rules = card('I added the rule to AGENTS.md:\n```\nDECISION NEEDED: <question> — recommend: <pick>\n```\nShould I add it to the README too?');
+    assert.equal(rules.kind, 'reply');
+    assert.equal(rules.question, 'Should I add it to the README too?');
+    assert.equal(rules.recommendation, undefined, 'it read "<pick>" from the quoted rule');
+    assert.equal(rules.context, 'I added the rule to AGENTS.md:\nDECISION NEEDED: <question> — recommend: <pick>', 'the code is what the question is about');
+    // A pick said outside the block still counts.
+    assert.equal(card('I would recommend `main`.\n```sh\ngit push --force\n# recommend: --force\n```\nWhich branch should I push?').recommendation, 'main');
+    // A long block: the lines a pick is read from start inside it, and it is still a block.
+    const long = card(['Here is the script:', '```sh', ...Array.from({ length: 10 }, (_, i) => `echo step ${i}`), 'Recommend: rm -rf build', '```', 'Shall I run it?'].join('\n'));
+    assert.equal(long.question, 'Shall I run it?');
+    assert.equal(long.recommendation, undefined, 'it read "rm -rf build" from the block');
+    // The question is found where it was asked, not in a block after it that quotes it.
+    assert.equal(contextOf('Both pass.\nShould I merge?\n```\nShould I merge?\n```', 'Should I merge?'), 'Both pass.');
+    assert.equal(pickIn('```\nRecommendation: 9090\n```'), undefined);
+    assert.equal(pickIn('~~~\nI recommend 8080.\n~~~\nMy recommendation is 9090.'), '9090');
+});
+
 test('cards: a BLOCKED line is said as what the session is blocked on', () => {
     const now = Date.UTC(2026, 9, 17, 6);
     const row = { sessionId: 's', title: 'Deploy', status: 'idle', state: { ask: { kind: 'blocked', question: 'valid staging credentials (e.g., deploy token/SSH key) and the target staging environment details.', turn: 2 }, end: { kind: 'blocked', turn: 2, at: now - MIN } } };
