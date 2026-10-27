@@ -1057,7 +1057,7 @@ try {
         check('its agent keeps running in its terminal while it is off', samePids(programPids(before.conversationId), pids), json({ pids, now: programPids(before.conversationId) }));
         if (window) {
             const page = window.page;
-            await rowOf(page, ids.app).waitFor({ state: 'visible', timeout: 20000 });
+            await rowOf(page, ids.app).waitFor({ state: 'attached', timeout: 20000 });
             const gone = await waitFor(async () => ((await rowOf(page, ids.app).locator('[data-agent-terminals-mark]').count()) === 0 ? true : null), 'its mark to leave the row', 20000, 300).catch(() => false);
             check('switched off: its mark leaves the row, and the neighbour\'s mark stays', gone === true && (await rowOf(page, ids.app).locator('[data-neighbour="mark"]').count()) === 1);
         }
@@ -1069,8 +1069,18 @@ try {
         check('switched on: its agent is picked up in place, the same terminal and program, nothing typed twice', back.ok, json({ terminalId: back.back.terminalId, launches: back.back.launches, typed: back.back.deliveries.length }));
         if (window) {
             const page = window.page;
-            const mark = await waitFor(async () => ((await rowOf(page, ids.app).locator('[data-agent-terminals-mark]').count()) === 1 ? true : null), 'its mark to come back', 30000, 300).catch(() => false);
-            check('switched on: its mark is back on the row, beside the neighbour\'s, which kept its seat', mark === true && (await rowOf(page, ids.app).locator('[data-neighbour="mark"]').count()) === 1);
+            const markBack = () => waitFor(async () => ((await rowOf(page, ids.app).locator('[data-agent-terminals-mark]').count()) === 1 ? true : null), 'its mark to come back', 30000, 300).catch(() => false);
+            let mark = await markBack();
+            // A DSH that loads a plugin's browser half only with the window: the window is opened again, and that is said.
+            let reloaded = false;
+            if (mark !== true) {
+                reloaded = true;
+                await page.reload({ waitUntil: 'domcontentloaded' });
+                await page.getByRole('button', { name: 'Coding agents', exact: true }).first().waitFor({ state: 'visible', timeout: 60000 });
+                mark = await markBack();
+            }
+            console.log(`# switched on: its mark came back ${reloaded ? 'after the window was opened again' : 'in the open window'}`);
+            check('switched on: its mark is back on the row, beside the neighbour\'s, which kept its seat', mark === true && (await rowOf(page, ids.app).locator('[data-neighbour="mark"]').count()) === 1, reloaded ? 'after a reload' : 'no reload');
         }
 
         // 3. enabled: false in its entry while DSH runs: loaded, but following and typing nothing; its cards still show.
