@@ -33,10 +33,15 @@ import { asksForWork, isDecision } from '../plugins/canon/lib/text.js';
  * The dev set's figures as reached (README, "How well it picks notes"):
  * held so a change that makes them worse fails here.
  */
-const DEV_REACHED = Object.freeze({ first: 603, inBlock: 618, extra: 159, noBlock: 537, coding: 432 });
+const DEV_REACHED = Object.freeze({ first: 605, inBlock: 620, extra: 156, noBlock: 537, coding: 432 });
 
-/** Round 5's probe sets' figures as reached (probes.json, tuned on): held like the dev set's. */
-const PROBES_REACHED = Object.freeze({ first: 71, inBlock: 76, extra: 30, noBlock: 113, coding: 101 });
+/**
+ * Round 5's probe sets' figures as reached (probes.json, tuned on): held like the dev set's.
+ * Extra 31, one more than round 5's 30: reading "bounce" as restart (pass 2) brings Gateway ports
+ * in after Rotating TLS certificates for w1-096 ("do i need to bounce the gateway"), while the
+ * dev set gains two first notes and loses three notes that do not answer.
+ */
+const PROBES_REACHED = Object.freeze({ first: 71, inBlock: 76, extra: 31, noBlock: 113, coding: 101 });
 
 /**
  * The first hold-out's figures as measured with round 4's rules (53646c8,

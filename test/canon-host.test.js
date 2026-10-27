@@ -971,6 +971,30 @@ test('search: a decision that says how to save it is about its subject, so it ge
     assert.deepEqual(vault.search('We agreed every new endpoint gets an OpenAPI example before review. Save that as a draft decision note with canon_capture, and do not edit any files.', { folder: '/work/Projects/lantern-api' }).results, []);
 });
 
+test('search: everyday ops words read as the note\'s word: bounce a node, wipe a cluster, get it live, ship a build, who looks after (the round-4 judge\'s finding 3)', async () => {
+    const has = (text, word) => terms(text).includes(word);
+    assert.equal(has('bounce the node', 'restart'), true);
+    assert.equal(has('Is it ok to wipe the whole cluster?', 'flush'), true);
+    assert.equal(has('take a snapshot first', 'backup'), true);
+    assert.equal(has('how do I get a new version of this live?', 'deploy'), true);
+    assert.equal(has('push it live to prod', 'deploy'), true);
+    assert.equal(has('the go-live checklist', 'deploy'), true);
+    assert.equal(has('roll it out to everyone', 'deploy'), true);
+    assert.equal(has('ship a new build', 'deploy'), true);
+    assert.equal(has('who looks after quartz?', 'owner'), true);
+    assert.deepEqual(terms('get the new gateway build live today'), ['deploy', 'gateway', 'build', 'today'], 'the words between get and live are kept');
+    // "Live" that is no deploy: where something lives, a live setting; "ships" that says when.
+    for (const text of ['Routes live in routes.yaml', 'make the live config the default', 'get the configs from where they live', 'once v2 ships']) {
+        assert.equal(has(text, 'deploy'), false, text);
+    }
+    const vault = await readVault(vaultCopy());
+    assert.equal(vault.search('how do I get a new version of this live?', { folder: '/work/Projects/harbor-gateway' }).results[0]?.path, 'Projects/harbor-gateway/Deploying the gateway.md');
+    assert.equal(vault.search('How do I ship a new build of this service to production?', { folder: '/work/src/harbor-gateway' }).results[0]?.path, 'Projects/harbor-gateway/Deploying the gateway.md');
+    assert.equal(vault.search('Who looks after lantern-web?').results[0]?.path, 'People/Owners.md');
+    assert.equal(vault.search('What should I wait for before bouncing the next quartz node?').results[0]?.path, 'Runbooks/Restarting a quartz-cache node.md');
+    assert.equal(vault.search('Is it ok to wipe the whole quartz cluster?').results[0]?.path, 'Runbooks/Flushing the quartz cache.md');
+});
+
 test('search: a coding request says what a note is about or finds most of what it asks in it; a decision brings the note in force; one project\'s tag says whose a note is', async () => {
     const vault = await readVault(vaultCopy());
     const ask = (prompt, folder = '') => vault.search(prompt, { folder, limit: 3 });

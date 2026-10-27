@@ -116,15 +116,40 @@ export const SHORT_FORMS = Object.freeze(Object.fromEntries(Object.entries({
  */
 export const OTHER_WORDS = Object.freeze(Object.fromEntries(Object.entries({
     roll: 'revert reverting reverted undo',
-    restart: 'reboot rebooting rebooted',
+    restart: 'reboot rebooting rebooted bounce bouncing bounced',
     memory: 'ram',
     expire: 'ttl ttls',
     hand: 'handoff handoffs',
-    backup: 'dump dumps',
+    backup: 'dump dumps snapshot snapshots',
     agent: 'runner runners',
     disk: 'storage',
     door: 'entrance',
+    owner: 'responsible maintainer maintainers',
+    flush: 'nuke nuking nuked wipe wiping wiped',
 }).flatMap(([word, others]) => others.split(' ').map((other) => [other, word]))));
+
+/**
+ * Phrases people use for what notes call by one word, read as that word
+ * (in notes and prompts alike): putting a new version out is deploying it
+ * ("go live", "get this live", "push it live", "roll it out", "a rollout",
+ * "ship a new build", "ship it to prod");
+ * "who looks after" a project is its owner. "Routes live in routes.yaml"
+ * is no deploy: "live" is one only after go, get, push, put or make, and
+ * only where it ends the phrase.
+ */
+const PHRASES = Object.freeze([
+    [/\b(?:go|goes|going|gone|went)[\s-]+live\b/gi, ' deploy '],
+    // "Get a new version of this live", "push it live to prod"; not "make the live config", not "get it from where they live".
+    [/\b(?:get|gets|getting|got|push|pushes|pushed|pushing|put|puts|putting|make|makes|making)\s+((?:(?!(?:where|which|who|when|while|if|because|we|you|they|i|he|she)\b)[\w.-]+\s+){0,6})live(?=\s*$|\s*[.?!,;:)]|\s+(?:to|on|in|for|before|after|without|with|by|so|and|but|or|then|once|this|next|today|tonight|tomorrow|now|again|soon|safely|quickly|please|asap|first)\b)/gi, (_, what) => ` deploy ${what} `],
+    [/\broll(?:s|ed|ing)?\s+(?:(?:it|this|that|them)\s+)?out\b/gi, ' deploy '],
+    [/\brollouts?\b/gi, ' deploy '],
+    // "Ship a new build", "ship this fix", "ship it to prod": deploying; "once v2 ships" says when, not how.
+    [/\bship(?:s|ped|ping)?(?=\s+(?:(?:a|an|the|this|that|it|our|my|new|next)\s+){0,3}(?:build|version|release|image|change|fix|update)s?\b|\s+(?:it|this|that|them)\s+(?:to|out|live)\b)/gi, 'deploy'],
+    [/\blooks?\s+after\b|\blooking\s+after\b/gi, ' owner '],
+]);
+
+/** A text with PHRASES read as their one word. */
+const phrased = (text) => PHRASES.reduce((t, [re, word]) => t.replace(re, word), text);
 
 /** Short forms and other words, each read as the note's word. */
 const READ_AS = Object.freeze({ ...SHORT_FORMS, ...OTHER_WORDS });
@@ -141,7 +166,7 @@ const CAMEL = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u;
 export function terms(text, { max = Infinity } = {}) {
     const out = [];
     if (typeof text !== 'string' || text === '') return out;
-    for (const raw of text.split(SPLIT)) {
+    for (const raw of phrased(text).split(SPLIT)) {
         if (raw === '') continue;
         const parts = raw.length > 3 && CAMEL.test(raw) ? [raw, ...raw.split(CAMEL)] : [raw];
         for (const part of parts) {
@@ -183,7 +208,7 @@ const BEFORE_THE_VAULT = new Set(['team']);
 export function wordsOf(text) {
     const out = new Map();
     if (typeof text !== 'string' || text === '') return out;
-    for (const raw of text.split(SPLIT)) {
+    for (const raw of phrased(text).split(SPLIT)) {
         if (raw === '') continue;
         const parts = raw.length > 3 && CAMEL.test(raw) ? [raw, ...raw.split(CAMEL)] : [raw];
         for (const part of parts) {
