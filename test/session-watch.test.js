@@ -2,9 +2,9 @@
 // index.js needs DSH's own packages, so its wiring is checked end to end in DSH Test (scripts/e2e.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, statSync } from 'node:fs';
+import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { INITIAL, KEY, STATE_VERSION, TEXT_MAX, applyEvent, endOf, foldAll, goalOf, parseState, sessionWatchProjection, todoSummary, viewOf } from '../plugins/session-watch/lib/fold.js';
+import { INITIAL, KEY, STATE_VERSION, TEXT_MAX, applyEvent, endOf, foldAll, goalOf, inboxOf, parseState, readIn, sessionWatchProjection, todoSummary, viewOf } from '../plugins/session-watch/lib/fold.js';
 import { SessionWatch } from '../plugins/session-watch/lib/watch.js';
 import { Hub } from '../plugins/session-watch/lib/shared/hub.js';
 import { DEFAULTS, LIVE_SETTINGS, checkConfig, usableSettings } from '../plugins/session-watch/lib/config.js';
@@ -200,20 +200,22 @@ test('fold: turn ends, goals and todo lists in the watcher\'s words', () => {
 
 // ── The watcher over a stand-in DSH ───────────────────────────────────
 
+let notes = 0;
 function setup({ config = {}, dir = tempDir('session-watch'), clock = manualClock(), dsh = fakeDsh({ now: clock.now }) } = {}) {
     const warnings = [];
     const infos = [];
     const logger = { info: (line) => infos.push(line), warn: (line) => warnings.push(line) };
     const hub = new Hub();
-    let n = 0;
     const watch = new SessionWatch({
         ctx: dsh.ctx,
         config: { deliveryTimeoutSeconds: 600, ...config },
         logger,
-        makeMessage: (body) => ({ id: `note-${++n}`, role: 'user', content: [{ type: 'text', text: body }], source: { kind: 'cordis-host-runner' } }),
+        // Message ids are unique across watchers, as DSH's are.
+        makeMessage: (body) => ({ id: `note-${++notes}`, role: 'user', content: [{ type: 'text', text: body }], source: { kind: 'cordis-host-runner' } }),
         hub,
         dir,
         after: clock.after,
+        cancel: clock.clearTimer,
         now: clock.now,
     });
     dsh.attach(watch);
@@ -296,7 +298,9 @@ test('watcher: a delivery is queued, then delivered when the session reads it in
     assert.equal(msg.data.id, delivery.id);
     assert.equal(msg.data.source.kind, 'cordis-host-runner');
     assert.deepEqual(events.filter((event) => event.type === 'delivery').map((event) => event.delivery.state), ['queued', 'delivered']);
-    assert.deepEqual(Object.keys(delivery.toJSON()).sort(), ['at', 'deliveredAt', 'id', 'queuedAt', 'sessionId', 'state', 'turn']);
+    assert.deepEqual(Object.keys(delivery.toJSON()).sort(), ['at', 'deliveredAt', 'id', 'mode', 'preview', 'queuedAt', 'sessionId', 'state', 'turn']);
+    assert.equal(delivery.toJSON().mode, 'queue');
+    assert.equal(delivery.toJSON().preview, 'Carry on.');
     // Each side effect is logged: the message put in, and the turn that read it.
     assert.deepEqual(infos.filter((line) => line.includes(delivery.id)), [
         `session-watch: a message ${delivery.id} went into s (its queue); a turn has 10 minutes to read it`,
@@ -336,7 +340,7 @@ test('watcher: a delivery that cannot happen says why, and one never read times 
     await clock.advance(31000);
     assert.equal(stuck.state, 'failed');
     assert.equal(stuck.reason, 'no turn read it within 30 seconds, so Session Watch took it back out of the session\'s queue');
-    assert.equal(watch.deliveries.size, 0);
+    assert.equal(watch.onTheWay.size, 0);
     // Taken back for real: the queue no longer holds it, the log records the removal, and the next turn never reads it.
     assert.equal(dsh.agents.get('s').inbox.some((m) => m.id === stuck.id), false);
     assert.equal(dsh.sessions.get('s').events.at(-1).type, 'agent/inbox/spliced');
@@ -377,6 +381,175 @@ test('watcher: a queued message DSH lets go unread fails the delivery', async ()
     watch.onDiscarded(dsh.agents.get('s'), { id: delivery.id });
     assert.equal(delivery.state, 'failed');
     assert.equal(delivery.reason, 'the session let the message go without reading it');
+});
+
+test('fold: a session\'s queue from its log, as DSH folds it: one next-turn message per turn, what was claimed and what was let go', () => {
+    const msg = (id, text, kind = 'cordis-host-runner') => ({ id, role: 'user', content: [{ type: 'text', text }], source: { kind } });
+    const splice = (data, time = 5) => ({ type: 'agent/inbox/spliced', time, data });
+    const events = [
+        splice({ target: 'next-turn', start: 0, inserted: [msg('a', 'First   note'), msg('b', 'Second', 'user')] }, 10),
+        splice({ target: 'next-step', start: 0, inserted: [msg('c', 'Steer')] }, 11),
+        // A turn claims every next-step message and one next-turn message (no outcome); a removal is a let-go.
+        splice({ target: 'next-step', start: 0, removedCount: 1, inserted: [] }, 12),
+        splice({ target: 'next-turn', start: 0, removedCount: 1, inserted: [] }, 12),
+        splice({ target: 'next-turn', start: 0, inserted: [msg('d', 'x'.repeat(300))] }, 13),
+        splice({ target: 'next-turn', start: 1, removedCount: 1, inserted: [], outcome: 'canceled' }, 14),
+        // What DSH would refuse is skipped, never thrown.
+        splice({ target: 'next-turn', start: 9, removedCount: 1, inserted: [] }),
+        splice({ target: 'elsewhere', start: 0, inserted: [msg('e', 'nope')] }),
+        { type: 'agent/inbox/spliced', data: 'junk' },
+        null,
+    ];
+    const inbox = inboxOf(events);
+    assert.deepEqual(inbox['next-turn'].map((m) => m.id), ['d']);
+    assert.deepEqual(inbox['next-step'], []);
+    assert.equal(inbox['next-turn'][0].preview.length, 120, 'a preview is kept short');
+    assert.deepEqual(Object.fromEntries([...inbox.gone].map(([id, g]) => [id, g.how])), { c: 'claimed', a: 'claimed', b: 'canceled' });
+    assert.deepEqual(inboxOf(events.slice(0, 2))['next-turn'].map((m) => [m.id, m.kind, m.preview, m.at]), [['a', 'cordis-host-runner', 'First note', 10], ['b', 'user', 'Second', 10]]);
+    assert.deepEqual(inboxOf(undefined), { 'next-turn': [], 'next-step': [], gone: new Map() });
+    // Where a message was read: its index and its turn; none when no turn read it.
+    const log = [{ type: 'turn/start', data: { turn: 3 } }, { type: 'user/message', seq: 9, data: { id: 'a' } }, { type: 'turn/end', data: { turn: 3 } }, { type: 'user/message', data: { id: 'z' } }];
+    assert.deepEqual(readIn(log, 'a'), { index: 1, turn: 3, seq: 9 });
+    assert.deepEqual(readIn(log, 'z'), { index: 3 }, 'outside a turn: no turn named');
+    assert.equal(readIn(log, 'nope'), undefined);
+    assert.equal(readIn('junk', 'a'), undefined);
+});
+
+test('watcher: a message on its way when DSH quits is followed again after the start; a note sent then is read first, with it, in one turn', async () => {
+    const dir = tempDir('session-watch');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now, dshQueue: true });
+    const first = setup({ dir, clock, dsh });
+    dsh.write('s', 'Long migration');
+    const noteC = await first.watch.deliver('s', 'Note C: also check the docs.', { from: 'Decisions' });
+    assert.deepEqual([noteC.state, noteC.mode, noteC.from], ['queued', 'queue', 'Decisions'], 'queued behind the running turn');
+    first.watch.running.flush();
+    // DSH quits under the turn: the turn is cut off, and note C stays in the queue DSH saves with the session.
+    dsh.stop();
+    first.watch.close();
+    assert.equal(statSync(join(dir, 'deliveries.jsonl')).mode & 0o777, 0o600, 'the journal is private');
+    const second = setup({ dir, clock, dsh });
+    await settle();
+    await second.watch.restoring;
+    const restored = second.watch.deliveryOf(noteC.id);
+    assert.deepEqual([restored.state, restored.restored, restored.from, restored.preview], ['queued', true, 'Decisions', 'Note C: also check the docs.']);
+    assert.ok(second.events.some((e) => e.type === 'delivery' && e.delivery.id === noteC.id && e.delivery.state === 'queued' && e.delivery.restored === true), 'listeners hear it is followed again');
+    assert.ok(second.infos.some((line) => /following a message an earlier run left on its way/.test(line)));
+    // cutOffSessions names what still waits in the session's queue, and who sent it.
+    const [cut] = await second.watch.cutOffSessions({ withinMs: 0 });
+    assert.equal(cut.sessionId, 's');
+    assert.deepEqual(cut.queued.map((m) => [m.id, m.preview, m.from, m.kind]), [[noteC.id, 'Note C: also check the docs.', 'Decisions', 'cordis-host-runner']]);
+    // The carry-on goes in as Autopilot sends it (no mode): ahead of note C, into the turn that reads them both.
+    const carry = await second.watch.deliver('s', 'Turn 1 was cut off: DSH quit. Carry on.');
+    assert.deepEqual([carry.mode, carry.waiting], ['steer', 1]);
+    assert.ok(second.infos.some((line) => line.includes(`a message ${carry.id} went into s (its next turn, ahead of the message a stop left in its queue)`)), 'logged, with where it went');
+    assert.equal((await carry.done).state, 'delivered');
+    assert.equal(carry.turn, 2);
+    const after = second.watch.deliveryOf(noteC.id);
+    assert.deepEqual([after.state, after.turn], ['delivered', 2], 'note C is proven too, in the same turn');
+    const log = dsh.sessions.get('s').events;
+    const turn2 = log.slice(log.findIndex((e) => e.type === 'turn/start' && e.data.turn === 2));
+    assert.deepEqual(turn2.filter((e) => e.type === 'user/message').map((e) => e.data.id), [carry.id, noteC.id], 'the carry-on first, then note C');
+    assert.equal(log.some((e) => e.type === 'agent/inbox/spliced' && e.data.outcome === 'canceled'), false, 'nothing taken back');
+    await clock.advance(700000);
+    assert.deepEqual([second.watch.deliveryOf(carry.id).state, second.watch.deliveryOf(noteC.id).state], ['delivered', 'delivered'], 'no timer undoes either later');
+    // The journal keeps both through the next start, newest first.
+    second.watch.close();
+    const third = setup({ dir, clock, dsh });
+    assert.deepEqual(third.watch.deliveries({ sessionId: 's' }).map((d) => [d.id, d.state, d.turn]), [[carry.id, 'delivered', 2], [noteC.id, 'delivered', 2]]);
+    assert.equal(third.watch.deliveries({ sessionId: 'other' }).length, 0);
+    assert.equal(third.watch.deliveryOf('no-such-id'), undefined);
+});
+
+test('watcher: after a crash, each message left on its way is settled from its session\'s log, and listeners hear each one', async () => {
+    const dir = tempDir('session-watch');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now, dshQueue: true });
+    const first = setup({ dir, clock, dsh });
+    const sent = {};
+    for (const id of ['read', 'claimed', 'canceled', 'waiting']) {
+        dsh.write(id, 'Long work');
+        sent[id] = await first.watch.deliver(id, `For ${id}.`);
+    }
+    const quiet = { quiet: true };
+    const inserted = (id) => dsh.sessions.get(id).events.find((e) => e.type === 'agent/inbox/spliced' && e.data.inserted?.[0]?.id === sent[id].id).data.inserted[0];
+    // Before the crash, unheard by the watcher: a turn read one; a turn took one and was cut before reading it; one was let go.
+    for (const id of ['read', 'claimed']) {
+        dsh.commit(id, 'turn/end', { turn: 1, reason: { kind: 'completed' } }, quiet);
+        dsh.commit(id, 'turn/start', { turn: 2 }, quiet);
+        dsh.commit(id, 'agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] }, quiet);
+        dsh.sessions.get(id).queue['next-turn'].splice(0, 1);
+    }
+    dsh.commit('read', 'user/message', inserted('read'), quiet);
+    dsh.commit('canceled', 'agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [], outcome: 'canceled' }, quiet);
+    dsh.sessions.get('canceled').queue['next-turn'].splice(0, 1);
+    // And one the crash came before it went in at all.
+    appendFileSync(join(dir, 'deliveries.jsonl'), `${JSON.stringify({ add: { delivery: 'never-in', sessionId: 'waiting', state: 'pending', mode: 'queue', id: 'x-1', at: clock.now() } })}\n`);
+    dsh.stop({ crash: true });
+    const second = setup({ dir, clock, dsh });
+    await settle();
+    await second.watch.restoring;
+    const now = (id) => second.watch.deliveryOf(id);
+    assert.deepEqual([now(sent.read.id).state, now(sent.read.id).turn, now(sent.read.id).restored], ['delivered', 2, true], 'read before the crash: delivered, naming its turn');
+    assert.deepEqual([now(sent.claimed.id).state, now(sent.claimed.id).reason], ['failed', 'a turn took it from the session\'s queue, but DSH stopped before that turn read it']);
+    assert.deepEqual([now(sent.canceled.id).state, now(sent.canceled.id).reason], ['failed', 'it was taken out of the session\'s queue unread when DSH stopped']);
+    assert.deepEqual([now('never-in').state, now('never-in').reason], ['failed', 'DSH stopped before it reached the session\'s queue']);
+    assert.equal(now(sent.waiting.id).state, 'queued', 'still in its queue: followed');
+    const told = second.events.filter((e) => e.type === 'delivery').map((e) => `${e.delivery.id}:${e.delivery.state}`);
+    for (const id of [sent.read.id, sent.claimed.id, sent.canceled.id, 'never-in']) assert.ok(told.some((t) => t.startsWith(`${id}:`)), `${id} is told`);
+    assert.ok(second.warnings.some((line) => line.includes('was not delivered (followed again after a stop): it was taken out of the session\'s queue unread when DSH stopped')), 'each one is logged');
+    assert.equal(dsh.agents.size, 0, 'nothing was loaded to find out');
+    // Nobody runs the waiting one: past its wait it is reported, and where it still is.
+    await clock.advance(601000);
+    assert.deepEqual([now(sent.waiting.id).state, now(sent.waiting.id).reason], ['failed', 'no turn read it within 10 minutes; it is still in the session\'s queue, which the session reads when it runs again']);
+});
+
+test('watcher: switched off, it stops its timers, so nothing is taken back or reported later; on again, it follows the message to its proof', async () => {
+    const dir = tempDir('session-watch');
+    const clock = manualClock();
+    const dsh = fakeDsh({ now: clock.now, dshQueue: true });
+    const first = setup({ dir, clock, dsh, config: { deliveryTimeoutSeconds: 30 } });
+    dsh.write('s', 'Long job');
+    const note = await first.watch.deliver('s', 'When you can.');
+    assert.ok(clock.pending().length > 0);
+    first.watch.close();
+    assert.equal(clock.pending().length, 0, 'every timer stopped');
+    await clock.advance(31000);
+    assert.equal(note.state, 'queued', 'a watcher switched off reports nothing');
+    assert.ok(dsh.sessions.get('s').queue['next-turn'].some((m) => m.id === note.id), 'and takes nothing back');
+    // On again in the same DSH, the session still loaded and its turn still running: the new watcher follows it.
+    const second = setup({ dir, clock, dsh, config: { deliveryTimeoutSeconds: 30 } });
+    await settle();
+    await second.watch.restoring;
+    assert.equal(second.watch.deliveryOf(note.id).state, 'queued');
+    dsh.end('s');
+    await settle();
+    const proven = second.watch.deliveryOf(note.id);
+    assert.deepEqual([proven.state, proven.turn, proven.restored], ['delivered', 2, true]);
+});
+
+test('watcher: a question in DSH\'s question box is told to listeners and windows when it is asked and when it is answered', () => {
+    const { dsh, watch, events, hub } = setup();
+    dsh.write('s', 'Deploy it');
+    const from = events.length;
+    dsh.commit('s', 'tool/call', { name: 'bash', callId: 'b1' });
+    dsh.commit('s', 'tool/result', { message: { toolCallId: 'b1' } });
+    assert.equal(events.slice(from).filter((e) => e.type === 'state').length, 0, 'another tool changes no state word: nothing to tell');
+    const bumps = hub.snapshot().versions.sessions;
+    dsh.commit('s', 'tool/call', { name: 'ask_user_question', callId: 'q1', arguments: JSON.stringify({ questions: [{ question: 'Which environment?' }] }) });
+    const asked = events.filter((e) => e.type === 'state' && e.change === 'tool/call');
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].sessionId, 's');
+    assert.equal(asked[0].state.asking.question, 'Which environment?');
+    assert.equal(watch.rowOf('s').word, 'waiting for your answer');
+    assert.ok(hub.snapshot().versions.sessions > bumps, 'the windows are told');
+    dsh.commit('s', 'tool/call', { name: 'bash', callId: 'b2' });
+    assert.equal(events.filter((e) => e.type === 'state' && e.change === 'tool/call').length, 1, 'told once while it waits');
+    dsh.commit('s', 'tool/result', { message: { toolCallId: 'q1' } });
+    const answered = events.filter((e) => e.type === 'state' && e.change === 'tool/result');
+    assert.equal(answered.length, 1);
+    assert.equal(answered[0].state.asking, undefined);
+    assert.equal(watch.rowOf('s').word, 'running');
 });
 
 test('watcher: a graceful stop and a crash both leave sessions it finds as cut off, checked against their logs', async () => {
