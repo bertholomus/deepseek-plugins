@@ -57,3 +57,11 @@ Same scoring, raised bar (`~/Projects/goal95/briefs/JUDGE-GOAL95.md`). Result pe
 
 | Autopilot | 5 | 9 | 9.5 | 9 | 9.5 | 9 | 9.2 | 9.0 | f9f84e7 | NOT YET: live idle nudge at 90 s, carry-on notes after two forced restarts, a kill and an outside quit settled, Ask first, note-first retries through an outage, a goal restarted after an error; 17 of 17 delivered notes in the session logs, no trigger twice; npm test 843 pass, 0 fail; real-DSH 120/120 on every build run; all 16 round-4 findings fixed; but a failed carry-on turn in a session with no todos or goal is never retried and its row says only "failed" (`onTurnEnd`, `holdOf` in `lib/pilot.js`), and "happy to", "feel free", "let me know" anywhere in a reply's last six lines block the nudge, undocumented (`OFFERS` in `shared/host/words.js`) ([scorecard](autopilot-round-5.md)) |
 | Discord | 2 | 8.5 | 8 | 8 | 8.5 | 8.5 | 8.3 | 8.0 | d9df9aa | NOT YET (its last round): round 1's two safety findings are fixed and proven (the bot's tools only in its own sessions; every id and upload checked); unit 75/75, real-DSH 114/114 on three builds against a fake Discord; but catch-up still loses a person's message without a word in three cases, and `/model` reports success but changes nothing in a session DSH opened first; the rest is in the local scorecard `review/discord-round-2.md` (not committed) |
+
+## GOAL95 PASS 2
+
+Albert, 2026-10-26 6:35 PM PDT: "Promote reasoning pill - Give all other plugins one more pass": one fix round and one fresh judge per plugin (bar 9.5, none below 9).
+
+| Plugin | round | U | R | UX | T | D | mean | score | commit | verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| dsh-site | 3 | 9 | 9 | 9 | 9 | 9.5 | 9.1 | 9.0 | 48739d4 | NOT YET (pass 2): all eight round-2 findings fixed; unit 80/80, real-DSH 97/97 on three builds; its remaining findings are in the local scorecard `review/dsh-site-round-3.md` (not committed) |

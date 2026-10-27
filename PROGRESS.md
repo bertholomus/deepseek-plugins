@@ -155,3 +155,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 4:38 PM PDT: Discord round 2 (d9df9aa) judged 8.0 NOT YET, its last (both safety findings fixed; scorecard local). GOAL95 finished: final review/GOAL95-RESULT.md, one PASS (Reasoning Pill 9.5), 19 NOT YET. Live pid 64099, started 15:35:11; patch 54acaf91… (MiniMe runnerRev 38 only). Left: DSH Test g95-fleet-flip up for Albert; orphaned Fleet e2e DSH pid 97773 (its stop was refused here).
 - 2026-10-26 6:44 PM PDT: PASS 2 started (Albert 6:35 PM: "Promote reasoning pill - Give all other plugins one more pass"): brief in briefs/GOAL-95-PASS2.md, plan in ~/Projects/goal95/PASS2-PLAN.md; 19 builders start from their RESULT commits.
 - 2026-10-26 6:50 PM PDT: PASS 2: all 19 builders running; judge assignments by ~/Projects/goal95/bin/pass2-assign.py.
+- 2026-10-26 7:55 PM PDT: PASS 2 dsh-site (48739d4) judged 9.0 NOT YET (U 9, R 9, UX 9, T 9, D 9.5); scorecard local.
