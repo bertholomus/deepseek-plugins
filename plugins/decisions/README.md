@@ -47,7 +47,8 @@ seconds, and Decisions notifies you of it (the coordinator nudges such a
 thread to hand back at once, and the handback that follows is the card).
 A recommendation in any of them shows under *Recommended*, with
 **Go with the recommendation**, and a link in the question
-(`[Port pick](.dsh-thread/t1)`) reads as its words. A handback's pick
+(`[Port pick](.dsh-thread/t1)`, also one whose address holds brackets)
+reads as its words. A handback's pick
 counts wherever it is said (`Recommend 9090 for the status page.`,
 `9090 (recommended)`), and a handback that asks no question is headed
 *The thread needs your decision:* (or *The thread is blocked:*). An
@@ -62,7 +63,11 @@ after `windowHours`; the session still has it.
 
 **How a marker is read.** A `DECISION NEEDED:` or `BLOCKED:` marker counts
 at the start of any line of a reply, after a quote mark, a bullet, a list
-number or a heading mark (bold and code marks are dropped first). In the
+number or a heading mark (bold and code marks are dropped first; what a
+code span holds stays as written, so `__init__.py`, `my__var` and `a**b`
+keep their marks in the question, the pick and the lines, and a dash in
+one, as in `--force`, is not the dash before the pick; a marker line
+written whole in code counts as one). In the
 reply's last six lines it also counts right after the end of a sentence:
 "…so I cannot go on without valid credentials. BLOCKED: working staging
 credentials." A marker inside a sentence ("the request was BLOCKED: by
@@ -72,7 +77,13 @@ question after a dash (`— recommend: …`, or `— recommend …` without the
 colon), in a sentence of its own (`Recommend: …`, `I'd recommend …`, `My
 recommendation: …`), or on the next line (`Recommend: …`). A reply
 without a marker that ends by asking you something shows its last
-question, or else its last line that asks for your word. Its card also
+question, or else its last line that asks for your word. A sentence ends
+at a full stop, ! or ? followed by a space and a capital letter (or a
+quote, a bracket or a mark), never inside a code span: so a dot in a file
+name (`parser.py`), a version (`v1.2`, 2.0.0), an address, a number (2.5)
+or "e.g." ends nothing, and "I found two failing tests. Should I fix the
+bug in `parser.py` first?" gives *Should I fix the bug in parser.py
+first?*, in plain words like its lines. Its card also
 carries the reply's lines just before the question (up to four lines or
 400 characters, folded after two), so a list of choices comes with "Which
 one do you prefer?" and you can answer in place;
@@ -120,7 +131,9 @@ handed back, still first in the list, with a button to the session.
   is not there), and where else new cards go (with **Send a test**, or
   what is missing and where to change it). How a test went is said under
   its button (*Test message sent to …*, or *Not sent: …* as an alert),
-  and the focus stays on the button. When the last new card could not be
+  and the focus stays on the button; a success is said for a minute,
+  and neither is said again once the page has had to say why it cannot
+  work. When the last new card could not be
   sent there, it says so, with the reason and when.
 - **Waiting on you**: each card with its state word (*needs a decision*,
   *blocked*, *waiting for approval*, *asks you*, *asked you*), the session
@@ -145,7 +158,8 @@ handed back, still first in the list, with a button to the session.
   the webhook address set or removed included (named by its key, never
   the address).
 
-When nothing waits, the page says what would show there. When Decisions
+When nothing waits, the page says what would show there (only the kinds
+it lists). A card that has waited two days or more says so in days. When Decisions
 cannot work, the page says why and what to do, with a button to the place
 to do it: *Decisions needs Session Watch, which is not running*, *Decisions
 is not running*, or *Decisions is waiting for a setting to be fixed* (which
@@ -190,7 +204,9 @@ Command ("command")*.
 `cordis.patch.yml` (see Setup). DSH reads the file again when you save it
 and applies them then (Decisions starts again with them), and *What
 happened* says which settings changed (*Settings changed in DSH's profile:
-“Decisions on”*), and what is wrong when one is. A wrong value
+“The command”*), and what is wrong when one is; `enabled` is said as what
+it did (*Switched off in DSH's profile (enabled: false)*, *paused*, and
+*Switched on again in DSH's profile (enabled: true)*). A wrong value
 there never stops Decisions from starting: it lists and holds nothing, and
 its page says which setting is wrong, what it must be, and where to change
 it.
@@ -312,6 +328,7 @@ From the repository root:
 
 ```sh
 node --test test/decisions.test.js test/decisions-client.test.js   # the card rules, holds, inbox and mirror over a stand-in DSH; the page
+node --test test/suite-shared.test.js                              # the suite's shared words: how a marker and a question are read
 node scripts/e2e.mjs decisions                                     # real DSH in a throwaway home, on every DSH build here
 ```
 
@@ -334,7 +351,12 @@ a turn of its own, and its reply asks: the thread's card shows at once,
 and when the chat takes the handback after its turn it is the same card
 (same id, same wait, announced once), answered into the thread. A decision
 line written `— recommend …` without the colon, with lines before it,
-keeps its pick and its lines, also after the restart below.
+keeps its pick and its lines, also after the restart below. Questions in
+a coding model's shapes keep their words: a plain question with a file
+name in it, one with versions, and a decision line with `__init__.py` in
+code, on the card, in its lines, its pick and its log, and in the answer
+the session reads back (in words, and through Go with the
+recommendation).
 Notifications are covered by the unit tests over a stand-in DSH.
 
 In a browser, the real-DSH test drives the page and its settings in
@@ -356,7 +378,7 @@ Session Watch with a number in quotes (named in Decisions' header, whose
 button puts the cursor in Session Watch's field, flagged there; one
 **Save** fixes it), switches Session Watch off and on in Plugins and in the
 profile (while it is off, the open page asks no endpoint that is not
-there), checks `enabled: false`, sets it back to true in the profile while
-DSH runs (DSH applies the file, and the log says what changed), and checks
-the file modes. It reads the running DSH's fingerprint before and after and
+there), checks `enabled: false` (its log and its page say it was switched off),
+sets it back to true in the profile while DSH runs (DSH applies the file,
+and the log says it was switched on again), and checks the file modes. It reads the running DSH's fingerprint before and after and
 fails if it moved; pictures go to `.e2e/shots/decisions/<version>/`.

@@ -21,6 +21,10 @@
  *   recommendation, reach the session as its next message, read into a turn.
  *   A decision line's "— recommend X" without its colon splits off its
  *   pick, and the card keeps the lines before it (through the restart too).
+ *   Questions in a coding model's shapes keep their words: a plain question
+ *   with a dot in a file name or a version, and a decision line with
+ *   `__init__.py` in code, on the card, in its lines, its pick and its log,
+ *   and in the answer the session reads back.
  * - Dismiss and bring back.
  * - Approvals: Decisions holds the request and passes it on at once (the
  *   window's prompt shows too); Allow once from Decisions lets the tool run
@@ -70,8 +74,9 @@
  * - Session Watch off in the profile: Decisions loads but does nothing (DSH
  *   reports nothing waiting, and approvals go to DSH's own prompt alone),
  *   its page says what to do and then asks no endpoint that is not there;
- *   `enabled: false` too, then true again in the profile while DSH runs:
- *   applied, and its log says which setting changed.
+ *   `enabled: false` too (its log says it was switched off), then true
+ *   again in the profile while DSH runs: applied, and its log says it was
+ *   switched on again.
  * - Its folder is 700 and its files 600.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/decisions/test/e2e/run.mjs
@@ -526,6 +531,35 @@ try {
             && cards.report.context === 'The report has 14 pages.\nThe second review is tomorrow.', json(cards.report));
     });
 
+    // Questions in a coding model's shapes: a dot in a file name or a version, and dunders in code.
+    ids.parser = await run.newSession('E2E:say I found two failing tests in the parser suite. Should I fix the bug in `parser.py` first?', 'Parser fix');
+    ids.version = await run.newSession('E2E:say Both builds pass. Which do you want to release: `v1.2` or `v1.3`?', 'Version pick');
+    ids.entry = await run.newSession('E2E:say Two entry points exist.\\nDECISION NEEDED: Should I rename `__init__.py` to main.py? — recommend: keep `__init__.py`', 'Entry point');
+    await step('questions in a coding model\'s shapes keep their words: a dot in a file name or a version, and dunders in code', async () => {
+        cards.parser = await waitCard(ids.parser, 'reply');
+        check('a plain question with a file name in it is the whole question, with the sentence before it', cards.parser.question === 'Should I fix the bug in parser.py first?' && cards.parser.context === 'I found two failing tests in the parser suite.', json(cards.parser));
+        cards.version = await waitCard(ids.version, 'reply');
+        check('one with versions in it too', cards.version.question === 'Which do you want to release: v1.2 or v1.3?' && cards.version.context === 'Both builds pass.', json(cards.version));
+        cards.entry = await waitCard(ids.entry, 'decision');
+        check('a decision line keeps __init__.py whole in its question, its pick and its lines', cards.entry.question === 'Should I rename __init__.py to main.py?' && cards.entry.recommendation === 'keep __init__.py' && cards.entry.context === 'Two entry points exist.', json(cards.entry));
+        const mine = [cards.parser, cards.version, cards.entry];
+        const told = await waitFor(async () => {
+            const fresh = (await state()).history.filter((e) => e.kind === 'new' && mine.some((c) => c.id === e.cardId));
+            return fresh.length === 3 ? fresh : null;
+        }, 'the three new lines', 15000, 300).catch(() => []);
+        check('each is logged once, with its whole question', told.length === 3 && mine.every((c) => told.filter((e) => e.cardId === c.id && e.question === c.question).length === 1), json(told));
+        const words = await api('answer', { id: cards.parser.id, answer: { text: 'Yes, fix it first.' } });
+        check('answered in words, the session reads the whole question back', words.ok
+            && await waitFor(() => readIntoTurn(ids.parser, '[Decisions] The person answered your question (“Should I fix the bug in parser.py first?”):\n\nYes, fix it first.'), 'the answer in the parser session\'s log', 30000, 300).catch(() => false), json(words));
+        const went = await api('answer', { id: cards.entry.id, answer: { recommended: true } });
+        check('Go with the recommendation sends __init__.py whole', went.ok
+            && await waitFor(() => readIntoTurn(ids.entry, '[Decisions] The person answered your DECISION NEEDED line (“Should I rename __init__.py to main.py?”): go with your recommendation (keep __init__.py).'), 'the answer in the entry session\'s log', 30000, 300).catch(() => false), json(went));
+        await leaves(cards.parser.id).catch(() => {});
+        await leaves(cards.entry.id).catch(() => {});
+        await idle(ids.parser).catch(() => {});
+        await idle(ids.entry).catch(() => {});
+    });
+
     // ── The page ───────────────────────────────────────────────────────
     pw = await findPlaywright();
     if (!pw) {
@@ -553,6 +587,10 @@ try {
             const fold = before.getByRole('button', { name: 'Show less of the reply' });
             check('unfolded, all of them show, and the button keeps the keyboard', /3\. pare — rare$/.test((await before.locator('p').innerText()).trim()) && await fold.getAttribute('aria-expanded') === 'true' && await fold.evaluate((el) => el === document.activeElement), await before.innerText());
             check('a BLOCKED line says what the session is blocked on', /Blocked on: The staging database refuses my login\./.test(await blocked.innerText()), await blocked.innerText());
+            const version = page.locator(`[data-decisions-id="${cards.version.id}"]`);
+            const versionText = await version.innerText();
+            check('a question with versions in it reads whole on its card, with the sentence before it', versionText.includes('Which do you want to release: v1.2 or v1.3?') && versionText.includes('Both builds pass.') && !versionText.includes('`'), versionText);
+            await shot(page, shots, 'dotted-question-light', version);
             await shot(page, shots, 'decisions-light');
             await shot(page, shots, 'waiting-light', page.locator('[data-decisions-waiting]'));
             await setDark(page, true);
@@ -1025,6 +1063,8 @@ try {
         check('with enabled: false Decisions is loaded but idle', s.enabled === false && !s.problem && s.waiting.length === 0, json({ enabled: s.enabled, problem: s.problem }));
         const refused = await api('dismiss', { id: cards.release.id });
         check('its actions say it is switched off, and where to answer instead', refused.ok === false && /switched off in DSH's profile \(enabled: false\)/.test(refused.error?.message ?? ''), json(refused));
+        const offLine = s.history.find((e) => e.kind === 'settings');
+        check('its log says it was switched off, never that it started again', /^Switched off in DSH's profile \(enabled: false\)/.test(offLine?.text ?? '') && offLine.why === 'Decisions lists and holds nothing until enabled is true again; DSH\'s own cards work as always.' && offLine.state === 'paused', json(offLine));
         if (!pw) return;
         window = await openWindow(run, pw, { entry: 'Decisions' });
         const { page } = window;
@@ -1033,6 +1073,8 @@ try {
         await header.waitFor({ state: 'visible', timeout: 20000 });
         const words = (await header.innerText()).replace(/\n+/g, ' ');
         check('the page says it lists nothing, and how to change that', /Decisions is switched off in DSH's profile \(enabled: false in its entry in cordis\.patch\.yml\), so it lists nothing and holds nothing\. To use it, set enabled to true there; DSH applies it when you save the file\./.test(words), words);
+        const newest = (await page.locator('[data-decisions-history] [data-decisions-entry]').first().innerText()).replace(/\n+/g, ' ');
+        check('What happened on the page says so too, in its newest row', /Switched off in DSH's profile \(enabled: false\)/.test(newest) && /paused/.test(newest) && !/started again/.test(newest), newest);
         await shot(page, shots, 'disabled-light');
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-disabled');
@@ -1050,7 +1092,7 @@ try {
         }, 'Decisions to start again with the saved file', 45000, 500).catch(() => undefined);
         const line = back?.history.find((e) => e.kind === 'settings');
         check('DSH applies the saved file without a restart: Decisions works again', Boolean(back) && run.child?.pid === pid && back.waiting.length > 0, json({ enabled: back?.enabled, waiting: back?.waiting.length }));
-        check('its log says the profile changed “Decisions on”', line?.text === 'Settings changed in DSH\'s profile: “Decisions on”' && line.why === 'Decisions started again with them.', json(line));
+        check('its log says it was switched on again', line?.text === 'Switched on again in DSH\'s profile (enabled: true)' && line.why === 'Decisions lists and holds again.' && line.state === 'done', json(line));
         if (window?.page) {
             const { page } = window;
             await page.locator('[data-decisions-header="on"]').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
