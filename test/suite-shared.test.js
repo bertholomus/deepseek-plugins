@@ -546,6 +546,31 @@ test('kit: state tags write their words at 4.5:1 or more on DSH\'s tag fill, in 
     assert.ok(contrast(rgb(LABELS.light.tertiary), rgb(DSH.light.ground)) < 4.5, 'DSH\'s glyph colour falls short for words in light');
 });
 
+test('kit: a state tag on a suite page stands on a solid chip of its tone, so its words hold 4.5:1 over any picture at any tint', () => {
+    const kit = kitWith();
+    const TOKEN = { warning: 'warn', danger: 'error', success: 'success', info: 'business' };
+    const FILL = { warning: 12, danger: 10, success: 10, info: 10 };
+    // The chip's colour: the cards' own glass colour, solid, in dark and in light.
+    const chips = kit.css.find((r) => r.includes('--dshx-chip:'));
+    assert.equal(chips, ':is(.dshx-page,.dshx-pane,.dshx-pop){--dshx-chip:rgb(14,18,17)}body:not([data-ds-dark-theme]) :is(.dshx-page,.dshx-pane,.dshx-pop){--dshx-chip:rgb(250,250,246)}');
+    const CHIP = { dark: [14, 18, 17], light: [250, 250, 246] };
+    for (const tone of Object.keys(TOKEN)) {
+        const ground = kit.css.find((r) => r.includes(`.dshx-tag[data-tone="${tone}"]{background-color:`));
+        assert.equal(ground, `:is(.dshx-page,.dshx-pane,.dshx-pop) .dshx-tag[data-tone="${tone}"]{background-color:color-mix(in srgb,var(--dsw-alias-state-${TOKEN[tone]}-primary) ${FILL[tone]}%,var(--dshx-chip))}`, tone);
+        const words = kit.css.find((r) => r.includes(`.dshx-tag[data-tone="${tone}"]{color:`));
+        const share = Number(new RegExp(`--dsw-alias-state-${TOKEN[tone]}-primary\\) (\\d+)%`).exec(words)?.[1]) / 100;
+        for (const mode of ['light', 'dark']) {
+            const colours = DSH[mode];
+            // No picture under it: the chip is opaque, so the tint and the picture no longer count.
+            const chip = mix(rgb(colours[tone]), CHIP[mode], FILL[tone] / 100);
+            const ours = contrast(mix(rgb(colours[tone]), rgb(colours.label), share), chip);
+            assert.ok(ours >= 4.5, `${tone} in ${mode}: ${ours.toFixed(2)}:1`);
+        }
+    }
+    // Only on the suite's own pages: DSH's Plugins page keeps DSH's tags as they are.
+    assert.ok(kit.css.filter((r) => r.includes('--dshx-chip)')).every((r) => r.startsWith(':is(.dshx-page,.dshx-pane,.dshx-pop) ')));
+});
+
 test('kit: amber and secondary words on a card people read hold 4.5:1 at Wallpaper\'s tint .2 over a mid picture, light and dark', () => {
     const kit = kitWith();
     const tokens = kit.css.find((r) => r.includes('--dshx-warn:'));
@@ -751,6 +776,11 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
         { name: 'fine', kind: 'number', title: 'Fine', hint: '', default: 2, min: 1, max: 10 },
         { name: 'quoted', kind: 'number', title: 'Quoted', hint: '', default: 2, min: 1, max: 10 },
+        { name: 'same', kind: 'number', title: 'Same', hint: '', default: 2, min: 1, max: 10 },
+        { name: 'sameList', kind: 'numbers', title: 'Same list', hint: '', default: [120, 600], min: 0, max: 86400 },
+        { name: 'sameSwitch', kind: 'switch', title: 'Same switch', hint: '', default: true },
+        { name: 'sameChoice', kind: 'choice', title: 'Same choice', hint: '', default: 'a', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'Ask first' }] },
+        { name: 'other', kind: 'switch', title: 'Other switch', hint: '', default: true },
     ];
     // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included.
     assert.equal(kit.fieldSpec(fields[0]).format(2), '2');
@@ -777,6 +807,11 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         resume: { text: 'yes', overridden: true, invalid: false },
         fine: { text: '3', overridden: true, invalid: false },
         quoted: { text: '"2"', overridden: true, invalid: false },
+        same: { text: '2', overridden: true, invalid: false },
+        sameList: { text: '120, 600', overridden: true, invalid: false },
+        sameSwitch: { text: 'on', overridden: true, invalid: false },
+        sameChoice: { text: 'a', overridden: true, invalid: false },
+        other: { text: 'off', overridden: true, invalid: false },
     };
     const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
     const body = kit.SettingsBody({ form, name: 'X', fields });
@@ -798,6 +833,30 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(control.props.value, '');
     assert.equal(control.props.className, 'dshx-seg-none');
     assert.ok(kit.css.some((rule) => rule.includes('.dshx-seg-none>[aria-hidden="true"]{visibility:hidden}')), 'its pill is hidden');
+    // A changed switch or choice is marked as DSH's own field marks a typed value: "Changed", then "Use the default", one look.
+    for (const name of ['resume', 'mode']) {
+        const badges = elementsOf(row(name)).find((e) => e.props?.className === 'dshx-set-badges');
+        assert.ok(badges, name);
+        const tag = elementsOf(badges).find((e) => e.type === 'Tag');
+        assert.equal(tag?.props.tone, 'neutral', name);
+        assert.equal(textIn(tag), 'Changed', name);
+        const reset = elementsOf(badges).find((e) => e.type === 'button');
+        assert.equal(textIn(reset), 'Use the default', name);
+        assert.equal(reset.props['aria-label'], `Use the default for ${fields.find((f) => f.name === name).title}`);
+    }
+    const resetRule = kit.css.find((rule) => rule.startsWith('.dshx-set-reset{'));
+    assert.match(resetRule, /font-size:12px;line-height:1\.5;color:var\(--dsw-alias-label-secondary\)/, 'as DSH draws its own');
+    assert.doesNotMatch(resetRule, /underline|--dsw-alias-link/);
+    assert.ok(kit.css.includes('.dshx-settings .dshx-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}'), '"Changed" in the suite\'s secondary text, as on its pages');
+    // A value saved in the profile that equals its default is no change: no "Changed" and nothing to reset, in any kind of row.
+    for (const name of ['same', 'sameList']) assert.equal(field(name).props.overridden, false, name);
+    for (const name of ['sameSwitch', 'sameChoice']) {
+        assert.equal(elementsOf(row(name)).find((e) => e.props?.className === 'dshx-set-badges'), undefined, name);
+        assert.doesNotMatch(textIn(row(name)), /Changed|Use the default/, name);
+    }
+    // One that differs is still a change.
+    assert.equal(field('fine').props.overridden, true);
+    assert.match(textIn(row('other')), /Changed/);
 });
 
 test('kit: a choice with no valid saved value can still be reached with Tab; once fixed, DSH\'s selection takes the focus again', () => {

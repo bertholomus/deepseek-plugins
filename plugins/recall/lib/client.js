@@ -98,7 +98,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-set-hint{margin-top:2px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}`,
         `.${P}-set-control{flex:0 0 auto;display:flex;align-items:center;gap:10px}`,
         `.${P}-choice{display:inline-flex}.${P}-seg-none>[aria-hidden="true"]{visibility:hidden}`,
-        `.${P}-set-reset{padding:0;border:0;background:none;font:var(--dsw-font-xs-13);color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
+        // "Changed" and "Use the default" as DSH's own field draws them beside a typed value: one look for every row.
+        `.${P}-set-badges{display:inline-flex;align-items:center;gap:8px}`,
+        `.${P}-set-reset{padding:0;border:0;background:none;font:inherit;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);cursor:pointer}`,
+        `.${P}-set-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}.${P}-set-reset:disabled{cursor:default}`,
         `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
         `.${P}-set-group{margin:14px 0 2px;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
@@ -112,6 +115,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 65%,var(--dsw-alias-label-primary))}`,
         // Quiet and neutral words ("idle", "stopped") would be drawn in DSH's glyph colour, which is for glyphs, not small text.
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:var(--${P}-text-2)}`,
+        // The settings form sits on DSH's Plugins page, outside the page's colours: the same secondary text, said here.
+        `.${P}-settings .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}`,
+        // DSH tints a tag's ground with its tone over nothing (see-through), so over a picture at a low tint its words
+        // lose contrast. On the suite's pages the same tint lies over the card's own colour instead: a solid chip.
+        `:is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-chip:rgb(14,18,17)}body:not([data-ds-dark-theme]) :is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-chip:rgb(250,250,246)}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="warning"]{background-color:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,var(--${P}-chip))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="danger"]{background-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,var(--${P}-chip))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="success"]{background-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,var(--${P}-chip))}`,
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{background-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--${P}-chip))}`,
         `.${P}-choice{display:inline-flex;flex-direction:column;align-items:inherit;gap:4px;min-width:0}`,
         `.${P}-choice-hint{font:var(--dsw-font-xxs-12);color:var(--${P}-text-2)}`,
         `.${P}-choice[aria-busy="true"]{cursor:progress}`,
@@ -746,9 +758,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     /**
      * A setting is wrong, so the plugin does no work: which setting, what it
      * must be, and where to change it (its settings in Plugins when the
-     * person can change it there, else DSH's profile).
+     * person can change it there, else DSH's profile). `profileApplies`: the
+     * plugin restarts with its new settings when DSH's profile is saved, so
+     * no restart of DSH is needed (else the line says to restart DSH).
      */
-    function SettingsProblem({ name, packageName, problem }) {
+    function SettingsProblem({ name, packageName, problem, profileApplies = false }) {
         const live = problem?.live === true;
         const its = whose(name);
         return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': 'setting' },
@@ -756,7 +770,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             h('p', { className: `${P}-trouble-text` }, `${String(problem?.text ?? 'A setting is wrong').replace(/\.$/, '')}.`),
             h('p', { className: `${P}-trouble-text` }, live
                 ? `Change it in ${its} settings in Plugins. ${name} starts working again as soon as you save.`
-                : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
+                : profileApplies
+                    ? `Change it in ${its} entry in DSH's profile (cordis.patch.yml). DSH applies the file when you save it.`
+                    : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
             live && typeof nav.current?.openBundle === 'function'
                 ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName, { focus: problem?.key }) }, `Open ${its} settings`)) : null);
     }
@@ -922,8 +938,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function SettingRow({ f, state, disabled, actions }) {
         const id = `${P}-set-${f.name}`;
         const edit = (text) => actions.edit(f.name, text);
+        // As DSH's own field marks a typed value: "Changed", then "Use the default".
         const reset = state.overridden
-            ? h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default') : null;
+            ? h('span', { className: `${P}-set-badges` },
+                h(ui.Tag, { tone: 'neutral', className: `${P}-tag` }, 'Changed'),
+                h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default'))
+            : null;
         if (f.kind === 'switch' || f.kind === 'choice') {
             return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, ...(state.invalid ? { 'data-suite-invalid': '' } : {}) },
                 h('div', { className: `${P}-set-text` },
@@ -1016,8 +1036,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             }
             // DSH's form checks only what is typed; a saved value that does not fit (typed into the profile) is
             // flagged too, with what does fit.
-            const wrong = !state.invalid && state.text !== '' && fieldSpec(f).parse(state.text) === undefined;
-            rows.push(h(SettingRow, { key: f.name, f, state: wrong ? { ...state, invalid: true } : state, disabled, actions: form.actions }));
+            const parsed = state.invalid || state.text === '' ? undefined : fieldSpec(f).parse(state.text);
+            const wrong = !state.invalid && state.text !== '' && parsed === undefined;
+            // A value saved in the profile that equals its default is not a change: no "Changed", nothing to reset.
+            const atDefault = state.overridden && parsed?.kind === 'set' && f.default !== undefined && JSON.stringify(parsed.value) === JSON.stringify(f.default);
+            rows.push(h(SettingRow, { key: f.name, f, state: wrong ? { ...state, invalid: true } : atDefault ? { ...state, overridden: false } : state, disabled, actions: form.actions }));
         }
         return h('div', { className: `${P}-settings`, 'data-suite-settings': bundle, ref: root },
             h(ui.SettingsForm, { labels, state: snap, onSave: form.actions.save, onDiscard: form.actions.discard },
