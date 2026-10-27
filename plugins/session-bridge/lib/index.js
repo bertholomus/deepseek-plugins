@@ -60,7 +60,7 @@ const AGAIN = 'then switch Session Bridge off and on in Plugins, or restart DSH;
  * still says `enabled: false`), apply fails with the reason, so DSH shows the plugin as failed ("Problem" on its
  * Plugins page, never "Running") and logs why. Switching the plugin off and on in Plugins, or restarting DSH,
  * always tries again. Saving a fixed row does when it differs from the row that last ran; when it is that row
- * again, DSH may leave the plugin failed (it does after a refused socket).
+ * again, DSH may leave the plugin failed (it does after a refused socket, and may after `enabled: false`).
  */
 export async function apply(ctx, config) {
     const settings = checkSettings(config, {

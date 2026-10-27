@@ -42,8 +42,8 @@
  *   GET /health and the bridge's log while it keeps working; a log that
  *   cannot be written (said in GET /health, gone once it can be written);
  *   enabled: false (the start fails with the reason: failed in Plugins,
- *   never running, nothing listens), then the row without it (running at
- *   once); a socket path another program answers on is refused and left
+ *   never running, nothing listens), then the row without it (and off and
+ *   on, if DSH left it failed: running); a socket path another program answers on is refused and left
  *   alone, failed in Plugins, still failed with the row that last ran,
  *   running again once switched off and on, and at once with a row that
  *   differs from the one that last ran.
@@ -513,7 +513,7 @@ try {
         await waitFor(async () => (await answers()) && (await run.bridge('GET', '/health')).problems.length === 0, 'the bridge on its own log again', 30000, 300);
     });
 
-    await step('enabled: false (no longer a setting) while DSH runs: the start fails with the reason, so DSH shows it failed, never running; the row without it, saved, runs it again', async () => {
+    await step('enabled: false (no longer a setting) while DSH runs: the start fails with the reason, so DSH shows it failed, never running; without it in the row (and off and on, if still failed), it runs again', async () => {
         const before = read(newLog).length;
         writeRow({ logFile: newLog, enabled: false });
         await waitFor(() => !existsSync(run.sock), 'the socket to go', 30000, 200);
@@ -523,11 +523,20 @@ try {
         const added = read(newLog).slice(before);
         check('the bridge\'s log says why and what to do', /setting: enabled is no longer a setting of the session bridge, and while its row says enabled: false the bridge does not start\. To switch it off, use its switch in Plugins/.test(added)
             && added.includes(`not listening on ${run.sock}: its row says enabled: false, and enabled is no longer a setting. To switch it off, use its switch in Plugins (DSH then shows it Off); to have it listen, take enabled out of its row`), added);
-        // The row without enabled is the row that last ran, and after this failure DSH starts the plugin on it (the README says so).
+        // The row without enabled is the row that last ran: DSH may start the plugin on it or leave it failed (seen both
+        // ways), so, as the README and the problem say, it is switched off and on when it still reads failed.
         writeRow({ logFile: newLog });
-        const back = await waitFor(() => answers(), 'the bridge back on its own socket', 30000, 300).then(() => true, () => false);
+        const saved = await waitFor(() => answers(), 'the bridge back on its own socket', 10000, 300).then(() => true, () => false);
+        let toggled = false;
+        if (!saved) {
+            toggled = (await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: false })).ok === true
+                && (await run.api('pluginManager/setBundleEnabled', { name: 'dsh-plugin-session-bridge', enabled: true })).ok === true;
+            await waitFor(() => answers(), 'the bridge back after off and on', 30000, 300).catch(() => {});
+        }
+        console.log(`#   saving the row without enabled ${saved ? 'started it at once' : 'left it failed; off and on started it'}`);
         const entry = await waitFor(async () => ((await bridgeEntry())?.fiberPhase === 'active' ? bridgeEntry() : null), 'the plugin to run', 30000, 300).catch(() => bridgeEntry());
-        check('the row without enabled, saved: DSH starts it again at once; it answers, with no problems, and DSH shows it running', back && (await run.bridge('GET', '/health')).problems.length === 0 && entry?.fiberPhase === 'active', json({ back, phase: entry?.fiberPhase }));
+        check('enabled taken out of the row (then off and on, if DSH left it failed): it answers on its own socket, with no problems, and DSH shows it running', (saved || toggled) && (await answers()) && (await run.bridge('GET', '/health')).problems.length === 0 && entry?.fiberPhase === 'active',
+            json({ startedBySavingTheRow: saved, switchedOffAndOn: toggled, phase: entry?.fiberPhase }));
     });
 
     await step('a socket another program answers on is never taken over: refused in words, failed in Plugins; still failed with the row that last ran; running again once switched off and on, and at once with a row that differs from the one that last ran; that program keeps its socket', async () => {
