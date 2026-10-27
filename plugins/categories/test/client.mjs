@@ -99,6 +99,26 @@ const byHook = (tree, hook) => elementsOf(tree).find((e) => e.props?.[hook] !== 
 
 /** Values made inside the script's context, copied so they compare as plain data. */
 const plain = (value) => JSON.parse(JSON.stringify(value));
+/** The text an element tree shows on screen (screen-reader-only parts left out), and the name it reads aloud (aria-hidden parts left out). */
+const textBut = (node, skip) => (Array.isArray(node) ? node.map((n) => textBut(n, skip)).join('') : node === null || node === undefined || node === false ? ''
+    : typeof node === 'object' ? (skip(node) ? '' : textBut(node.children, skip)) : String(node));
+const shownText = (node) => textBut(node, (e) => String(e.props?.className ?? '').split(' ').includes('dshc-sr'));
+const spokenText = (node) => textBut(node, (e) => e.props?.['aria-hidden'] === true || e.props?.['aria-hidden'] === 'true');
+/**
+ * A submenu as DSH's Menu draws it: its type takes rows only (`submenu?: readonly MenuItem[]`), and it draws every
+ * entry as a menuitem button showing the entry's `label`, so a heading or separator there would be a blank row
+ * (round 1: two of them). Each row as [id, what it shows, what it reads aloud]; none may be blank.
+ */
+function submenuRows(entries) {
+    return entries.map((entry) => {
+        assert.equal(entry.type, undefined, `${entry.id}: a submenu entry is a row, not a ${entry.type}`);
+        const row = [entry.id, shownText(entry.label).trim(), spokenText(entry.label).trim()];
+        assert.ok(row[1] && row[2], `${entry.id}: a submenu row shows a name and reads one aloud`);
+        return row;
+    });
+}
+/** A category header as drawn: DSH's Tooltip wraps it (shown only while its name is cut), so the header is its child. */
+const inTip = (node) => (node?.type === 'Tooltip' ? node.children[0] : node);
 
 /** A facts store for a view: the categories as `categories()` gives them, and what the views ask of it. */
 function factsOf(categories, { failed = () => false, answer = () => ({ ok: true, value: {} }), off = () => false, problems = () => [] } = {}) {
@@ -137,12 +157,16 @@ test('browser half: loads as DSH loads it, registers the session list, the page 
     // DESIGN.md: its page leaves its root unpainted and sets its content on one glass card at tint + .2, near-opaque
     // under reduced transparency; only DSH's tokens (no undefined ones, no system colours); its motion stops under
     // Wallpaper's Still as under reduced motion; its drop line stays under DSH's floating layers (menus at 100).
-    const pageRule = /\.dshc-pg\{display:flex[^}]*\}/.exec(CSS)?.[0] ?? '';
-    assert.ok(pageRule && !/background/.test(pageRule), `the page's root paints no ground: ${pageRule}`);
-    assert.match(CSS, /\.dshc-pg\{--dshc-conv:rgba\(10,13,12,calc\(var\(--wp-tint,\.55\) \+ \.2\)\)/);
-    assert.match(CSS, /body:not\(\[data-ds-dark-theme\]\) \.dshc-pg\{--dshc-conv:rgba\(250,250,246,calc\(var\(--wp-tint,\.55\) \+ \.2\)\)\}/);
+    // Its root is .dshc-page: Wallpaper still paints an older page root, .dshc-pg, as a glass card of its own (a card
+    // in a card, blurred twice), so no element of this page may carry that class.
+    const pageRule = /\.dshc-page\{display:flex[^}]*\}/.exec(CSS)?.[0] ?? '';
+    assert.ok(pageRule && !/background|backdrop/.test(pageRule), `the page's root paints no ground: ${pageRule}`);
+    assert.doesNotMatch(CSS, /\.dshc-pg(?![-\w])/, 'no rule names the old root class');
+    assert.doesNotMatch(SOURCE, /className: 'dshc-pg'|className: "dshc-pg"|'dshc-pg '/, 'and nothing draws it');
+    assert.match(CSS, /\.dshc-page\{--dshc-conv:rgba\(10,13,12,calc\(var\(--wp-tint,\.55\) \+ \.2\)\)/);
+    assert.match(CSS, /body:not\(\[data-ds-dark-theme\]\) \.dshc-page\{--dshc-conv:rgba\(250,250,246,calc\(var\(--wp-tint,\.55\) \+ \.2\)\)\}/);
     assert.match(CSS, /\.dshc-pg-scroll\{[^}]*background:var\(--dshc-conv\);-webkit-backdrop-filter:blur\(var\(--wp-blur,22px\)\) saturate\(140%\);backdrop-filter:blur\(var\(--wp-blur,22px\)\) saturate\(140%\);border:1px solid var\(--dsw-alias-border-l2\);border-radius:var\(--dsw-radius-lg\)\}/);
-    assert.match(CSS, /@media \(prefers-reduced-transparency:reduce\)\{\.dshc-pg\{--dshc-conv:rgba\(10,13,12,\.95\)\}/);
+    assert.match(CSS, /@media \(prefers-reduced-transparency:reduce\)\{\.dshc-page\{--dshc-conv:rgba\(10,13,12,\.95\)\}/);
     assert.doesNotMatch(CSS, /--dsh-color-bg-hover|Highlight|opacity:\.6|opacity:\.7/);
     assert.match(CSS, /body\.wp-still \.dshc-sb-chev\{transition:none\}/);
     assert.match(CSS, /@media \(prefers-reduced-motion:reduce\)\{\.dshc-sb-chev\{transition:none\}\}/);
@@ -534,7 +558,7 @@ test('browser half: switched off in its settings, the page says so and how to sw
     let page = draw();
     const offState = byHook(page, 'data-categories-off');
     assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'h2')), 'Categories are switched off');
-    assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'p')), 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and restart DSH, and they come back as they were.');
+    assert.equal(textIn(elementsOf(offState).filter((e) => e.type === 'p')), 'The categories row in the profile\'s cordis.patch.yml switches them off (its enabled setting), so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and restart DSH, and they come back as they were.');
     // Nothing to make while off, no tree, and no error.
     assert.equal(byHook(page, 'data-categories-new'), undefined);
     assert.equal(elementsOf(page).some((e) => e.props?.role === 'tree'), false);
@@ -578,10 +602,12 @@ test('browser half: the Categories page shows DSH\'s dot on a session, names wha
         { workspaceId: 'w-sf', title: 'storefront', path: '/home/u/storefront', sessionIds: ['run', 'wait', 'idle', 'busy'] },
         { workspaceId: 'w-dp', title: 'data-pipeline', path: '/home/u/data-pipeline', sessionIds: ['x'] },
     ]);
-    // Two categories the old sidebar's import made, and one made since.
+    // Two categories this plugin's import of the old sidebar made (the list marks them `imported`), one the projects
+    // plugin imported long before this plugin (source 'import', moved over with the rest: no note), and one made since.
     const categories = [
-        { id: 'shop', name: 'Shop', source: 'import', importedFrom: 'fleet-shell', workspaces: [{ id: 'w-sf' }] },
-        { id: 'data', name: 'Data', source: 'import', workspaces: [{ id: 'w-dp' }] },
+        { id: 'shop', name: 'Shop', source: 'import', importedFrom: 'fleet-shell', imported: true, workspaces: [{ id: 'w-sf' }] },
+        { id: 'data', name: 'Data', source: 'import', imported: true, workspaces: [{ id: 'w-dp' }] },
+        { id: 'ops', name: 'Ops', source: 'import', importedFrom: 'p3', workspaces: [] },
         { id: 'later', name: 'Later', source: 'page', workspaces: [] },
     ];
     // DSH's own status: one session runs, one waits on the user's approval; another runs by its row's word.
@@ -842,7 +868,13 @@ test('browser half: on the Categories page a category\'s row has the sidebar\'s 
     assert.deepEqual(plain([['category', 'shop'], ['category', OTHERS], ['workspace', 'w4'], ['session', 'a']].map(([kind, id]) => menu.has({ kind, id }))), [true, true, true, false]);
     const reveals = [];
     let keeps = 0;
-    const open = (kind, id, title) => menu.draw({ node: { kind, id, title, children: [] }, open: true, setOpen: () => {}, reveal: (key) => reveals.push(key), keep: () => { keeps += 1; } });
+    // The row a menu belongs to takes the focus as one of its dialogs opens, so DSH's dialog gives it back there.
+    const focused = [];
+    const open = (kind, id, title) => menu.draw({
+        node: { kind, id, title, children: [] }, open: true, setOpen: () => {}, reveal: (key) => reveals.push(key), keep: () => { keeps += 1; },
+        focus: () => { focused.push(`${kind}:${id}`); },
+    });
+    const kept = () => { const k = treeProps().keepRef.current; return k === null ? null : [k.key, k.until > Date.now()]; };
     // A category's: the sidebar's own menu, at the end of its row on the page.
     const shopEl = open('category', 'shop', 'Shop');
     assert.equal(shopEl.type, CategoryMenu);
@@ -851,7 +883,8 @@ test('browser half: on the Categories page a category\'s row has the sidebar\'s 
     assert.deepEqual(plain([shop.props.anchor.props.className, shop.props.anchor.props['data-categories-page-menu'], shop.props.anchor.props['data-categories-menu'], shop.props.anchor.props['aria-label']]),
         ['dshc-tree-more', 'shop', null, 'Category actions: Shop']);
     assert.deepEqual(plain(shop.props.items.map((i) => i.id ?? i.type)), ['add', 'newWorkspace', 's1', 'up', 'down', 's2', 'rename', 'new', 'delete']);
-    assert.deepEqual(plain(shop.props.items.find((i) => i.id === 'add').submenu.map((i) => i.id ?? i.text)), ['free', 'w:w4', 'taken', 'w:w3']);
+    // Add a workspace: the one in no category first, then the one in another category, with where it is now.
+    assert.deepEqual(plain(submenuRows(shop.props.items.find((i) => i.id === 'add').submenu).map(([id]) => id)), ['w:w4', 'w:w3']);
     assert.deepEqual(plain(shop.props.items.filter((i) => i.disabled).map((i) => i.id)), ['up']);
     // Move down: said once done, and the category keeps the focus.
     shop.props.onSelect('down');
@@ -872,22 +905,29 @@ test('browser half: on the Categories page a category\'s row has the sidebar\'s 
     await tick();
     assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w5', category: 'shop', before: '' }]);
     assert.equal(said(), 'fresh added to Shop.');
-    // Rename and Delete ask first, in the sidebar's dialogs.
+    // Rename and Delete ask first, in the sidebar's dialogs; the row takes the focus as each opens.
+    assert.deepEqual(focused, []);
     shop.props.onSelect('rename');
+    assert.deepEqual(focused, ['category:shop']);
     let dialog = elementsOf(drawPage()).find((e) => typeof e.props?.onSubmit === 'function');
     assert.deepEqual(plain([dialog.props.title, dialog.props.initial]), ['Rename category', 'Shop']);
     assert.equal(await dialog.props.onSubmit('Store'), null);
     assert.deepEqual(plain(facts.calls.at(-1)), ['renameCategory', { category: 'shop', name: 'Store' }]);
     assert.equal(said(), 'Renamed to Store.');
     shop.props.onSelect('delete');
+    assert.deepEqual(focused, ['category:shop', 'category:shop']);
     dialog = elementsOf(drawPage()).find((e) => typeof e.props?.onSubmit === 'function');
     assert.match(dialog.props.text, /This deletes “Shop”\. Its 2 workspaces move to Other workspaces\./);
     answer = { ok: false, error: { code: 'categories/refused', message: 'no such category' } };
     assert.equal(await dialog.props.onSubmit(), 'No such category.');
+    assert.equal(kept(), null, 'refused: the row is still there, and keeps the focus');
     answer = { ok: true, value: {} };
     assert.equal(await dialog.props.onSubmit(), null);
     assert.deepEqual(plain(facts.calls.at(-1)), ['removeCategory', { category: 'shop' }]);
     assert.equal(said(), 'Shop deleted.');
+    // Deleted, its row is gone: the keyboard goes to the category now in its place (the next one), not to the page.
+    assert.deepEqual(kept(), ['category:ops', true]);
+    treeProps().keepRef.current = null;
     // Other workspaces': New workspace… and New category….
     const others = CategoryMenu(open('category', OTHERS, 'Other workspaces').props);
     assert.deepEqual(plain([others.props.items.map((i) => i.id), others.props.anchor.props['data-categories-page-menu']]), [['newWorkspace', 'new'], OTHERS]);
@@ -915,10 +955,14 @@ test('browser half: on the Categories page a category\'s row has the sidebar\'s 
     await tick();
     assert.deepEqual(plain(facts.calls.at(-1)), ['fileWorkspace', { workspace: 'w2', category: 'shop', before: 'w1' }]);
     assets.props.onSelect('new');
+    assert.equal(focused.at(-1), 'workspace:w2');
     dialog = elementsOf(drawPage()).find((e) => typeof e.props?.onSubmit === 'function');
     assert.deepEqual(plain([dialog.props.title, dialog.props.description]), ['New category', 'assets moves into it.']);
     assert.equal(await dialog.props.onSubmit('Media'), null);
     assert.deepEqual(plain(facts.calls.at(-1)), ['createCategory', { name: 'Media', workspace: 'w2' }]);
+    // The workspace's row moved into the new category: the keyboard follows it there.
+    assert.deepEqual(kept(), ['workspace:w2', true]);
+    treeProps().keepRef.current = null;
     // In none, with no categories: nowhere to move it yet.
     const loose = WorkspaceMenu({ ...open('workspace', 'w4', 'notes').props, group: null, categories: [] });
     assert.deepEqual(plain(loose.props.items[0].submenu), [{ id: 'none', label: 'No categories yet', disabled: true }]);
@@ -1209,9 +1253,12 @@ function drawSidebar({ items, categories, adding = { busy: false }, statuses = n
     /** A header drawn on its own, with state that holds; `menu()` draws its ⋯ menu. */
     const open = (id) => {
         const el = header(id);
-        const again = mount(react, () => el.type(el.props));
+        const drawn = mount(react, () => el.type(el.props));
+        const again = () => inTip(drawn());
         return {
             again,
+            /** DSH's Tooltip around the header, as drawn now. */
+            tip: () => drawn(),
             menu: () => {
                 const m = elementsOf(again()).find((e) => typeof e.props?.setOpen === 'function');
                 return m.type(m.props);
@@ -1349,7 +1396,7 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     let head = fleet.again();
     assert.deepEqual([head.props.role, head.props.tabIndex, head.props['aria-level'], head.props['aria-expanded'], head.props['aria-label'], head.props['aria-keyshortcuts'], head.props.draggable, head.props.className],
         ['treeitem', 0, 1, true, 'Fleet Services, 1 workspace', 'Alt+ArrowUp Alt+ArrowDown Shift+F10', true, 'dshc-sb-head']);
-    assert.deepEqual(plain(header('shop').type(header('shop').props).props.style), { order: 2 });
+    assert.deepEqual(plain(inTip(header('shop').type(header('shop').props)).props.style), { order: 2 });
     // The header's own parts: a hidden node for the hooks, its name, its count, its ⋯.
     const hidden = elementsOf(head).find((e) => e.props?.hidden);
     assert.deepEqual([hidden.props['data-categories-node'], hidden.props['data-categories-id']], ['category', 'fleet']);
@@ -1363,7 +1410,7 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     header('fleet').props.onToggle();
     assert.equal(header('fleet').props.folded, true);
     assert.match(textIn(elementsOf(side.draw()).find((e) => e.type === 'style')), /\[data-categories-ws="w-a"\]\{order:1;display:none!important\}/);
-    head = mount(side.react, () => header('fleet').type(header('fleet').props))();
+    head = inTip(mount(side.react, () => header('fleet').type(header('fleet').props))());
     assert.equal(head.props['aria-expanded'], false);
     head.props.onClick(click({ closest: (selector) => (selector === '.dshc-sb-more' ? {} : null) }));
     assert.equal(header('fleet').props.folded, true);
@@ -1373,10 +1420,10 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     statuses.set('s2', { running: true });
     header('fleet').props.onToggle();
     assert.equal(header('fleet').props.dot, 'ongoing');
-    assert.equal(header('fleet').type(header('fleet').props).props['aria-label'], 'Fleet Services, 1 workspace, running');
+    assert.equal(inTip(header('fleet').type(header('fleet').props)).props['aria-label'], 'Fleet Services, 1 workspace, running');
     statuses.set('s1', { running: true, pendingInteraction: { kind: 'approval' } });
     assert.equal(header('fleet').props.dot, 'warning');
-    head = header('fleet').type(header('fleet').props);
+    head = inTip(header('fleet').type(header('fleet').props));
     assert.equal(head.props['aria-label'], 'Fleet Services, 1 workspace, a chat is waiting on you');
     assert.equal(elementsOf(byClass(head, 'dshc-sb-dot')).find((e) => e.type === 'StateDot').props.state, 'warning');
     // Open, it shows none: its rows show their own.
@@ -1394,7 +1441,7 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     };
     const pressOn = (id, press) => {
         const el = header(id);
-        mount(side.react, () => el.type(el.props))().props.onKeyDown(press);
+        inTip(mount(side.react, () => el.type(el.props))()).props.onKeyDown(press);
     };
     pressOn('fleet', key('Enter'));
     assert.equal(header('fleet').props.folded, true);
@@ -1433,9 +1480,9 @@ test('browser half: a category\'s header folds, moves, and its ⋯ adds, renames
     ]);
     assert.deepEqual(plain(open('shop').menu().props.items.filter((item) => /^Move/.test(item.label ?? '')).map((item) => [item.label, item.disabled])), [['Move up', false], ['Move down', true]]);
     assert.equal(menu.props.items.find((item) => item.label === 'Delete…').danger, true);
-    assert.deepEqual(plain(menu.props.items[0].submenu.map((item) => [item.id, item.type ?? '', item.text ?? textIn(item.label)])), [
-        ['free', 'label', 'In no category'], ['w:w-c', '', 'gamma'], ['taken', 'label', 'In other categories'], ['w:w-b', '', 'beta · Shop'],
-    ]);
+    // Every row of Add a workspace has a name, as DSH draws a submenu: gamma (in no category) first, then beta, which
+    // shows where it is now and says so aloud.
+    assert.deepEqual(plain(submenuRows(menu.props.items[0].submenu)), [['w:w-c', 'gamma', 'gamma'], ['w:w-b', 'beta · Shop', 'beta, now in Shop']]);
     menu.props.onSelect('w:w-c');
     await tick();
     assert.deepEqual(calls, [['fileWorkspace', { workspace: 'w-c', category: 'fleet', before: '' }]]);
@@ -2117,10 +2164,10 @@ test('browser half: an empty Other workspaces shows once the browser has started
     // The empty Other workspaces goes last in DSH's list, which scrolls: it is held at the list's lower edge, on the
     // sidebar's own fill, so it is in sight wherever the list is scrolled. One that holds workspaces, and a category
     // (even an empty one), sit in their own places.
-    const drawn = (group) => CategoryHeader({
+    const drawn = (group) => inTip(CategoryHeader({
         group, index: 1, count: group.workspaces.length, folded: false, dot: null, onToggle() {}, onMove() {},
         menu: { workspaces: [], actions: {}, first: true, last: true },
-    }).props;
+    })).props;
     const others = drawn({ id: OTHERS, name: 'Other workspaces', category: false, workspaces: [] });
     assert.deepEqual([others.className, others['data-categories-sb'], others['aria-label']], ['dshc-sb-head dshc-sb-pinned', OTHERS, 'Other workspaces, 0 workspaces']);
     assert.equal(drawn({ id: OTHERS, name: 'Other workspaces', category: false, workspaces: ['w1'] }).className, 'dshc-sb-head');
@@ -2298,4 +2345,225 @@ test('browser half: the projects plugin\'s data changes nothing here: the same p
     for (const method of rpc) assert.match(method, /^dsh-plugin-categories\/(list|createCategory|fileWorkspace)$/);
     // Nothing of the projects plugin's is named in the browser half: its projection, its endpoints, its hooks, its styles.
     assert.doesNotMatch(SOURCE, /projectSession|dsh-plugin-projects|data-projects-|dshp-/);
+});
+
+test('browser half: a header\'s name too long for it is cut once, at a word, with the whole name in DSH\'s tooltip (DESIGN.md §7)', () => {
+    const style = { fontStyle: 'normal', fontWeight: '500', fontSize: '13px', fontFamily: 'system-ui' };
+    // The canvas the plugin measures with: 7 px a character here, about what a 13 px font draws.
+    const canvas = { getContext: () => ({ font: '', measureText: (text) => ({ width: [...text].length * 7 }) }) };
+    const observers = [];
+    const name = new FakeElement();
+    name.clientWidth = 170;
+    const headEl = new FakeElement({ 'data-categories-sb': 'ops' });
+    headEl.querySelector = (selector) => (selector === '.dshc-sb-name' ? name : null);
+    const document = { querySelectorAll: () => [headEl], createElement: () => canvas };
+    const { client, react } = loadClient({
+        document,
+        globals: {
+            getComputedStyle: () => style,
+            ResizeObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} disconnect() { this.gone = true; } },
+        },
+    });
+    const { fitName, CategoryHeader } = client.internals;
+    const measure = (text) => [...text].length * 7;
+    const room = (width) => ({ clientWidth: width });
+
+    // fitName: null while the whole name fits; else cut once, after the last whole word that fits, with "…".
+    const fit = (width, text) => fitName(room(width), text, measure);
+    // A name of 24 characters fits the header at the sidebar's width (168 px of text in 170 px, less 2 to spare).
+    assert.equal(fit(170, 'Local Model Recipes, Ops'), null);
+    assert.equal('Local Model Recipes, Ops'.length, 24);
+    assert.equal(fit(170, 'Local Model Recipe Operations Team'), 'Local Model Recipe…');
+    // Never after a comma or a dash: the cut is at the word, its punctuation left out.
+    assert.equal(fit(90, 'Ops, Shop and Data'), 'Ops, Shop…');
+    assert.equal(fit(110, 'Fleet — services and runners'), 'Fleet…');
+    // A first word too long for the header alone is left to the CSS (cut at a letter); the tooltip still shows it all.
+    assert.equal(fit(100, 'Supercalifragilisticexpialidocious'), 'Supercalifragilisticexpialidocious');
+    // Not laid out yet, or nothing to measure with: nothing is cut.
+    assert.equal(fit(0, 'Local Model Recipe Operations Team'), null);
+    assert.equal(fitName(room(100), 'Local Model Recipe Operations Team', () => 0), null);
+
+    // The header: DSH's tooltip, off while the whole name shows; the name cut at a word once it can't, the tooltip on
+    // with the whole name, and measured again when the header's width changes.
+    react.useLayoutEffect = (fn) => { fn(); };
+    const group = { id: 'ops', name: 'Local Model Recipe Operations Team', category: true, workspaces: ['w1'] };
+    const draw = mount(react, () => CategoryHeader({
+        group, index: 0, count: 1, folded: false, dot: null, onToggle() {}, onMove() {}, menu: { workspaces: [], actions: {}, first: true, last: true },
+    }));
+    draw();
+    let tip = draw();
+    assert.deepEqual([tip.type, tip.props.label, tip.props.side, tip.props.portal, tip.props.disabled], ['Tooltip', 'Local Model Recipe Operations Team', 'right', true, false]);
+    let shown = byClass(tip, 'dshc-sb-name')[0];
+    assert.deepEqual([textIn(shown), shown.props['data-categories-title'], shown.props['data-categories-cut']], ['Local Model Recipe…', group.name, '']);
+    // Its name for screen readers is the whole name, whatever shows.
+    assert.equal(inTip(tip).props['aria-label'], 'Local Model Recipe Operations Team, 1 workspace');
+    // The sidebar widened: the whole name fits, the tooltip goes.
+    name.clientWidth = 300;
+    observers.at(-1).fn();
+    tip = draw();
+    shown = byClass(tip, 'dshc-sb-name')[0];
+    assert.deepEqual([tip.props.disabled, textIn(shown), shown.props['data-categories-cut']], [true, 'Local Model Recipe Operations Team', undefined]);
+});
+
+test('browser half: a dialog from a header\'s ⋯ gives the keyboard back to that header, and after a delete to the one in its place', async () => {
+    const focus = { active: null };
+    class Focusable extends FakeElement { focus() { focus.active = this; } }
+    const heads = new Map();
+    const list = new FakeElement({ role: 'tree' });
+    const items = [{ workspaceId: 'w-a', title: 'alpha', sessionIds: [] }, { workspaceId: 'w-b', title: 'beta', sessionIds: [] }];
+    let categories = [{ id: 'fleet', name: 'Fleet', workspaces: [{ id: 'w-a' }] }, { id: 'shop', name: 'Shop', workspaces: [] }, { id: 'data', name: 'Data', workspaces: [] }];
+    const place = () => {
+        list.children.length = 0;
+        heads.clear();
+        for (const id of [...categories.map((c) => c.id), 'others']) heads.set(id, list.append(new Focusable({ 'data-categories-sb': id === 'others' ? '' : id })));
+    };
+    const body = new FakeElement();
+    const document = {
+        querySelector: () => list, head: new FakeElement(), body, createElement: () => new FakeElement(),
+        addEventListener() {}, removeEventListener() {},
+        get activeElement() { return focus.active ?? body; },
+    };
+    const { client, react } = loadClient({ document });
+    const { SidebarTree, OTHERS } = client.internals;
+    place();
+    heads.get('others').setAttribute('data-categories-sb', OTHERS);
+    let answer = () => ({ ok: true, value: {} });
+    const facts = factsOf(() => categories, { answer: (method, args) => answer(method, args) });
+    const props = { useWorkspaces: (select) => select({ items, archivedSessionIds: [], pinnedSessionIds: [] }), useSessionStatus: (select) => select(new Map()), plugin: { facts } };
+    const draw = mount(react, () => SidebarTree(props), { effects: true });
+    const header = (id) => elementsOf(draw()).find((e) => e.props?.menu?.actions && e.props.group.id === id);
+    const dialog = () => elementsOf(draw()).find((e) => typeof e.props?.onSubmit === 'function');
+
+    // The keyboard is on Shop's ⋯ (in the menu, drawn elsewhere): Rename… gives Shop's header the focus as the dialog
+    // opens, so DSH's dialog gives it back there when it closes (the ⋯ hides once the header loses the focus).
+    focus.active = new Focusable();
+    header('shop').props.menu.actions.rename(header('shop').props.group);
+    assert.equal(focus.active, heads.get('shop'));
+    assert.equal(dialog().props.title, 'Rename category');
+    dialog().props.onClose();
+    assert.equal(dialog(), undefined);
+    // New category… and Delete… the same.
+    focus.active = null;
+    header('data').props.menu.actions.create(null, header('data').props.group);
+    assert.equal(focus.active, heads.get('data'));
+    dialog().props.onClose();
+    header('fleet').props.menu.actions.remove(header('fleet').props.group);
+    assert.equal(focus.active, heads.get('fleet'));
+
+    // Deleted: Fleet's header is gone, and the focus with it (to the page). The header now in its place takes it.
+    answer = (method) => {
+        if (method === 'removeCategory') { categories = categories.filter((c) => c.id !== 'fleet'); place(); heads.get('others').setAttribute('data-categories-sb', OTHERS); }
+        return { ok: true, value: {} };
+    };
+    focus.active = null;
+    assert.equal(await dialog().props.onSubmit(), null);
+    draw();
+    assert.equal(focus.active, heads.get('shop'));
+    // The last category deleted, with workspaces that go to Other workspaces: that header takes it.
+    categories = [{ id: 'data', name: 'Data', workspaces: [{ id: 'w-b' }] }];
+    place();
+    heads.get('others').setAttribute('data-categories-sb', OTHERS);
+    draw();
+    header('data').props.menu.actions.remove(header('data').props.group);
+    answer = (method) => {
+        if (method === 'removeCategory') { categories = []; place(); heads.get('others').setAttribute('data-categories-sb', OTHERS); }
+        return { ok: true, value: {} };
+    };
+    focus.active = null;
+    assert.equal(await dialog().props.onSubmit(), null);
+    draw();
+    assert.equal(focus.active, heads.get('others'));
+    // Refused: the dialog stays, with the reason; nothing moves the focus.
+    categories = [{ id: 'data', name: 'Data', workspaces: [] }];
+    place();
+    heads.get('others').setAttribute('data-categories-sb', OTHERS);
+    draw();
+    header('data').props.menu.actions.remove(header('data').props.group);
+    const before = focus.active;
+    answer = () => ({ ok: false, error: { code: 'categories/refused', message: 'not saved: ~/.dsh/categories/categories.json can\'t be written (the disk is full), so nothing changed. Try again once it can be' } });
+    assert.equal(await dialog().props.onSubmit(), 'Not saved: ~/.dsh/categories/categories.json can\'t be written (the disk is full), so nothing changed. Try again once it can be.');
+    draw();
+    assert.equal(focus.active, before);
+    assert.ok(dialog());
+});
+
+test('browser half: a change that couldn\'t be saved reads as a failure, and the page names the store\'s trouble until it is fixed', async () => {
+    const { client, react } = loadClient();
+    const { categoryFacts, CategoriesPage, errorText } = client.internals;
+    // The facts keep what the list and each change say about the store; a refused change reads the list again.
+    const unsaved = { problem: 'unsaved', text: 'The categories can\'t be saved in ~/.dsh/categories/categories.json (the disk is full), so a change made now is undone. Each change tries again.' };
+    let store = null;
+    const calls = [];
+    const facts = categoryFacts({
+        call: async (method) => {
+            calls.push(method);
+            if (method === 'list') return { ok: true, value: { categories: [], problems: [], store } };
+            if (method === 'renameCategory') return { ok: false, error: { code: 'categories/refused', message: 'not saved: ~/.dsh/categories/categories.json can\'t be written (the disk is full), so nothing changed. Try again once it can be' } };
+            return { ok: true, value: { category: 'x', categories: [{ id: 'x', name: 'X', workspaces: [] }], store } };
+        },
+    });
+    await facts.list();
+    assert.equal(facts.store(), null);
+    store = unsaved;
+    const result = await facts.act('renameCategory', { category: 'x', name: 'Y' });
+    assert.equal(errorText(result.error), 'Not saved: ~/.dsh/categories/categories.json can\'t be written (the disk is full), so nothing changed. Try again once it can be.');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(calls, ['list', 'renameCategory', 'list']);
+    assert.deepEqual(plain(facts.store()), unsaved);
+    // The next change saved: its answer says the store is well again.
+    store = null;
+    await facts.act('createCategory', { name: 'X' });
+    assert.equal(facts.store(), null);
+
+    // On the page: the store's trouble as an alert, named for what it is.
+    const workspaces = workspacesOf([{ workspaceId: 'w-a', title: 'a', path: '/w/a', sessionIds: [] }]);
+    let note = unsaved;
+    const page = factsOf(() => [], {});
+    page.store = () => note;
+    const props = { useSessions: (select) => select({ byId: {} }), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspaces), plugin: { facts: page, openSession: () => {} } };
+    const draw = mount(react, () => CategoriesPage(props));
+    let shown = byHook(draw(), 'data-categories-store-note');
+    assert.deepEqual([shown.props.role, shown.props['data-categories-store-note'], textIn(shown)], ['alert', 'unsaved', `Not saved: ${unsaved.text}`]);
+    note = { problem: 'unusable', text: '~/.dsh/categories/categories.json isn\'t JSON, so the categories started empty. The file is left as it is: the first change keeps it beside the new store, to put back by hand.' };
+    shown = byHook(draw(), 'data-categories-store-note');
+    assert.equal(textIn(shown), `The categories file couldn't be used: ${note.text}`);
+    note = { problem: 'kept', text: '~/.dsh/categories/categories.json isn\'t JSON at the start, so the categories started empty. It is kept as categories.json.unreadable-2026-10-26T19-30-00Z in the same folder: put it back by hand, with DSH stopped, to bring them back.' };
+    shown = byHook(draw(), 'data-categories-store-note');
+    assert.deepEqual([shown.props['data-categories-store-note'], textIn(shown)], ['kept', `The categories file couldn't be used: ${note.text}`]);
+    // All well: no note.
+    note = null;
+    assert.equal(byHook(draw(), 'data-categories-store-note'), undefined);
+});
+
+test('browser half: with workspaces and no category yet, the page says what categories are for and how to make the first', () => {
+    const { client, react } = loadClient();
+    const { CategoriesPage, workspaceTitle, pageModel, OTHERS } = client.internals;
+    let items = [{ workspaceId: 'w-d', title: 'default-workspace', path: '/u/.dsh/workspaces/default-workspace', sessionIds: [] }, { workspaceId: 'w-a', title: 'alpha', path: '/w/alpha', sessionIds: [] }];
+    let categories = [];
+    let off = false;
+    const props = {
+        useSessions: (select) => select({ byId: {} }), useSessionStatus: (select) => select(new Map()), useWorkspaces: (select) => select(workspacesOf(items)),
+        plugin: { facts: factsOf(() => categories, { off: () => off }), openSession: () => {} },
+    };
+    const draw = mount(react, () => CategoriesPage(props));
+    const hint = () => byHook(draw(), 'data-categories-none-yet');
+    assert.equal(textIn(hint()), 'Group your workspaces into categories: New category makes one, then add workspaces to it from its ⋯ menu, here or in DSH\'s session list, or drag them onto it there.');
+    // Beside it, the page's own New category, and the workspaces under Other workspaces.
+    assert.ok(byHook(draw(), 'data-categories-new'));
+    // DSH's default workspace by the name DSH's list gives it, here and in every menu.
+    assert.equal(workspaceTitle({ workspaceId: 'w-d', title: 'default-workspace' }), 'Default workspace');
+    assert.equal(workspaceTitle({ workspaceId: 'w-d', title: '', path: '/u/.dsh/workspaces/default-workspace' }), 'Default workspace');
+    assert.equal(workspaceTitle({ workspaceId: 'w-x', title: 'default-workspace-2' }), 'default-workspace-2');
+    const tree = pageModel({ categories, items, sessions: { byId: {} }, archived: new Set() });
+    assert.deepEqual(plain(tree.map((c) => [c.id, c.children.map((w) => w.title)])), [[OTHERS, ['Default workspace', 'alpha']]]);
+    // Once there is a category, or switched off, or with no workspaces (the empty state says what to do): no hint.
+    categories = [{ id: 'c', name: 'C', workspaces: [] }];
+    assert.equal(hint(), undefined);
+    categories = [];
+    off = true;
+    assert.equal(hint(), undefined);
+    off = false;
+    items = [];
+    assert.equal(hint(), undefined);
+    assert.ok(byHook(draw(), 'data-categories-empty'));
 });

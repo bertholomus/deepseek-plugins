@@ -61,17 +61,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const CSS = [
             // Keyboard focus: DSH's ring on every plugin control. DSH's own buttons (New category, Create, Cancel…) get
             // its outline; the plugin's own controls draw it inset below, so a scrolling list can't clip it.
-            `:where(.dshc-pg,.dshc-pg-dialog) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
+            `:where(.dshc-page,.dshc-pg-dialog) button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid ${RING};outline-offset:2px}`,
             // The Categories page (its entry in DSH's sidebar): DSH's page layout, as on Automation tasks, with the whole
             // tree: categories, their workspaces, each one's sessions.
             // Its ground (DESIGN.md, section 3): the page's root stays unpainted, so Wallpaper's wall shows around it, and
             // everything on it sits on one glass card at tint + .2, the open chat's ground, as a list people read does.
-            // Secondary text and glyphs on that card are DSH's own, deepened toward its label colour.
-            '.dshc-pg{--dshc-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--dshc-text-2:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--dshc-glyph:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary))}',
-            'body:not([data-ds-dark-theme]) .dshc-pg{--dshc-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2))}',
-            '@media (prefers-reduced-transparency:reduce){.dshc-pg{--dshc-conv:rgba(10,13,12,.95)}body:not([data-ds-dark-theme]) .dshc-pg{--dshc-conv:rgba(250,250,246,.95)}}',
-            '.dshc-pg{display:flex;box-sizing:border-box;width:100%;min-width:0;height:100%;min-height:0;padding:12px;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.6}',
-            '[data-platform=darwin] .dshc-pg{padding-top:calc(12px + var(--dsh-frame-top-clearance,0px))}',
+            // Secondary text and glyphs on that card are DSH's own, deepened toward its label colour. The root's class is
+            // .dshc-page: Wallpaper still paints an older page's root, .dshc-pg, as a glass card of its own (a card in a
+            // card, blurred twice), and only Wallpaper's own change can drop that rule.
+            '.dshc-page{--dshc-conv:rgba(10,13,12,calc(var(--wp-tint,.55) + .2));--dshc-text-2:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary));--dshc-glyph:color-mix(in srgb,var(--dsw-alias-label-tertiary) 75%,var(--dsw-alias-label-primary))}',
+            'body:not([data-ds-dark-theme]) .dshc-page{--dshc-conv:rgba(250,250,246,calc(var(--wp-tint,.55) + .2))}',
+            '@media (prefers-reduced-transparency:reduce){.dshc-page{--dshc-conv:rgba(10,13,12,.95)}body:not([data-ds-dark-theme]) .dshc-page{--dshc-conv:rgba(250,250,246,.95)}}',
+            '.dshc-page{display:flex;box-sizing:border-box;width:100%;min-width:0;height:100%;min-height:0;padding:12px;overflow:hidden;color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.6}',
+            '[data-platform=darwin] .dshc-page{padding-top:calc(12px + var(--dsh-frame-top-clearance,0px))}',
             '.dshc-pg-scroll{flex:1;min-width:0;min-height:0;overflow:auto;scrollbar-gutter:stable;container-type:inline-size;--dsh-scrollbar-width:9px;--dsh-scrollbar-thumb-border:2px;background:var(--dshc-conv);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg)}',
             '.dshc-pg-content{max-width:960px;margin:0 auto;padding:0 clamp(16px,4vw,40px) 40px}',
             '.dshc-pg-heading{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;padding-top:20px}',
@@ -98,6 +100,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-tree-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
             '.dshc-tree-row:hover .dshc-tree-more,.dshc-tree-item:focus-visible>.dshc-tree-row .dshc-tree-more,.dshc-tree-more:focus,.dshc-tree-more[aria-expanded="true"]{visibility:visible}',
             '.dshc-pg-count{font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
+            '.dshc-pg-hint{max-width:560px;margin:-6px 0 14px;font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
             '.dshc-pg-heading .dshc-pg-new{margin-left:auto;align-self:center}',
             '.dshc-pg-note{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;padding:5px 5px 5px 12px;border-radius:12px;background:var(--dsw-alias-interactive-bg-hover);font-size:13px;line-height:20px;color:var(--dshc-text-2)}',
             '.dshc-pg-note>svg{flex:none}',
@@ -148,7 +151,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshc-sb-dot{flex:none;display:inline-flex;align-items:center}',
             // The same dot on a folded workspace's own row, in the plugin's seat before DSH's row actions (markWorkspaceDots).
             '.dshc-ws-dot{flex:none;display:inline-flex;align-items:center}',
-            '.dshc-sb-count{flex:none;min-width:16px;font-size:12px;font-weight:400;text-align:right;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+            '.dshc-sb-count{flex:none;min-width:18px;font-size:12px;font-weight:400;text-align:right;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
             // A header's ⋯ takes the count's place while the header is pointed at, focused or its menu is open, as DSH's rows show theirs.
             '.dshc-sb-more{flex:none;display:none;align-items:center;justify-content:center;width:20px;height:20px;margin-right:-2px;padding:0;border:0;border-radius:var(--dsw-radius-sm,4px);background:none;color:var(--dsw-alias-label-secondary);cursor:pointer}',
             '.dshc-sb-more:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
@@ -236,8 +239,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return parts.length > 0 ? parts[parts.length - 1] : String(path);
         }
 
-        /** A DSH workspace's name as its row shows it. */
-        const workspaceTitle = (ws) => (typeof ws?.title === 'string' && ws.title !== '' ? ws.title : folderName(ws?.path ?? ws?.workspaceId ?? ''));
+        /**
+         * A DSH workspace's name as its row shows it: its title, or its folder's name; DSH's own default workspace
+         * (titled "default-workspace") by the name DSH's list gives it (its `workspaceDisplayTitle`).
+         */
+        const workspaceTitle = (ws) => {
+            const title = typeof ws?.title === 'string' && ws.title !== '' ? ws.title : folderName(ws?.path ?? ws?.workspaceId ?? '');
+            return title === 'default-workspace' ? 'Default workspace' : title;
+        };
 
         /** The workspace in DSH's list that holds a session (the first that lists it, as DSH finds it), or undefined. */
         function workspaceOfSession(workspaces, sessionId) {
@@ -306,6 +315,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** Switched off in the plugin's settings (the host said so), and the settings that were wrong, in words. */
             let off = false;
             let problems = EMPTY;
+            /** What is wrong with the plugin's store, in words ({problem, text}: a save that failed, a file it couldn't use), else null. */
+            let storeNote = null;
             let reading = null;
             let again = false;
             let last = 0;
@@ -325,6 +336,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     off = value.off === true;
                     problems = Array.isArray(value.problems) ? value.problems.filter((p) => isObject(p) && typeof p.text === 'string') : EMPTY;
                 }
+                // The list's answer and each change's say how the store is.
+                if ('store' in value) storeNote = isObject(value.store) && typeof value.store.text === 'string' ? value.store : null;
                 emit();
             };
             /**
@@ -374,6 +387,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 off: () => off,
                 /** The plugin's settings that were wrong, each `{key, text}` in words (each counts as its default). */
                 problems: () => problems,
+                /** What is wrong with the plugin's store, `{problem, text}` in words, else null. */
+                store: () => storeNote,
                 list,
                 /** Keep the list read while the returned function has not been called. */
                 watch() {
@@ -402,6 +417,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (result.ok === true && Array.isArray(result.value?.categories)) {
                         changes += 1;
                         take(result.value);
+                    } else if (result.ok !== true) {
+                        // Refused or failed: read the list again, so a store that couldn't be written is named at once.
+                        void list(0);
                     }
                     return result;
                 },
@@ -496,7 +514,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             noCategories: 'No categories yet',
             newWithIt: 'New category with it…',
             offTitle: 'Categories are switched off',
-            offText: 'The categories row in the profile\'s cordis.patch.yml has enabled: false, so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and restart DSH, and they come back as they were.',
+            offText: 'The categories row in the profile\'s cordis.patch.yml switches them off (its enabled setting), so DSH\'s session list shows your workspaces as DSH lists them. Your categories are kept: set enabled: true (or remove the line) and restart DSH, and they come back as they were.',
+            // With workspaces but no category yet: what categories are for, and the way to the first.
+            noneYet: 'Group your workspaces into categories: New category makes one, then add workspaces to it from its ⋯ menu, here or in DSH\'s session list, or drag them onto it there.',
+            // What is wrong with the plugin's own file, as the host says it (a save that failed, a file it couldn't use).
+            storeTitle: { unsaved: 'Not saved', unusable: 'The categories file couldn\'t be used', kept: 'The categories file couldn\'t be used' },
             problemsTitle: 'A setting is wrong',
             problemsFix: 'Change it in the categories row of the profile\'s cordis.patch.yml, then restart DSH.',
             imported: (names) => `Imported from your old sidebar: ${listText(names)}, with ${names.length === 1 ? 'its' : 'their'} workspaces. ${names.length === 1 ? 'Its' : 'Their'} old instructions, files and defaults for new sessions weren't carried over.`,
@@ -726,10 +748,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * of its row, and a right-click, Shift+F10 or the context-menu key
          * opens it too.
          * @param onMove - (key, by) => null for an item that doesn't move, else {open?: the key of an item to open}.
-         * @param menu - {has(node), draw({node, open, setOpen, reveal(key), keep()})}: which items have a menu, and
-         *   each one's (an element), told how to open an item and to keep the focus on this one while it moves.
+         * @param menu - {has(node), draw({node, open, setOpen, reveal(key), keep(), focus()})}: which items have a menu,
+         *   and each one's (an element), told how to open an item, to keep the focus on this one while it moves, and
+         *   to give it the focus (before a dialog opens, so the dialog gives the focus back there when it closes).
+         * @param keepRef - optional: the ref of the item to keep the focus on ({key, until}), shared with the page.
          */
-        function PageTree({ tree, label, onOpenSession, onMove, menu, statuses, find = '', treeRef }) {
+        function PageTree({ tree, label, onOpenSession, onMove, menu, statuses, find = '', treeRef, keepRef }) {
             const [stored, toggleStored] = useStoredSet(CLOSED_KEY);
             // While a find is on, everything it keeps starts open, and what is closed then is forgotten when the
             // find changes (React's way to reset state when a prop changes: set it while drawing).
@@ -746,8 +770,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const shown = visibleItems(tree, closed);
             const [current, setCurrent] = React.useState(null);
             const refs = React.useRef(new Map());
-            // A moved item keeps the focus for a while, though React may draw it anew in another part of the tree.
-            const keep = React.useRef(null);
+            // A moved item keeps the focus for a while, though React may draw it anew in another part of the tree. The
+            // page sets it too (keepRef): after a dialog, the item that takes a deleted one's place, or a workspace that
+            // moved into a new category.
+            const ownKeep = React.useRef(null);
+            const keep = keepRef ?? ownKeep;
             React.useLayoutEffect(() => {
                 const k = keep.current;
                 if (k === null || typeof document === 'undefined') return;
@@ -863,6 +890,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         setOpen: (on) => { if (on) setCurrent(x.key); setMenuKey(on ? x.key : null); },
                         reveal: (key) => { if (closed.has(key)) toggleClosed(key, false); },
                         keep: () => { keep.current = { key: x.key, until: Date.now() + 4000 }; },
+                        focus: () => { const el = refs.current.get(x.key); if (el && typeof document !== 'undefined' && document.activeElement !== el) el.focus({ preventScroll: true }); },
                     }) : null),
                 kids.length > 0 ? h('ul', { role: 'group', className: 'dshc-tree-group' }, ...kids.map(item)) : null);
             };
@@ -921,6 +949,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const [find, setFind] = React.useState('');
             const treeRef = React.useRef(null);
             const findRef = React.useRef(null);
+            // The tree item the keyboard goes to after a dialog that removed or moved the one it came from (PageTree).
+            const keepRef = React.useRef(null);
             const [notes, dismissNote] = useStoredSet(NOTE_KEY);
             const announce = (text) => setSaid((prev) => (prev === text ? `${text} ` : text));
             const archived = React.useMemo(() => new Set(Array.isArray(archivedIds) ? archivedIds : EMPTY), [archivedIds]);
@@ -928,8 +958,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const tree = pageModel({ categories, items: Array.isArray(items) ? items : EMPTY, sessions, archived });
             // Other workspaces comes last in the tree, but it is no category.
             const count = tree.filter((node) => node.id !== OTHERS).length;
-            // The categories the one-time import made from the old sidebar's projects.
-            const imported = categories.filter((c) => c.source === 'import').map((c) => (typeof c.name === 'string' && c.name !== '' ? c.name : c.id));
+            // The categories this plugin's one-time import made from the old sidebar's projects (not ones the projects
+            // plugin imported before this plugin, which came over with the rest).
+            const imported = categories.filter((c) => c.imported === true).map((c) => (typeof c.name === 'string' && c.name !== '' ? c.name : c.id));
+            const storeNote = plugin.facts.store?.() ?? null;
             // Alt+↑ and Alt+↓ on the tree, worked out on the whole tree (a find shows only part of it); said once done, or why not.
             const move = (key, by) => {
                 const step = pageMove(tree, key, by);
@@ -958,7 +990,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 () => reveal(`category:${category === '' ? OTHERS : category}`));
             const menu = {
                 has: (node) => node.kind === 'workspace' || (node.kind === 'category' && groups.some((g) => g.id === node.id)),
-                draw: ({ node, open, setOpen, reveal, keep }) => {
+                draw: ({ node, open, setOpen, reveal, keep, focus }) => {
+                    // A dialog opened from a row's menu gives the keyboard back to that row when it closes (DSH's
+                    // dialog returns the focus to what had it as it opened: the row, not the menu's hidden ⋯).
+                    const ask = (next) => { focus(); setDialog(next); };
                     if (node.kind === 'category') {
                         const group = groups.find((g) => g.id === node.id);
                         const at = real.indexOf(group);
@@ -966,9 +1001,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             page: true, group, open, setOpen, workspaces, first: at === 0, last: at === real.length - 1,
                             actions: {
                                 move: (g, by) => { keep(); move(`category:${g.id}`, by); },
-                                rename: (g) => setDialog({ kind: 'rename', group: g }),
-                                remove: (g) => setDialog({ kind: 'delete', group: g }),
-                                create: () => setDialog({ kind: 'new' }),
+                                rename: (g) => ask({ kind: 'rename', group: g }),
+                                remove: (g) => ask({ kind: 'delete', group: g }),
+                                create: () => ask({ kind: 'new' }),
                                 // DSH's own Add workspace, as from the sidebar; what it makes goes into this category.
                                 newWorkspace: (g) => {
                                     plugin.addWorkspace?.start((ws) => {
@@ -990,7 +1025,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         actions: {
                             step: (by) => { keep(); move(`workspace:${node.id}`, by); },
                             fileTo: (category) => { keep(); void file(node.id, category, reveal); },
-                            create: () => setDialog({ kind: 'new', ws: node.id }),
+                            create: () => ask({ kind: 'new', ws: node.id }),
                         },
                     });
                 },
@@ -1030,7 +1065,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         type: 'button', className: 'dshc-pg-find-clear', 'aria-label': PAGE.findClear, 'data-categories-find-clear': '',
                         onClick: () => { setFind(''); findRef.current?.focus(); },
                     }, h(ui.IconCloseFillRegular, null)) : null),
-                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, onMove: move, menu, onOpenSession: (id) => plugin.openSession(id) })
+                    kept.length > 0 ? h(PageTree, { tree: kept, label: PAGE.title, statuses, find, treeRef, keepRef, onMove: move, menu, onOpenSession: (id) => plugin.openSession(id) })
                         : h('div', { className: 'dshc-pg-state dshc-pg-find-none', role: 'status', 'data-categories-find-none': '' }, PAGE.findNone(find.trim())));
             }
             // New category, Rename and Delete, as the sidebar asks: a refusal shows in the dialog, and what was done is said.
@@ -1040,9 +1075,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     title: SIDEBAR.deleteTitle, text: SIDEBAR.deleteText(dialog.group.name, dialog.group.workspaces.length), action: SIDEBAR.deleteTitle, busyLabel: SIDEBAR.deleting,
                     onClose: () => setDialog(null),
                     onSubmit: async () => {
+                        // The row that takes the deleted one's place: the next, else Other workspaces when its
+                        // workspaces go there, else the one before it.
+                        const at = tree.findIndex((c) => c.id === dialog.group.id);
+                        const next = tree[at + 1]?.id ?? (dialog.group.workspaces.length > 0 ? OTHERS : tree[at - 1]?.id) ?? null;
                         const result = await plugin.facts.act('removeCategory', { category: dialog.group.id });
                         if (!result.ok) return errorText(result.error);
                         announce(SIDEBAR.deleted(dialog.group.name));
+                        keepRef.current = next === null ? null : { key: `category:${next}`, until: Date.now() + 4000 };
                         setDialog(null);
                         return null;
                     },
@@ -1063,12 +1103,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             : await plugin.facts.act('renameCategory', { category: dialog.group.id, name });
                         if (!result.ok) return errorText(result.error);
                         announce(naming ? SIDEBAR.created(name) : SIDEBAR.renamed(name));
+                        // A workspace that moved into the new category keeps the keyboard in its new place.
+                        if (naming && dialog.ws) keepRef.current = { key: `workspace:${dialog.ws}`, until: Date.now() + 4000 };
                         setDialog(null);
                         return null;
                     },
                 });
             }
-            return h('div', { className: 'dshc-pg', 'data-categories-page': '' },
+            return h('div', { className: 'dshc-page', 'data-categories-page': '' },
                 h('div', { className: 'dshc-pg-scroll' },
                     h('div', { className: 'dshc-pg-content' },
                         h('div', { className: 'dshc-pg-heading' },
@@ -1078,6 +1120,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 variant: 'outline', size: 'sm', className: 'dshc-pg-new', icon: h(ui.IconPlusOutlineRegular, { size: 14 }),
                                 onClick: () => setDialog({ kind: 'new' }), 'data-categories-new': '',
                             }, SIDEBAR.newTitle) : null),
+                        // With workspaces but no category yet: what categories are for, and how to make the first.
+                        !off && listed !== null && count === 0 && tree.length > 0 ? h('p', { className: 'dshc-pg-hint', 'data-categories-none-yet': '' }, PAGE.noneYet) : null,
+                        // The plugin's own file: a save that failed (the change was undone), or a file it couldn't use at the start.
+                        storeNote ? h('div', { className: 'dshc-pg-note dshc-pg-problems', role: 'alert', 'data-categories-store-note': storeNote.problem ?? '' },
+                            h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
+                            h('span', null, h('strong', null, `${PAGE.storeTitle[storeNote.problem] ?? PAGE.storeTitle.unsaved}: `), storeNote.text)) : null,
                         // A setting that was wrong: which, what it must be and counts as meanwhile, and where to fix it.
                         problems.length > 0 ? h('div', { className: 'dshc-pg-note dshc-pg-problems', role: 'alert', 'data-categories-problems': '' },
                             h(ui.IconInfoOutlineRegular, { size: 14, 'aria-hidden': true }),
@@ -1122,8 +1170,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             addWorkspace: 'Add a workspace',
             newWorkspace: 'New workspace…',
             addNone: 'Every workspace is already here',
-            inNone: 'In no category',
-            inOther: 'In other categories',
+            /** Said after a workspace's name in Add a workspace, where the menu shows " · Shop". */
+            nowIn: (name) => `, now in ${name}`,
             moveUp: 'Move up',
             moveDown: 'Move down',
             rename: 'Rename…',
@@ -1769,11 +1817,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const folder = h(ui.IconFolderCloseRegular, {});
             const free = workspaces.filter((ws) => ws.group === null);
             const taken = workspaces.filter((ws) => ws.group !== null && ws.group.id !== group.id);
+            // DSH's Menu draws every entry of a submenu as an item with its label (no headings, no separators there):
+            // the workspaces in no category come first, then each in another category with where it is now.
             const add = free.length + taken.length === 0 ? [{ id: 'none', label: SIDEBAR.addNone, disabled: true }] : [
-                ...(free.length > 0 ? [{ type: 'label', id: 'free', text: SIDEBAR.inNone }] : []),
                 ...free.map((ws) => ({ id: `w:${ws.id}`, label: ws.title, icon: folder })),
-                ...(taken.length > 0 ? [{ type: 'label', id: 'taken', text: SIDEBAR.inOther }] : []),
-                ...taken.map((ws) => ({ id: `w:${ws.id}`, icon: folder, label: h('span', null, ws.title, h('span', { className: 'dshc-menu-from' }, ` · ${ws.group.name}`)) })),
+                ...taken.map((ws) => ({
+                    id: `w:${ws.id}`, icon: folder,
+                    label: h('span', null, ws.title, h('span', { className: 'dshc-menu-from', 'aria-hidden': true }, ` · ${ws.group.name}`), h('span', { className: 'dshc-sr' }, SIDEBAR.nowIn(ws.group.name))),
+                })),
             ];
             const items = !group.category ? [...made, create] : [
                 { id: 'add', label: SIDEBAR.addWorkspace, icon: h(ui.IconPlusOutlineRegular, {}), submenu: add },
@@ -1795,7 +1846,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     else if (id === 'down') actions.move(group, 1);
                     else if (id === 'rename') actions.rename(group);
                     else if (id === 'newWorkspace') actions.newWorkspace(group);
-                    else if (id === 'new') actions.create(null);
+                    else if (id === 'new') actions.create(null, group);
                     else if (id === 'delete') actions.remove(group);
                     else if (id.startsWith('w:')) void actions.file(id.slice(2), group, null);
                 },
@@ -1856,6 +1907,45 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             });
         }
 
+        /** A canvas to measure text with, made once. */
+        let measuring = null;
+        /** How wide `text` draws in `font` (a CSS font), in px; 0 where nothing can measure it. */
+        function textWidth(text, font) {
+            try {
+                measuring ??= document.createElement('canvas').getContext('2d');
+                if (!measuring) return 0;
+                measuring.font = font;
+                return measuring.measureText(text).width;
+            } catch {
+                return 0;
+            }
+        }
+
+        /**
+         * A header's name as it fits its element (DESIGN.md §7): null when the
+         * whole name fits; else cut once, after the last whole word that fits
+         * with "…"; a first word too long for it alone is left to the CSS,
+         * which cuts it at a letter (the whole name is returned). Either way
+         * the header shows the whole name in DSH's tooltip.
+         * @param measure - (text, font) => px, for the tests.
+         */
+        function fitName(el, text, measure = textWidth) {
+            const width = el?.clientWidth;
+            if (!(width > 0) || typeof getComputedStyle !== 'function') return null;
+            const cs = getComputedStyle(el);
+            const font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+            // A pixel or two to spare: the browser's text and the canvas's can differ by a fraction.
+            const room = width - 2;
+            const whole = measure(text, font);
+            if (!(whole > 0) || whole <= room) return null;
+            const words = text.split(' ');
+            for (let n = words.length - 1; n >= 1; n -= 1) {
+                const start = words.slice(0, n).join(' ').replace(/[\s.,;:!?…–—-]+$/u, '');
+                if (start !== '' && measure(`${start}…`, font) <= room) return `${start}…`;
+            }
+            return text;
+        }
+
         /**
          * A header in DSH's list, a category's or Other workspaces': its name
          * and how many workspaces it holds; a click, Enter or Space folds or
@@ -1868,21 +1958,39 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             // Clicks and keys from the menu (drawn elsewhere in the page) reach here through React, not the page.
             const own = (event) => typeof event.currentTarget?.contains !== 'function' || event.currentTarget.contains(event.target);
             const [open, setOpen] = React.useState(false);
-            // Opened by its keys, the menu gets the keyboard on the header's ⋯ once it shows (see PageTree).
+            // The header's own element in DSH's list, found by its mark (DSH's tooltip wraps it).
             const head = React.useRef(null);
+            const self = () => head.current ?? (typeof document === 'undefined' ? null
+                : [...document.querySelectorAll(SB_HEAD)].find((el) => el.getAttribute('data-categories-sb') === group.id) ?? null);
+            // Opened by its keys, the menu gets the keyboard on the header's ⋯ once it shows (see PageTree).
             const byKey = React.useRef(false);
             React.useLayoutEffect(() => {
                 if (!open || !byKey.current) return;
                 byKey.current = false;
-                head.current?.querySelector('.dshc-sb-more')?.focus();
+                self()?.querySelector('.dshc-sb-more')?.focus();
             }, [open]);
+            // A name too long for the header: cut at a word, the whole name in DSH's tooltip (fitName), measured again
+            // whenever the header's width changes (the sidebar widened, a count growing).
+            const [cut, setCut] = React.useState(null);
+            React.useLayoutEffect(() => {
+                const el = self()?.querySelector('.dshc-sb-name');
+                if (!el) return undefined;
+                const fit = () => {
+                    const next = fitName(el, group.name);
+                    setCut((prev) => (prev === next ? prev : next));
+                };
+                fit();
+                const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+                observer?.observe(el);
+                return () => observer?.disconnect();
+            }, [group.name]);
             const n = group.workspaces.length;
             const status = dot === 'warning' ? ', a chat is waiting on you' : dot === 'ongoing' ? ', running' : '';
             const step = (event, by) => {
                 const heads = [...(event.currentTarget.parentElement?.querySelectorAll(`:scope>${SB_HEAD}`) ?? EMPTY)];
                 heads[heads.indexOf(event.currentTarget) + by]?.focus();
             };
-            return h('div', {
+            return h(ui.Tooltip, { label: group.name, side: 'right', portal: true, disabled: cut === null }, h('div', {
                 ref: head, role: 'treeitem', tabIndex: 0, 'aria-level': 1, 'aria-expanded': !folded,
                 'aria-label': `${group.name}, ${plural(n, 'workspace')}${status}`,
                 'aria-keyshortcuts': group.category ? 'Alt+ArrowUp Alt+ArrowDown Shift+F10' : 'Shift+F10',
@@ -1924,10 +2032,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             h('span', { hidden: true, 'data-categories-node': 'category', 'data-categories-id': group.id }),
             h('span', { className: 'dshc-sb-lead', 'aria-hidden': true },
                 h('span', { className: 'dshc-sb-chev' }, h(ui.IconChevronRightOutlineRegular, { size: 12 }))),
-            h('span', { className: 'dshc-sb-name', 'data-categories-title': '' }, group.name),
+            h('span', { className: 'dshc-sb-name', 'data-categories-title': group.name, 'data-categories-cut': cut === null ? undefined : '' }, cut ?? group.name),
             dot ? h('span', { className: 'dshc-sb-dot', 'aria-hidden': true }, h(ui.StateDot, { state: dot })) : null,
             h('span', { className: 'dshc-sb-count', 'aria-hidden': true }, count),
-            h(CategoryMenu, { ...menu, group, open, setOpen }));
+            h(CategoryMenu, { ...menu, group, open, setOpen })));
         }
 
         /**
@@ -1975,6 +2083,30 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return result;
             };
             const ids = (groups ?? EMPTY).filter((g) => g.category).map((g) => g.id);
+            /*
+             * When a dialog closes, the keyboard goes back where it was (DESIGN.md §9): to the header its menu was
+             * opened from. That header takes the focus as the dialog opens, so DSH's dialog, which gives the focus back
+             * to what had it, gives it back there (the menu's ⋯ hides once the header loses the focus, and couldn't take
+             * it). After a delete, that header is gone: the header now in its place takes it (refocus).
+             */
+            const headOf = (id) => [...(tree?.querySelectorAll?.(SB_HEAD) ?? EMPTY)].find((el) => el.getAttribute('data-categories-sb') === id) ?? null;
+            const refocus = React.useRef(null);
+            const openDialog = (next, group) => {
+                const head = group ? headOf(group.id) : null;
+                if (head && typeof document !== 'undefined' && document.activeElement !== head) head.focus({ preventScroll: true });
+                setDialog(next);
+            };
+            React.useEffect(() => {
+                const want = refocus.current;
+                if (want === null || dialog !== null || typeof document === 'undefined') return;
+                if (Date.now() > want.until) { refocus.current = null; return; }
+                const head = headOf(want.id);
+                const active = document.activeElement;
+                if (head && (active === null || active === document.body)) {
+                    refocus.current = null;
+                    head.focus({ preventScroll: true });
+                }
+            });
             const actions = {
                 file: (workspace, group, before) => act('fileWorkspace', { workspace, category: group.category ? group.id : '', before: before ?? '' },
                     group.workspaces.includes(workspace) ? SIDEBAR.moved(titleOf(workspace)) : SIDEBAR.filed(titleOf(workspace), group.name), () => toggle(group.id, false)),
@@ -1984,13 +2116,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     if (at < 0 || at + by < 0 || at + by >= ids.length) return;
                     void actions.moveCategory(group.id, by < 0 ? ids[at - 1] : ids[at + 2] ?? null);
                 },
-                create: (ws) => setDialog({ kind: 'new', ws }),
+                create: (ws, group) => openDialog({ kind: 'new', ws }, group),
                 // DSH's own Add workspace; what it makes goes where the menu was (added, below).
                 newWorkspace: (group) => { plugin.addWorkspace?.start((ws) => read.current.added(ws, group.id)); },
                 /** New workspace… shows where DSH has its Add workspace: null where it hasn't, else {busy}. */
                 adding: () => plugin.addWorkspace?.state() ?? null,
-                rename: (group) => setDialog({ kind: 'rename', group }),
-                remove: (group) => setDialog({ kind: 'delete', group }),
+                rename: (group) => openDialog({ kind: 'rename', group }, group),
+                remove: (group) => openDialog({ kind: 'delete', group }, group),
             };
             const read = React.useRef(null);
             read.current = {
@@ -2032,9 +2164,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     title: SIDEBAR.deleteTitle, text: SIDEBAR.deleteText(dialog.group.name, dialog.group.workspaces.length), action: SIDEBAR.deleteTitle, busyLabel: SIDEBAR.deleting,
                     onClose: () => setDialog(null),
                     onSubmit: async () => {
+                        // The header that takes the deleted one's place: the next one, else Other workspaces when its
+                        // workspaces go there, else the one before it.
+                        const all = groups ?? EMPTY;
+                        const at = all.findIndex((g) => g.id === dialog.group.id);
+                        const next = all[at + 1]?.id ?? (dialog.group.workspaces.length > 0 ? OTHERS : all[at - 1]?.id) ?? null;
                         const result = await plugin.facts.act('removeCategory', { category: dialog.group.id });
                         if (!result.ok) return errorText(result.error);
                         announce(SIDEBAR.deleted(dialog.group.name));
+                        refocus.current = next === null ? null : { id: next, until: Date.now() + 4000 };
                         setDialog(null);
                         return null;
                     },
@@ -2259,7 +2397,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             hostLink, errorText, categoryFacts, listText, plural, shortPath, folderName, workspaceTitle, workspaceOfSession, sameList, chatDot,
             pageModel, visibleItems, pageMove, treeMeta, treeDot, findInTree, withHit, PageTree, WorkspaceMenu, CategoriesPage, CategoriesIcon, NameDialog, ConfirmDialog,
             sidebarGroups, sidebarRules, workspaceDot, groupDot, sameSeats, sectionWorkspace, sectionAt, placeHeaders, markList, describeWorkspaces, markWorkspaceDots, useTreeSync, useCategoryDrags,
-            dshAddFlow, workspaceAdder, CategoryMenu, CategoryHeader, SidebarTree,
+            dshAddFlow, workspaceAdder, CategoryMenu, fitName, CategoryHeader, SidebarTree,
             chipLine, categoryHolding, pageOpener, CategoryChip, useChipHost, windowApi,
         };
         return module.exports;
