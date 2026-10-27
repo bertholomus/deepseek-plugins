@@ -394,7 +394,7 @@ node --test test/agent-terminals.test.js test/agent-terminals-client.test.js   #
 node scripts/e2e.mjs agent-terminals                                           # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (173 checks, 6.5 to 9.5 minutes a build here) starts DSH from
+The real-DSH test (173 checks, four to ten minutes a build here, with the Mac's load) starts DSH from
 each `.e2e/dsh-<version>` install and from the installed app's own DSH, each in a throwaway home with a throwaway
 home folder for its shell, with Session Watch, Decisions, Agent Terminals
 and a stand-in neighbour plugin that draws in the same places. Stand-in
@@ -463,7 +463,9 @@ logged as DSH quitting and starting it; sets `enabled` back to true in the profi
 applies it with no restart, *What happened* says what the edit changed,
 and the agents it ended start again, resumed),
 and ends every process it started. Every quit of DSH in the
-run must end by itself within its grace (20 s), never by a kill. It reads
+run must end by itself within its grace (20 s), never by a kill, and the
+window must log no error from the suite's browser halves (DSH's own
+errors are printed, not counted). It reads
 the running DSH's fingerprint before and after and fails if it moved;
 pictures go to `.e2e/shots/agent-terminals/<version>/`.
 
