@@ -345,11 +345,18 @@ this version's changes did:
 - **After a stop that did not close the index**, opening it took 2.0 s:
   SQLite's full check runs then.
 
-**Long notes** (the run at a load of about 70), in an index of their
-own: a daily log of 601 sections, a 9 MB run log and a note of 60,000
-sections (100,602 sections kept) were read in 2.9 s, a slice at a time.
-Searches meanwhile took a median of 41.3 ms, the slowest 191 ms. Once
-both logs grew, they were read again in 2.6 s.
+**Long notes**, in an index of their own: a daily log of 601 sections, a
+9 MB run log and a note of 60,000 sections (100,602 sections kept), read
+a slice at a time. In three runs at a load of 50 to 65 (8:31 PM):
+
+- **Read** in 2.3 to 5.0 s. Searches meanwhile took a median of 43 to
+  47 ms; the slowest took 148 to 323 ms.
+- **Read again** once both logs grew, in 1.4 to 3.5 s. Searches meanwhile
+  took a median of 32 to 47 ms; the slowest took 143 to 543 ms.
+- **What holds a search up** is the slice that cuts a note's 4 MB into
+  its sections, at once: at that load it took up to about 200 ms. A big
+  note's middle is only counted for its lines, 2 MB a slice, and the rows
+  a note no longer has go out 200 a slice.
 
 To measure again:
 
@@ -521,7 +528,7 @@ node --test test/recall*.test.js   # the index, search, the tool, the page's hos
 node scripts/e2e.mjs recall        # real DSH in a throwaway home, on every DSH build here
 ```
 
-**Unit tests** (77: 48 for the host half, 21 for the browser half, 6 for
+**Unit tests** (78: 49 for the host half, 21 for the browser half, 6 for
 the plugin, 2 for the bench). The host tests cover:
 
 - reading DSH session logs, transcripts (undated ones take their file's
@@ -533,7 +540,8 @@ the plugin, 2 for the bench). The host tests cover:
   9 MB log searched at its first 1 MB and last 3 MB (its middle not, and
   said so in words), a note of 60,000 sections kept at its first 5,000 and
   last 45,000 as it grows and shrinks, and a long note put in a slice at a
-  time;
+  time (a 9 MB log's middle counted 2 MB a slice, and the 20,000 rows of a
+  note cut to two taken out 200 a slice);
 - the incremental index: appends, rewrites, deletes, a folder that is not
   there, an unclean stop, a broken index set aside, an index of the
   version before brought up in place (only its notes read again), an
