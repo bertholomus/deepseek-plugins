@@ -112,8 +112,9 @@ export const closedWhat = (count) => `${count === 1 ? 'Its' : 'Their'} notes are
 /** Whether a vault path is in the drafts folder (compared without case: a Mac's disk ignores it). */
 const inFolder = (rel, folder) => Boolean(folder) && (rel.toLowerCase() === folder.toLowerCase() || rel.toLowerCase().startsWith(`${folder.toLowerCase()}/`));
 
-/** How much of a draft's words the page shows. */
+/** How much of a draft's words the page shows: in its row, and when a person opens the whole draft. */
 const PREVIEW_CHARS = 240;
+export const DRAFT_BODY_CHARS = 8000;
 
 /**
  * Markdown as the plain words a person reads in a preview: no title line,
@@ -159,6 +160,8 @@ function draftOf(rel, text, file) {
         turn: Number.isSafeInteger(source.turn) ? source.turn : undefined,
         folder: typeof source.folder === 'string' ? source.folder.slice(0, 400) : '',
         preview: cut(plainText(body), PREVIEW_CHARS),
+        // The whole draft as written, for a person to read before Promote or Discard (its title line is the row's title).
+        body: cut(String(body ?? '').replace(/^\s*#\s+[^\n]*\n?/, '').trim(), DRAFT_BODY_CHARS),
         mtimeMs: file.mtimeMs,
     };
 }
@@ -418,6 +421,22 @@ export class Vault {
     /** The drafts folder's notes, newest first. */
     drafts() {
         return [...this.draftsByPath.values()].sort((a, b) => b.created - a.created || a.path.localeCompare(b.path)).slice(0, MAX_DRAFTS);
+    }
+
+    /**
+     * The active notes a draft shares its subject with: what a turn with the
+     * draft's words, in the folder it was saved from, would get.
+     * @param {{ title?: string, body?: string, folder?: string }} draft
+     * @returns {{ path: string, title: string }[]}
+     */
+    related(draft, limit = 2) {
+        const words = `${draft?.title ?? ''}\n\n${plainText(draft?.body ?? '').slice(0, 1500)}`.trim();
+        if (!words) return [];
+        try {
+            return this.search(words, { folder: draft.folder ?? '', limit }).results.slice(0, limit).map((r) => ({ path: r.path, title: r.title }));
+        } catch {
+            return [];
+        }
     }
 
     /**

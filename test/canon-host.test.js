@@ -17,7 +17,7 @@ import { noteOf, parseNote, setFields, statusOf, yamlLines } from '../plugins/ca
 import { Index, MANY_DISTINCT, MIN_SCORE, SHARE_BODY, SHARE_TITLED, asksOf, folderKeys, namesOf, projectsOf, questionsOf } from '../plugins/canon/lib/search.js';
 import { MAX_NOTE_BYTES, Vault, addressedLines, addressedToAgents, bestPassage, closedEntry, closedText, closedWhat, cut, folderProblem, paragraphs, plainText, quotedLength, unaddressed } from '../plugins/canon/lib/vault.js';
 import { HEADER, KIND, Recall, SUMMARY_MAX, aboutOf, buildBlock, dayIn, entryBudget, newerFirst, notesThatFit, promptOf, shareOut, summaryOf } from '../plugins/canon/lib/recall.js';
-import { KINDS, capture, cleanTags, cleanTitle, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
+import { KINDS, capture, cleanTags, cleanTitle, discard, isDraftPath, promote, slugOf, writeRefusal } from '../plugins/canon/lib/drafts.js';
 import { INITIAL, KEY, applyEvent, canonProjection, foldAll, parseState, parseView, viewOf } from '../plugins/canon/lib/projection.js';
 import { Switches, pageState, parseSwitches, recentSessions, sessionState, working } from '../plugins/canon/lib/page.js';
 import { JsonStore } from '../plugins/canon/lib/shared/files.js';
@@ -1383,6 +1383,43 @@ test('drafts: Promote refuses anything that is not a plain note in the drafts fo
     assert.deepEqual(filesIn(dir).filter((p) => p !== 'Drafts/Linked.md'), before);
 });
 
+test('drafts: Discard moves a draft, as written, to the vault\'s .trash under a free name; refused while read only or for anything else', async () => {
+    const dir = vaultCopy();
+    const draft = 'Drafts/2026-10-01 Gateway timeouts.md';
+    const original = readFileSync(join(dir, draft), 'utf8');
+    const before = filesIn(dir);
+    const refused = await discard({ settings: using(dir), path: draft });
+    assert.equal(refused.ok, false);
+    assert.match(refused.reason, /^Canon is read only \(“What Canon may write” is Read only\), so it moves no draft\./);
+    assert.deepEqual(filesIn(dir), before);
+    const settings = using(dir, { access: 'drafts' });
+    for (const [path, words] of [['Home.md', /not a note in the drafts folder/], ['Drafts/../Home.md', /not a note in the drafts folder/], ['Drafts/Missing.md', /no longer there/]]) {
+        const result = await discard({ settings, path });
+        assert.match(result.reason ?? 'moved', words, path);
+    }
+    assert.deepEqual(filesIn(dir), before);
+    // Allowed (promoting need not be on): moved byte for byte, never deleted; a name taken in .trash gets " 2".
+    const result = await discard({ settings, path: draft });
+    assert.deepEqual(result, { ok: true, from: draft, path: '.trash/2026-10-01 Gateway timeouts.md' });
+    assert.ok(!existsSync(join(dir, draft)));
+    assert.equal(readFileSync(join(dir, result.path), 'utf8'), original);
+    writeFileSync(join(dir, draft), original);
+    assert.equal((await discard({ settings, path: draft })).path, '.trash/2026-10-01 Gateway timeouts 2.md');
+    assert.equal(readFileSync(join(dir, '.trash/2026-10-01 Gateway timeouts.md'), 'utf8'), original, 'the one there first is untouched');
+    // The trash is never read as notes, and never a link out of the vault.
+    const vault = await readVault(dir);
+    assert.ok(!vault.drafts().some((d) => d.path.startsWith('.trash/')));
+    assert.ok(!vault.search('gateway idle connections keepalive timeouts').results.some((r) => r.path.startsWith('.trash/')));
+    const other = vaultCopy();
+    const outside = tempDir('canon-trash-outside');
+    rmSync(join(other, '.trash'), { recursive: true, force: true });
+    symlinkSync(outside, join(other, '.trash'));
+    const linked = await discard({ settings: using(other, { access: 'drafts' }), path: draft });
+    assert.match(linked.reason, /into the vault's \.trash folder \(\.trash is a link, and Canon writes only into plain folders inside the vault\), so nothing changed\./);
+    assert.ok(existsSync(join(other, draft)));
+    assert.deepEqual(readdirSync(outside), []);
+});
+
 // ── The card's projection and the page ────────────────────────────────
 
 test('projection: the card\'s view holds the count and the last recall; the session\'s turn comes from DSH\'s turns', () => {
@@ -1545,7 +1582,7 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     for (const [key, value] of Object.entries(DEFAULTS)) assert.equal(canon.Config.shape[key].value, value, key);
     // Every setting takes any value, so a wrong type is said in words (checkConfig), never dropped or a failed start.
     for (const key of Object.keys(DEFAULTS)) assert.equal(canon.Config.shape[key].type, 'any', key);
-    assert.deepEqual([...marked].sort(), ['promote', 'refresh', 'search', 'session', 'setSession', 'state']);
+    assert.deepEqual([...marked].sort(), ['discard', 'promote', 'refresh', 'search', 'session', 'setSession', 'state']);
 
     const dsh = standInDsh();
     const config = { ...DEFAULTS, vault };
@@ -1605,6 +1642,10 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     await assert.rejects(remote.promote(draft), (error) => error.code === 'canon/refused' && /Not promoted: Canon is read only/.test(error.message));
     assert.deepEqual(filesIn(vault), before);
     assert.equal((await remote.state()).history[0].state, 'refused');
+    // Discard while read only: refused in words, logged, nothing moved.
+    await assert.rejects(remote.discard(draft), (error) => error.code === 'canon/refused' && /Not discarded: Canon is read only .*so it moves no draft\. Set it to Drafts in Canon's settings to discard drafts here, or delete the note in Obsidian\./.test(error.message));
+    assert.deepEqual(filesIn(vault), before);
+    assert.deepEqual([(await remote.state()).history[0].kind, (await remote.state()).history[0].state], ['discard', 'refused']);
 
     // Drafts allowed (a save in Plugins): the capture tool is offered, and a call writes one draft.
     config.access = 'drafts';
@@ -1627,6 +1668,9 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     const fresh = listedDrafts.find((d) => d.path === written[0]);
     const old = listedDrafts.find((d) => d.path === 'Drafts/2026-10-01 Gateway timeouts.md');
     assert.deepEqual([fresh?.sessionId, fresh?.sessionTitle, fresh?.sessionKnown], ['s-1', 'Gateway work', true]);
+    // The whole draft for a person to read, and the active note on its subject (from the folder it was saved in).
+    assert.equal(fresh?.body, 'The load balancer checks port 8080.');
+    assert.deepEqual(fresh?.related, [{ path: 'Projects/harbor-gateway/Gateway ports.md', title: 'Gateway ports' }]);
     assert.deepEqual([old?.sessionId, old?.sessionTitle, old?.sessionKnown], ['fixture-session-1', '', false]);
     let history = (await remote.state()).history;
     assert.equal(history[0].kind, 'capture');
@@ -1648,6 +1692,18 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.ok(!existsSync(join(vault, draft)));
     history = (await remote.state()).history;
     assert.equal(history[0].text, 'Draft promoted to an active note');
+    // Discard: the draft moves, as written, to the vault's trash; the page lists it no more; logged.
+    const savedText = readFileSync(join(vault, written[0]), 'utf8');
+    const discarded = await remote.discard(written[0]);
+    assert.equal(discarded.path, `.trash/${written[0].slice('Drafts/'.length)}`);
+    assert.ok(!existsSync(join(vault, written[0])));
+    assert.equal(readFileSync(join(vault, discarded.path), 'utf8'), savedText);
+    assert.ok(!(await remote.state()).drafts.some((d) => d.path === written[0]));
+    history = (await remote.state()).history;
+    assert.deepEqual([history[0].kind, history[0].state, history[0].text], ['discard', 'done', 'Draft discarded']);
+    assert.equal(history[0].why, `${written[0]} is now ${discarded.path}, in the vault's trash. Move it back to the drafts folder to keep it.`);
+    await assert.rejects(remote.discard(written[0]), /Not discarded: that draft is no longer there/);
+    await assert.rejects(remote.discard(''), /Name the draft to discard/);
     const later = step({ id: 'm-4', turn: 4, text: 'Why do idle gateway connections drop?' });
     const laterDecision = await dsh.preStep(later.payload, later.next);
     assert.ok(laterDecision.messages.some((m) => m.source?.kind === 'dsh-plugin-canon' && m.source.notes.some((n) => n.path === promoted.path)));
@@ -1673,7 +1729,7 @@ test('plugin: a prompt gets the cited block; per-session off stops it; capture a
     assert.ok(JSON.parse(readFileSync(join(dshHome, 'canon', 'state.json'), 'utf8')).v === 1);
     assert.deepEqual(dsh.warnings, ['canon: not working until a setting is fixed: Characters a turn, at most (maxChars) must be a whole number of characters from 400 to 8000 (it is 5)']);
     const events = readFileSync(join(dshHome, 'canon', 'events.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).add?.kind).filter(Boolean);
-    assert.deepEqual([...new Set(events)].sort(), ['capture', 'promote', 'session', 'settings']);
+    assert.deepEqual([...new Set(events)].sort(), ['capture', 'discard', 'promote', 'session', 'settings']);
     await settle();
 });
 

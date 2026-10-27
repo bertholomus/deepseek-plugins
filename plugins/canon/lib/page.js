@@ -112,6 +112,9 @@ function settingsOf(config, current) {
     };
 }
 
+/** The newest drafts that name the active notes on their subject (one search each). */
+const RELATED_DRAFTS = 30;
+
 /**
  * Everything the page shows.
  * @param {object} parts
@@ -145,7 +148,8 @@ export async function pageState({ config, check, current, vault, events, recalls
         vault: on ? vault.status() : { state: 'unset', counts: { notes: 0, active: 0, drafts: 0, other: 0, unreadable: 0, closed: 0 }, closed: [] },
         sessions: sessions.map((s) => ({ ...s, title: names.get(s.sessionId) ?? '' })),
         // A draft from a session DSH no longer has (or another computer's) names it without a way to open it.
-        drafts: drafts.map((d) => ({ ...d, sessionTitle: d.sessionId ? names.get(d.sessionId) ?? '' : '', sessionKnown: Boolean(d.sessionId) && names.has(d.sessionId) })),
+        // The newest drafts also name the active notes on the same subject, for a person to read before Promote.
+        drafts: drafts.map((d, i) => ({ ...d, related: i < RELATED_DRAFTS && typeof vault.related === 'function' ? vault.related(d) : [], sessionTitle: d.sessionId ? names.get(d.sessionId) ?? '' : '', sessionKnown: Boolean(d.sessionId) && names.has(d.sessionId) })),
         // Each entry names its session as DSH does now (its title), and says whether DSH still has it.
         history: history.map((e) => (named(e.sessionId) ? { ...e, sessionTitle: names.get(e.sessionId) ?? '', sessionKnown: names.has(e.sessionId) } : e)),
     };

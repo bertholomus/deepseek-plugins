@@ -28,7 +28,7 @@ import z from '@deepseek-ai/schemastery';
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { LIVE_SETTINGS, checkConfig, displayPath, resolved, savedEntry } from './config.js';
-import { capture, promote } from './drafts.js';
+import { capture, discard, promote } from './drafts.js';
 import { Switches, parseSwitches, working } from './page.js';
 import { KEY, canonProjection } from './projection.js';
 import { Recall } from './recall.js';
@@ -347,6 +347,16 @@ export function apply(ctx, config) {
                 throw new Error(`Not promoted: ${result.reason}`);
             }
             events.add({ kind: 'promote', state: 'done', path: result.path, text: 'Draft promoted to an active note', why: `${result.from} is now ${result.path}, with status: active. Canon adds it to turns from now on.` });
+            await vault.again();
+            return result;
+        },
+        async discard(path) {
+            const result = await discard({ settings: current(), path });
+            if (!result.ok) {
+                events.add({ kind: 'discard', state: 'refused', text: 'Not discarded', why: `${path}: ${result.reason[0].toUpperCase()}${result.reason.slice(1)}` });
+                throw new Error(`Not discarded: ${result.reason}`);
+            }
+            events.add({ kind: 'discard', state: 'done', path: result.path, text: 'Draft discarded', why: `${result.from} is now ${result.path}, in the vault's trash. Move it back to the drafts folder to keep it.` });
             await vault.again();
             return result;
         },

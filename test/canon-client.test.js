@@ -22,7 +22,7 @@ const NOTES = [{ path: 'Projects/harbor-gateway/Gateway ports.md', title: 'Gatew
 const VIEW = { count: 2, last: { turn: 3, at: now - 60000, notes: NOTES } };
 const SETTINGS = { vault: `${HOME}/Canon`, access: 'read-only', draftsFolder: 'Drafts', promote: false, promoteFolder: '', recall: true, maxNotes: 3, maxChars: 2000 };
 const VAULT = { state: 'ok', readAt: now - 30000, took: 5, truncated: false, changed: 0, path: `${HOME}/Canon`, display: '~/Canon', draftsFolder: 'Drafts', counts: { notes: 10, active: 6, drafts: 2, other: 2, unreadable: 0 }, reading: false };
-const DRAFT = { path: 'Drafts/2026-10-01 Gateway timeouts.md', title: 'Gateway timeouts', kind: 'gotcha', status: 'draft', created: now - 3600000, sessionId: 's', turn: 4, folder: '/work/Projects/harbor-gateway', preview: 'The harbor gateway drops idle connections after 60 seconds.', sessionTitle: 'Gateway work' };
+const DRAFT = { path: 'Drafts/2026-10-01 Gateway timeouts.md', title: 'Gateway timeouts', kind: 'gotcha', status: 'draft', created: now - 3600000, sessionId: 's', turn: 4, folder: '/work/Projects/harbor-gateway', preview: 'The harbor gateway drops idle connections after 60 seconds.', body: 'The harbor gateway drops idle connections after 60 seconds.', sessionTitle: 'Gateway work' };
 const PAGE_STATE = {
     enabled: true,
     settings: SETTINGS,
@@ -215,6 +215,7 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
         search: ({ text }) => (text.includes('thanks') ? { terms: [], folder: { repo: '', parent: '' }, coding: false, results: [], others: [], block: null } : text.includes('helper') ? TRY_CODING : TRY),
         setSession: ({ sessionId, on }) => ({ sessionId, off: !on, changed: true }),
         promote: () => promoteAnswer,
+        discard: ({ path }) => ({ ok: true, from: path, path: `.trash/${path.split('/').at(-1)}` }),
         refresh: () => VAULT,
     });
     t.after(() => kit.setConnection(undefined));
@@ -298,6 +299,8 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     assert.match(text, /Saved 1 h ago from Gateway work, turn 4 · Drafts\/2026-10-01 Gateway timeouts\.md/);
     assert.match(text, /gotcha/);
     const draftRow = withAttr(drafts(), 'data-canon-draft')[0];
+    assert.equal(button(draftRow, 'Discard'), undefined, 'read only: Canon moves no draft, so no Discard');
+    assert.equal(withAttr(draftRow, 'data-canon-draft-body').length, 0, 'a draft whose preview shows all of it has nothing more to open');
     assert.equal(button(draftRow, 'Promote').props['aria-label'], 'Promote Gateway timeouts');
     assert.equal(button(draftRow, 'Promote').props.disabled, undefined);
     await button(draftRow, 'Promote').props.onClick();
@@ -347,9 +350,29 @@ test('the page: the vault, the try-out, the sessions with their switches, the dr
     t.after(() => fresh.unmount());
     await settle(5);
     text = textIn(withAttr(fresh.tree, 'data-canon-drafts')[0]);
-    assert.match(text, /Notes agents saved in Drafts\. None is added to a turn until a person promotes it\./);
+    assert.match(text, /Notes agents saved in Drafts\. None is added to a turn until a person promotes it; Discard moves one to the vault's trash\./);
     assert.match(text, /Promoting is on: Promote makes a draft an active note in Notes\./);
     assert.match(textIn(withAttr(fresh.tree, 'data-canon-header')[0]), /Drafts: agents may save draft notes in Drafts, and none is added to a turn until a person promotes it\./);
+
+    // A draft read in full before Promote or Discard, with the active note on its subject; Discard says where it went.
+    const body = 'The harbor gateway drops idle connections after 60 seconds.\n\n## Why\n\nThe load balancer\'s idle timeout is 60 s; keepalive every 30 s holds them.';
+    state = { ...state, drafts: [{ ...DRAFT, body, related: [{ path: 'Projects/harbor-gateway/Gateway ports.md', title: 'Gateway ports' }] }] };
+    const full = mount(CanonPage, {});
+    t.after(() => full.unmount());
+    await settle(5);
+    const row = withAttr(withAttr(full.tree, 'data-canon-drafts')[0], 'data-canon-draft')[0];
+    const disclosure = withAttr(row, 'data-canon-draft-body')[0];
+    assert.equal(disclosure.type, 'details');
+    assert.equal(textIn(disclosure), `Read the whole draft${body}`);
+    assert.equal(textIn(withAttr(row, 'data-canon-related')[0]), 'Active note on the same subject: “Gateway ports” (Projects/harbor-gateway/Gateway ports.md). Read it before you promote this draft.');
+    const discardButton = button(row, 'Discard');
+    assert.equal(discardButton.props['aria-label'], 'Discard Gateway timeouts to the vault\'s trash');
+    await discardButton.props.onClick();
+    await settle(5);
+    assert.deepEqual(calls.filter(([m]) => m === 'discard'), [['discard', { path: DRAFT.path }]]);
+    const saidNow = withAttr(withAttr(full.tree, 'data-canon-drafts')[0], 'data-canon-said')[0];
+    assert.equal(textIn(saidNow), 'Discarded “Gateway timeouts”: it is in the vault\'s trash now, .trash/2026-10-01 Gateway timeouts.md. Move it back to Drafts to keep it.');
+    assert.equal(saidNow.props.tabIndex, -1, 'the discarded draft\'s row goes: the focus goes to what Discard did');
 });
 
 test('the page: no vault, a vault it cannot read, empty lists, switched off, a wrong setting and Canon not running each say what to do', async (t) => {

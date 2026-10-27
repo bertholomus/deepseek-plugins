@@ -1120,7 +1120,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 name: 'access',
                 kind: 'choice',
                 title: 'What Canon may write',
-                hint: 'Read only: nothing, ever. Drafts: agents may save new draft notes in the drafts folder; drafts are never added to turns.',
+                hint: 'Read only: nothing, ever. Drafts: agents may save new draft notes in the drafts folder, and Discard on Canon\'s page moves one to the vault\'s .trash; drafts are never added to turns.',
                 default: 'read-only',
                 options: [{ value: 'read-only', label: 'Read only' }, { value: 'drafts', label: 'Drafts' }],
             },
@@ -1657,18 +1657,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             React.useEffect(() => {
                 if (said.text) saidRef.current?.focus?.();
             }, [said]);
-            const onPromote = async (draft) => {
+            const act = async (what, draft) => {
                 if (busy) return;
-                setBusy(draft.path);
+                setBusy(`${what}:${draft.path}`);
                 setSaid({ text: '', bad: false });
-                const { problem, value } = await run('promote', { path: draft.path });
+                const { problem, value } = await run(what, { path: draft.path });
                 setBusy('');
                 setSaid(problem ? { text: problem, bad: true }
-                    : { text: `Promoted “${nameOf(draft)}”: it is now an active note, ${value.path}, and turns can get it.`, bad: false });
+                    : what === 'promote'
+                        ? { text: `Promoted “${nameOf(draft)}”: it is now an active note, ${value.path}, and turns can get it.`, bad: false }
+                        : { text: `Discarded “${nameOf(draft)}”: it is in the vault's trash now, ${value.path}. Move it back to ${s.draftsFolder} to keep it.`, bad: false });
                 onChanged();
             };
-            const sub = s.access === 'drafts'
-                ? `Notes agents saved in ${s.draftsFolder}. None is added to a turn until a person promotes it.`
+            const writes = s.access === 'drafts';
+            const sub = writes
+                ? `Notes agents saved in ${s.draftsFolder}. None is added to a turn until a person promotes it; Discard moves one to the vault's trash.`
                 : `The notes in the drafts folder, ${s.draftsFolder}. Canon is read only, so agents save none there, and none is ever added to a turn.`;
             return h(kit.Card, { title: TEXT.drafts, sub, attrs: { 'data-canon-drafts': String(data.drafts.length), 'data-canon-promote': s.access === 'drafts' && s.promote ? 'on' : 'off' } },
                 h('div', { className: `${P}-lines` }, h('div', { className: `${P}-line` }, promoteText(s), s.access === 'drafts' && s.promote ? null : h(SettingsButton, { focus: s.access === 'drafts' ? 'promote' : 'access', label: 'Open Canon\'s settings', variant: 'ghost' }))),
@@ -1691,10 +1694,21 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                 d.created ? h('span', null, 'Saved ', h(kit.TimeText, { at: d.created })) : null,
                                 d.sessionId ? h('span', null, d.created ? ' from ' : 'From ', h(SessionLink, { title: d.sessionTitle || 'a session', sessionId: d.sessionKnown === false ? '' : d.sessionId }), Number.isSafeInteger(d.turn) ? `, turn ${d.turn}` : '') : null,
                                 h('span', { className: `${P}-code` }, `${d.created || d.sessionId ? ' · ' : ''}${d.path}`)),
-                            d.preview ? h('div', { className: `${P}-why` }, d.preview) : null),
+                            d.preview ? h('div', { className: `${P}-why` }, d.preview) : null,
+                            Array.isArray(d.related) && d.related.length
+                                ? h('div', { className: `${P}-meta`, 'data-canon-related': d.related.map((r) => r.path).join('\n') },
+                                    `Active ${d.related.length === 1 ? 'note' : 'notes'} on the same subject: `,
+                                    ...d.related.flatMap((r, i) => [i ? '; ' : '', `“${nameOf(r)}” `, h('span', { key: r.path, className: `${P}-code` }, `(${r.path})`)]),
+                                    '. Read ', d.related.length === 1 ? 'it' : 'them', ' before you promote this draft.')
+                                : null,
+                            // The whole draft, when it holds more than the line above shows.
+                            typeof d.body === 'string' && d.body !== '' && d.body.replace(/\s+/g, ' ').trim() !== d.preview ? h('details', { className: `${P}-details`, 'data-canon-draft-body': '' },
+                                h('summary', null, 'Read the whole draft'),
+                                h('p', { className: `${P}-quote` }, d.body)) : null),
                         h('div', { className: `${P}-item-side` },
                             d.kind ? h(ui.Tag, { tone: 'quiet', className: `${P}-tag` }, KIND_WORD[d.kind] ?? d.kind) : null,
-                            h(ui.Button, { variant: 'outline', size: 'sm', 'aria-disabled': busy === d.path ? 'true' : undefined, onClick: () => void onPromote(d), 'aria-label': `Promote ${nameOf(d)}` }, busy === d.path ? 'Promoting…' : 'Promote'))))));
+                            h(ui.Button, { variant: 'outline', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void act('promote', d), 'aria-label': `Promote ${nameOf(d)}` }, busy === `promote:${d.path}` ? 'Promoting…' : 'Promote'),
+                            writes ? h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-disabled': busy ? 'true' : undefined, onClick: () => void act('discard', d), 'aria-label': `Discard ${nameOf(d)} to the vault's trash`, 'data-canon-discard': d.path }, busy === `discard:${d.path}` ? 'Discarding…' : 'Discard') : null)))));
         }
 
         /** What happened lists this many entries until "Show all". */
