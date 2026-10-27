@@ -25,11 +25,14 @@
  * dialog, the chip at the top of a chat, light and dark, 760 px and
  * contrast, and switched off in Plugins it leaves no header, mark, class or
  * style sheet behind; on again, one of everything. DSH's first-run notices
- * are dismissed before each check. Pictures go to SHOTS (default
- * .e2e/shots/categories/<DSH version>/). Then its row in the profile at
- * DSH's next start: values of the wrong type count as their defaults, each
- * warned in its log and named for the page, enabled: "no" counts as off,
- * and enabled: false says off, refuses changes in words and writes nothing;
+ * are dismissed before each check, and one that opens late over a click is
+ * put away and said in the output. Pictures go to SHOTS (default
+ * .e2e/shots/categories/<DSH version>/); a run that stops early leaves a
+ * picture of its window (failed-aborted) and names the dialogs open in it.
+ * Then its row in the profile at DSH's next start: values of the wrong type
+ * count as their defaults, each warned in its log and named for the page,
+ * enabled: "no" counts as off, and enabled: false says off, refuses changes
+ * in words and writes nothing;
  * and a store that can't be used starts it with none, said in its log and
  * on the page, the file kept beside the new store at the first change (made
  * on the page, which names it). Last, beside the Wallpaper plugin (its
@@ -101,6 +104,38 @@ async function waitFor(fn, what, timeout = 30000) {
         await sleep(100);
     }
     throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}`);
+}
+
+/** The first line of each dialog open in the window, for a failure's output. */
+async function openDialogs(page) {
+    const texts = await page.getByRole('dialog').allInnerTexts().catch(() => []);
+    return texts.map((text) => text.trim().split('\n')[0].slice(0, 120)).filter(Boolean);
+}
+
+/**
+ * Clicks `target`. DSH's first-run dialogs (its Preview Notice; its model-key step, whose Configure later changes
+ * nothing) can open late, over what a check clicks, when the machine is busy: one in the way is put away as a
+ * person would, said in the output, and the click tried again. Past 30 s it fails, naming the dialogs left open.
+ */
+async function clickPast(page, target) {
+    const end = Date.now() + 30000;
+    for (;;) {
+        try {
+            await target.click({ timeout: 4000 });
+            return;
+        } catch (error) {
+            const open = await openDialogs(page);
+            if (Date.now() > end) throw new Error(`${error.message.split('\n')[0]}; dialogs open: ${json(open)}`);
+            let putAway = await dismissNotices(page).catch(() => false);
+            const later = page.getByRole('button', { name: 'Configure later', exact: true });
+            if (await later.count().catch(() => 0)) {
+                putAway = true;
+                await later.first().click().catch(() => {});
+                await page.waitForTimeout(300);
+            }
+            if (putAway) console.log(`# a dialog of DSH's (${json(open)}) opened late over a click and was put away`);
+        }
+    }
 }
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-categories-e2e-'));
@@ -451,7 +486,7 @@ try {
         const chat = (await bridge('POST', '/sessions', { workspacePath: dirs.a, title: 'Chip check', text: 'E2E:say Filed under General.' })).sessionId;
         await waitFor(async () => (await bridge('GET', `/sessions/${encodeURIComponent(chat)}`))?.status === 'idle', 'the chat to finish its turn', 60000).catch(() => {});
         const link = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1];
-        win = await openWindow({ signIn: async () => ({ link }) }, pw, { width: 1280, height: 860 });
+        win = await openWindow({ signIn: async () => ({ link }) }, pw, { entry: 'Categories', width: 1280, height: 860 });
         const { page } = win;
         const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
         const section = async (name, fn) => {
@@ -764,7 +799,7 @@ try {
 
         await section('the Categories page on its glass card', async () => {
             // Its entry in DSH's sidebar panel list (a button named by its label, with or without the label showing).
-            await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
+            await clickPast(page, page.getByRole('button', { name: 'Categories', exact: true }).first());
             const pageRoot = page.locator('[data-categories-page]');
             await pageRoot.waitFor({ state: 'visible', timeout: 20000 });
             const heading = await pageRoot.locator('h1').innerText();
@@ -992,10 +1027,10 @@ try {
     let made;
     if (pw) {
         const link = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1];
-        win = await openWindow({ signIn: async () => ({ link }) }, pw, { width: 1280, height: 860 });
+        win = await openWindow({ signIn: async () => ({ link }) }, pw, { entry: 'Categories', width: 1280, height: 860 });
         const { page } = win;
         await dismissNotices(page).catch(() => {});
-        await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
+        await clickPast(page, page.getByRole('button', { name: 'Categories', exact: true }).first());
         const note = page.locator('[data-categories-page] [data-categories-store-note]');
         await note.waitFor({ state: 'visible', timeout: 20000 });
         const said = (await note.innerText()).replace(/\s+/g, ' ').trim();
@@ -1008,7 +1043,7 @@ try {
         await shot(page, shots, 'page-store-unusable-dark');
         await setDark(page, false);
         // The first change, made on the page: New category.
-        await page.locator('[data-categories-new]').click();
+        await clickPast(page, page.locator('[data-categories-new]'));
         const field = page.locator('[data-categories-name-input]');
         await field.waitFor({ state: 'visible', timeout: 5000 });
         await field.fill('Fresh');
@@ -1050,11 +1085,11 @@ try {
         writeProfile([...names, { name: 'wallpaper', dir: wallpaper }]);
         child = await boot(dsh, 'beside Wallpaper');
         const link = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1];
-        win = await openWindow({ signIn: async () => ({ link }) }, pw, { width: 1280, height: 860 });
+        win = await openWindow({ signIn: async () => ({ link }) }, pw, { entry: 'Categories', width: 1280, height: 860 });
         const { page } = win;
         await waitFor(() => page.evaluate(() => document.body.classList.contains('wp-on')), 'Wallpaper on', 30000);
         await dismissNotices(page).catch(() => {});
-        await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
+        await clickPast(page, page.getByRole('button', { name: 'Categories', exact: true }).first());
         await page.locator('[data-categories-page]').waitFor({ state: 'visible', timeout: 20000 });
         await page.waitForTimeout(600);
         const look = () => page.evaluate(() => {
@@ -1088,6 +1123,11 @@ try {
 } catch (error) {
     failed += 1;
     console.log(`not ok - e2e aborted: ${error?.stack ?? error}`);
+    // The window as it was (a picture, and the dialogs open in it), when one was open.
+    if (win?.page) {
+        console.log(`# dialogs open in the window: ${json(await openDialogs(win.page))}`);
+        await shot(win.page, shots, 'failed-aborted').catch(() => {});
+    }
     // DSH's last lines, without its sign-in links (they carry a token).
     console.log(readText(dshLog).split('\n').filter((l) => !l.includes('dsh web: ')).slice(-40).join('\n'));
 } finally {
