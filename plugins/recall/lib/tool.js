@@ -84,6 +84,7 @@ function stoppedBy(why) {
 export function stateWords(r) {
     switch (r?.state) {
         case 'running': return 'still running';
+        case 'ending': return 'ending: DSH says it stopped, and how it ended is not read yet (search again in a few seconds)';
         case 'stopped': return `stopped before it finished${stoppedBy(r.why)}`;
         case 'failed': return r.why ? `failed: ${cut(r.why, 200)}` : 'failed';
         case 'cut-off': return 'cut off by a restart: DSH stopped before it finished';
@@ -134,7 +135,8 @@ export function searchText(found, { limit }) {
         if (r.snippet) lines.push(`   Match: ${marked(r.snippet)}`);
         if (r.titleOnly) lines.push(`   Only its title has the words; this is its first ${r.kind === 'handoff' ? 'section' : 'turn'}.`);
         if (r.titlePart) lines.push(`   Some of the words are only in its title; this ${r.kind === 'handoff' ? 'section' : 'turn'} says the most of the rest.`);
-        if (r.others?.length) lines.push(`   Also matches ${r.kind === 'handoff' ? 'section' : 'turn'}${r.others.length === 1 ? '' : 's'} ${r.others.map((o) => o.turn).join(', ')}${r.hits > r.others.length + 1 ? ' and more' : ''}.`);
+        // Named by the id `open` takes, with the place a person would say: "section 3 (id 4.3)".
+        if (r.others?.length) lines.push(`   Also matches ${r.others.map((o) => `${r.kind === 'handoff' ? 'section' : 'turn'} ${o.turn} (id ${r.file}.${o.turn})`).join(', ')}${r.hits > r.others.length + 1 ? ' and more' : ''}.`);
         const where = r.kind === 'session' ? `session ${r.sessionId}${r.own ? '' : ` (in ${homeless(r.path)})`}` : `${homeless(r.path)}${r.line ? `:${r.line}` : ''}`;
         lines.push(`   id ${r.id} · ${where}`);
     });

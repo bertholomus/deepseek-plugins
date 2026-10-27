@@ -24,7 +24,7 @@
  */
 import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { NOTE_LIMITS, isNote, readNote } from './handoffs.js';
+import { NOTE_LIMITS, cutWords, isNote, readNote } from './handoffs.js';
 import { SessionLog, newSessionState } from './sessionlog.js';
 import { TranscriptLog, newTranscriptState } from './transcripts.js';
 import { canDecode, readFrames, readLines } from './zstd.js';
@@ -37,6 +37,50 @@ const SKIP_DIRS = new Set(['node_modules', '__pycache__', 'venv', 'dist', 'build
 export const WALK_LIMITS = Object.freeze({ depth: 8, sessionDepth: 3, files: 20000 });
 /** How much of a file one part reads. */
 const PART_BYTES = 2 << 20;
+/** Past this many bytes of a big note's middle, its lines are not counted (its last part's lines are not given). */
+const COUNT_LINES_BYTES = 512 << 20;
+
+/**
+ * A note's text: the whole file up to `NOTE_LIMITS.fileBytes`. Past that, its first `headBytes` and the rest of
+ * the cap from its end (`tail`), each cut at a line break, with the line the last part starts on (its middle's
+ * line breaks counted a part at a time, never held whole).
+ * @returns {{ text: string, tail?: { text: string, line: number } }}
+ */
+export function noteText(path, size) {
+    const fd = openSync(path, 'r');
+    try {
+        const read = (from, bytes) => {
+            const buf = Buffer.alloc(Math.max(0, bytes));
+            const got = readSync(fd, buf, 0, buf.length, from);
+            return got < buf.length ? buf.subarray(0, got) : buf;
+        };
+        if (size <= NOTE_LIMITS.fileBytes) return { text: read(0, size).toString('utf8') };
+        let head = read(0, NOTE_LIMITS.headBytes);
+        const headCut = head.lastIndexOf(10);
+        if (headCut >= 0) head = head.subarray(0, headCut + 1);
+        const tailFrom = size - (NOTE_LIMITS.fileBytes - NOTE_LIMITS.headBytes);
+        let tail = read(tailFrom, size - tailFrom);
+        const tailCut = tail.indexOf(10);
+        const tailStart = tailFrom + (tailCut >= 0 ? tailCut + 1 : 0);
+        if (tailCut >= 0) tail = tail.subarray(tailCut + 1);
+        // Line breaks before the last part: the first part's, then the middle's, a part at a time.
+        let breaks = 0;
+        for (let at = head.indexOf(10); at >= 0; at = head.indexOf(10, at + 1)) breaks += 1;
+        let line = 0;
+        if (tailStart - head.length <= COUNT_LINES_BYTES) {
+            for (let from = head.length; from < tailStart;) {
+                const part = read(from, Math.min(PART_BYTES, tailStart - from));
+                if (part.length === 0) break;
+                for (let at = part.indexOf(10); at >= 0; at = part.indexOf(10, at + 1)) breaks += 1;
+                from += part.length;
+            }
+            line = breaks + 1;
+        }
+        return { text: head.toString('utf8'), tail: { text: tail.toString('utf8'), line } };
+    } finally {
+        closeSync(fd);
+    }
+}
 
 const errorWords = (error) => {
     const code = error?.code;
@@ -326,7 +370,7 @@ export class Indexer {
         try {
             if (job.source.kind === 'session') left = this.readSession(job, until);
             else if (job.source.kind === 'transcript') left = this.readTranscript(job, until);
-            else left = this.readHandoff(job);
+            else left = this.readHandoff(job, until);
         } catch (error) {
             this.problem(job, error);
             left = false;
@@ -454,21 +498,31 @@ export class Indexer {
         }
     }
 
-    readHandoff(job) {
-        const st = statSync(job.path);
-        const bytes = Math.min(st.size, NOTE_LIMITS.fileBytes);
-        const buf = Buffer.alloc(bytes);
-        const fd = openSync(job.path, 'r');
-        try {
-            readSync(fd, buf, 0, bytes, 0);
-        } finally {
-            closeSync(fd);
+    /**
+     * A note: read whole (its two ends past 4 MB, see `noteText`), and its rows put a slice at a time, so a note of
+     * thousands of sections never holds a search up. Its place is saved once every row is in: a restart reads it
+     * again whole.
+     */
+    readHandoff(job, until) {
+        if (!job.note) {
+            const st = statSync(job.path);
+            const { text, tail } = noteText(job.path, st.size);
+            job.note = { ...readNote(text, { name: basename(job.path), mtime: st.mtimeMs, tail }), st, at: 0, cutBytes: tail ? st.size : 0 };
         }
-        const { title, rows } = readNote(buf.toString('utf8'), { name: basename(job.path), mtime: st.mtimeMs });
-        const row = this.store.fileById(job.id);
-        const meta = { session: '', title, folder: dirname(job.path), model: '', created: Math.round(st.birthtimeMs || st.ctimeMs), updated: Math.round(st.mtimeMs), turns: rows.length, subagent: false };
-        this.save(job, row, { rows, meta, size: st.size, mtime: st.mtimeMs, ino: st.ino, offset: st.size, state: undefined, error: st.size > bytes ? `Only its first ${Math.round(bytes / 1048576)} MB are searched.` : '' });
-        this.store.trimRows(job.id, rows.length);
+        const n = job.note;
+        const file = { kind: 'handoff', title: n.title, folder: dirname(job.path) };
+        while (n.at < n.rows.length) {
+            this.store.putRow(job.id, file, n.rows[n.at]);
+            n.at += 1;
+            this.rowsPut += 1;
+            this.sectionsPut += 1;
+            if (n.at % 100 === 0 && n.at < n.rows.length && this.now() >= until) return true;
+        }
+        const st = n.st;
+        const meta = { session: '', title: n.title, folder: dirname(job.path), model: '', created: Math.round(st.birthtimeMs || st.ctimeMs), updated: Math.round(st.mtimeMs), turns: n.rows.length, subagent: false };
+        this.store.saveFile(job.id, { size: st.size, mtime: st.mtimeMs, ino: st.ino, offset: st.size, state: undefined, ...meta, skip: '', error: cutWords({ bytes: n.cutBytes, rows: n.cut?.rows }) });
+        // Rows no longer in it: past its end when it got shorter, and those of the middle when only its ends are kept.
+        this.store.keepTurns(job.id, n.rows.map((r) => r.turn));
         return false;
     }
 

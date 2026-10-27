@@ -241,10 +241,10 @@ test('plugin: a turn runs only while DSH says its session runs; a session DSH st
     const remote = dsh.remote();
     const states = async () => Object.fromEntries((await remote.search({ text: 'osprey' })).results.map((r) => [r.sessionId, r.state]));
     assert.ok(await until(async () => JSON.stringify(await states()) === JSON.stringify({ 's-live': 'running', 's-dead': 'cut-off' })), JSON.stringify(await states().catch((e) => e.message)));
-    // DSH says it stopped: its end is read a moment later, so no word for now, and never "running".
+    // DSH says it stopped: its end is read a moment later, so "ending" for now (never "running", and never no word).
     list[0].status = 'idle';
     await dsh.emit('agent/status', { agent: list[0], status: 'idle' });
-    assert.ok(await until(async () => (await states())['s-live'] === ''), JSON.stringify(await states()));
+    assert.ok(await until(async () => (await states())['s-live'] === 'ending'), JSON.stringify(await states()));
     list[0].status = 'running';
     await dsh.emit('agent/status', { agent: list[0], status: 'running' });
     assert.ok(await until(async () => (await states())['s-live'] === 'running'));

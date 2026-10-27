@@ -422,7 +422,8 @@ export class Engine {
     }
 
     /**
-     * A turn's state in one word: '' when it ended as it should (and for a note's section), 'running', or how it
+     * A turn's state in one word: '' when it ended as it should (and for a note's section), 'running', 'ending'
+     * (DSH said its session stopped, and its end is not read yet: DSH writes it a moment later), or how it
      * ended early: 'stopped' (someone or something stopped it), 'failed', 'cut-short' (the model's length
      * limit), 'blocked' (a plugin's check), or 'cut-off' (DSH stopped under it, by a crash or a restart).
      * @param {object} d - the row: kind, done.
@@ -435,8 +436,9 @@ export class Engine {
         // This DSH's session runs only while DSH says so; its end is read a moment after DSH says it stopped.
         if (d.kind === 'session' && f.own === 1 && this.liveKnown) {
             if (this.live.has(f.session)) return 'running';
+            // DSH said it stopped: how its turn ended comes with DSH's next write to the log, a moment later.
             const stopped = this.stoppedAt.get(f.session);
-            return stopped !== undefined && this.now() - stopped < END_GRACE_MS ? '' : 'cut-off';
+            return stopped !== undefined && this.now() - stopped < END_GRACE_MS ? 'ending' : 'cut-off';
         }
         // A transcript has no end mark: its last turn runs while it is written to (its own last time, else its
         // file's). So does another DSH's session, and when that log is quiet with a turn open, its DSH stopped under it.
