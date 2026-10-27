@@ -368,6 +368,23 @@ export class CalendarManager {
         return writable.find((c) => c.accountId === 'local')?.id;
     }
 
+    /**
+     * Before a new account brings its calendars: with no default chosen, a
+     * calendar that new events have been going to and that holds events
+     * stays the default, kept as the choice. So adding an account never
+     * moves new events, a chat's too, to a server calendar (where guests can
+     * be emailed) once the user has used another; a store with no events yet
+     * takes the account's main calendar, and the window says so.
+     */
+    holdDefault() {
+        if (this.store.prefs.defaultCalendar) return;
+        const now = this.defaultCalendarId();
+        if (now && Object.keys(this.store.itemsOf(now)).length > 0) {
+            this.store.prefs.defaultCalendar = now;
+            this.log(`default kept ${now}`);
+        }
+    }
+
     /** Read the account's calendars from its server; add new ones, drop gone ones. */
     async refreshCalendars(accountId) {
         const account = this.account(accountId);
@@ -480,6 +497,7 @@ export class CalendarManager {
             const module = await sourceModule('caldav');
             const found = await module.discover(account, await this.envFor(account));
             if (!found?.calendars?.length) throw new CalendarError('The server has no calendars for this account.');
+            this.holdDefault();
             this.store.accounts[id] = account;
             await this.refreshCalendars(id);
         } catch (error) {
@@ -710,6 +728,7 @@ export class CalendarManager {
             }
             await this.secrets.set(account.id, result.grant);
             delete account.error;
+            if (this.store.accounts[account.id] === undefined) this.holdDefault();
             this.store.accounts[account.id] = account;
             this.sources.delete(account.id);
             await this.refreshCalendars(account.id);
@@ -1137,6 +1156,64 @@ export class CalendarManager {
             if (e - s >= need) slots.push({ start: s, end: e });
         }
         return { slots: slots.slice(0, limit), zone };
+    }
+
+    // ── Reminders ──────────────────────────────────────────────────────
+
+    /**
+     * The reminders due now that no window has shown yet, each an event's
+     * view with `reminder` {key, minutes, at (when it was due)}, the
+     * earliest first. A reminder is due from its time (the start, less its
+     * minutes) until ten minutes after the later of that and the start,
+     * while the event is on (so a window opened late still shows one about
+     * to start, never one long over). Calendars the user hid keep theirs;
+     * subscriptions' are their publisher's, so none; a cancelled event or an
+     * invitation the user declined has none. With `claim`, each is marked
+     * shown and kept so in calendar.json for two days, so one window shows
+     * it, once, across windows and restarts. None while `reminders` is off.
+     */
+    dueReminders({ claim = false } = {}) {
+        if (this.config.reminders === false) return [];
+        const now = this.now();
+        const reminded = this.store.reminded ?? {};
+        const due = this.alarmsNear(now).filter((a) => a.at <= now && now < a.until && reminded[a.key] === undefined);
+        if (claim && due.length > 0) {
+            for (const a of due) reminded[a.key] = now;
+            for (const [key, at] of Object.entries(reminded)) if (at < now - 2 * DAY) delete reminded[key];
+            this.store.reminded = reminded;
+            this.saveState();
+            this.log(`reminders shown ${due.length}`);
+        }
+        return due.map(({ f, key, minutes, at }) => ({ ...this.view(f), reminder: { key, minutes, at } }));
+    }
+
+    /**
+     * Every reminder from a day back to four weeks ahead (the longest a
+     * reminder is set), {f, at, until, minutes, key}: kept until the events
+     * change or an hour has passed.
+     */
+    alarmsNear(now) {
+        const cache = this.alarmCache;
+        if (cache && cache.version === this.version && now >= cache.from && now < cache.from + HOUR) return cache.list;
+        const calendars = Object.values(this.store.calendars).filter((c) => this.store.accounts[c.accountId]?.kind !== 'ics').map((c) => c.id);
+        const list = [];
+        if (calendars.length > 0) {
+            for (const f of this.find({ from: now - DAY, to: now + 40320 * MINUTE + 2 * HOUR, calendars })) {
+                const { o, calendar } = f;
+                const record = o.record;
+                if (!record.alarms?.length || record.status === 'cancelled') continue;
+                if (this.selfOf(record, this.store.accounts[calendar.accountId])?.status === 'declined') continue;
+                for (const minutes of record.alarms) {
+                    const at = o.start - minutes * MINUTE;
+                    const until = Math.min(Math.max(at, o.start) + 10 * MINUTE, Math.max(o.end, o.start + 10 * MINUTE));
+                    // The key names the occurrence and the reminder, not the event's text: a moved event is due again at its new time.
+                    list.push({ f, at, until, minutes, key: hex(`${calendar.id}|${record.uid}|${o.start}|${minutes}`, 20) });
+                }
+            }
+        }
+        list.sort((a, b) => a.at - b.at);
+        this.alarmCache = { version: this.version, from: now, list };
+        return list;
     }
 
     // ── Finding what a change is about ─────────────────────────────────

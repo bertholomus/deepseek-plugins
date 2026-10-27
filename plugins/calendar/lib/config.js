@@ -29,14 +29,18 @@ export const DEFAULTS = Object.freeze({
     tools: true,
     agentChanges: 'preset',
     askBeforeEmails: true,
+    reminders: true,
     googleClientId: '',
     googleClientSecretRef: 'CALENDAR_GOOGLE_CLIENT_SECRET',
     microsoftClientId: '',
     microsoftTenant: 'common',
 });
 
-/** The settings agents' safety depends on: while one is wrong, the plugin uses the safe choice, not the default. */
-const SAFE = Object.freeze({ tools: false, agentChanges: 'ask', askBeforeEmails: true });
+/**
+ * The settings safety depends on: while one is wrong, the plugin uses the safe choice, not the default. A wrong
+ * `enabled` means off: someone touched the off switch, so the calendar stops rather than sync and give chats tools.
+ */
+const SAFE = Object.freeze({ enabled: false, tools: false, agentChanges: 'ask', askBeforeEmails: true });
 
 export const MODES = Object.freeze(['preset', 'ask', 'off']);
 export const SYNC_MINUTES = Object.freeze({ min: 5, max: 1440 });
@@ -78,9 +82,10 @@ export function checkConfig(raw) {
         if (typeof v === 'boolean') settings[key] = v;
         else wrong(key, 'true or false', SAFE[key] ?? DEFAULTS[key], then);
     };
-    onOff('enabled', 'the calendar stays on');
+    onOff('enabled', 'the calendar is switched off');
     onOff('tools', 'chats get no calendar tools');
     onOff('askBeforeEmails', 'a chat\'s change that emails anyone, or reaches their Google calendars, asks you first');
+    onOff('reminders', 'reminders show in DSH');
 
     for (const key of ['storeFile', 'logFile']) {
         const v = value(key);

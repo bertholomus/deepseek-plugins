@@ -71,6 +71,12 @@ export const Config = z.object({
      * there can, from DSH's next start.
      */
     askBeforeEmails: z.any().default(true),
+    /**
+     * Whether the calendars' reminders show in DSH: at each reminder's time, DSH's banner at the top of the window
+     * with the event and Open (and Join for a call), shown once by one window. Off: they fire only where the
+     * calendar's server sends them (your phone and other apps).
+     */
+    reminders: z.any().default(true),
     /** Google sign-in: the client id of the user's own OAuth client (Desktop app). The window can set it too. */
     googleClientId: z.any().default(''),
     /** The credential (DSH's store or the environment) that holds that client's secret. */
@@ -99,7 +105,8 @@ export function apply(ctx, raw) {
     if (!config.enabled) {
         // Switched off: no sync, no file, no tools. The window's calls say so in words rather than going unanswered.
         ctx.inject(['typertGateway'], (scope) => {
-            scope.provide(SERVICE, new CalendarOff(scope));
+            // A wrong value switches it off too, and says so (config.js).
+            scope.provide(SERVICE, new CalendarOff(scope, problems.find((p) => p.key === 'enabled')?.text));
         });
         return;
     }

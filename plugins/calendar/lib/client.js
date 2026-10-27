@@ -59,6 +59,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const IDS = {
             page: `${BUNDLE}:page`,
             agenda: `${BUNDLE}:agenda`,
+            reminders: `${BUNDLE}:reminders`,
         };
         /** The Agenda pane's tab kind in DSH's right sidebar. */
         const AGENDA_KIND = 'calendar-agenda';
@@ -462,6 +463,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 + 'border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-toast-bg);box-shadow:var(--dsw-shadow-lv3);color:var(--dsw-alias-toast-label);font-size:var(--dsw-font-s-14-font-size,14px);line-height:22px;pointer-events:none;animation:dshcal-in var(--ds-transition-duration,.2s) var(--ds-ease-in-out,cubic-bezier(.4,0,.2,1))}',
             '.dshcal-toast[data-tone=error]>svg{color:var(--dsw-alias-state-warn-label)}',
             '.dshcal-toast[data-tone=ok]>svg{color:var(--dsw-alias-state-success-primary)}',
+            '.dshcal-toast.dshcal-toast-acts{pointer-events:auto}',
+            '.dshcal-toast-acts .dshcal-link{color:inherit;font-weight:600}',
 
             // ── The Agenda pane beside chats: inside DSH's right dock (glass already), a faint fill, no second blur.
             '.dshcal-pane{display:flex;flex-direction:column;box-sizing:border-box;height:100%;min-height:0;overflow:auto;padding:12px 10px 16px;color:var(--cal-text);font-size:var(--dsw-font-xs-13-font-size,13px);line-height:1.45;scrollbar-width:thin}',
@@ -494,6 +497,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-notice[data-tone=warn]>svg{color:var(--cal-warn)}',
             '.dshcal-pane-note{display:flex;align-items:center;gap:6px;margin:0 0 10px;padding:7px 9px;border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--cal-warn) 14%,transparent);font-size:var(--dsw-font-xxs-12-font-size,12px)}',
             '.dshcal-pane-note>span{flex:1;min-width:0}',
+            // What's next, at the top of the pane: on the event cards' faint fill, so its small text has a ground.
+            '.dshcal-pane-next{display:flex;align-items:baseline;gap:6px;min-width:0;margin:0 0 10px;padding:7px 9px;border:1px solid var(--cal-line);border-radius:var(--dsw-radius-md);background:var(--cal-fill);font-size:var(--dsw-font-xs-13-font-size,13px)}',
+            '.dshcal-pane-next-label{flex:none;font-weight:600;color:var(--cal-meta)}',
+            '.dshcal-pane-next-what{flex:0 1 auto;min-width:0;margin:0;padding:0;border:0;background:none;color:var(--cal-strong);font:inherit;font-weight:600;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.dshcal-pane-next-what:hover{text-decoration:underline}',
+            '.dshcal-pane-next-when{flex:none;margin-left:auto;color:var(--cal-meta);font-variant-numeric:tabular-nums;white-space:nowrap}',
             '.dshcal-pane .dshcal-stale{margin:0 0 10px;padding:6px 9px;border:0;border-radius:var(--dsw-radius-md)}',
             '.dshcal-pane-foot{display:flex;justify-content:center;margin-top:16px}',
 
@@ -1352,6 +1361,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             /** Notices that stay until the user closes them (a move that stopped halfway): [{id, text}], the newest last. */
             let notices = [];
             let noticeSeq = 0;
+            /** The default calendar the user chose here last, so its move isn't announced as one they didn't make. */
+            let chosenDefault;
             const emit = () => {
                 version++;
                 for (const listener of [...listeners]) {
@@ -1394,6 +1405,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         const json = JSON.stringify(result.value);
                         const moved = state !== undefined && state.version !== result.value.version;
                         if (json === stateJson && stateError === '') return;
+                        // New events now go elsewhere, and not by the user's choice here (an account added): said once.
+                        const was = state?.defaultCalendar;
+                        const now = result.value.defaultCalendar;
+                        if (was && now && was !== now && chosenDefault !== now) {
+                            const named = (id) => (Array.isArray(result.value.calendars) ? result.value.calendars : []).find((c) => c?.id === id)?.name;
+                            const [to, from] = [named(now), named(was)];
+                            if (to) setTimeout(() => store.toast(`New events now go to “${to}”.${from ? ` To keep them in “${from}”, choose Use for new events in its menu.` : ''}`), 0);
+                        }
                         state = result.value;
                         stateJson = json;
                         stateError = '';
@@ -1543,6 +1562,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     target = { ...occurrence, seq: ++targetSeq };
                     emit();
                 },
+                /** The user chose this calendar for new events here: its move is theirs, not news. */
+                choseDefault(id) {
+                    chosenDefault = id;
+                },
                 target: () => target,
                 clearTarget(seq) {
                     if (target?.seq === seq) target = null;
@@ -1583,6 +1606,15 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     };
                 },
                 toastHost: () => (toastHosts.size ? Math.min(...toastHosts) : 0),
+                /**
+                 * The reminders due now that no window has shown, claimed for this one (remote.reminders), and the
+                 * user's zone: {list, zone}; none when the host can't say (switched off, an older host).
+                 */
+                async reminders() {
+                    const result = await link.call('reminders', {});
+                    const list = result.ok && Array.isArray(result.value?.reminders) ? result.value.reminders.filter((r) => isObject(r) && isObject(r.reminder) && Number.isFinite(r.start)) : [];
+                    return { list, zone: isZone(result.value?.zone) ? result.value.zone : store.zone() };
+                },
             };
             return store;
         }
@@ -1688,6 +1720,93 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return ReactDOM.createPortal(h('div', { className: 'dshcal-toast', role: 'alert', 'data-tone': toast.tone, key: toast.id },
                 failed ? icon('IconWarningOutlineRegular') : icon('IconCheckCircleOutlineRegular'),
                 h('span', null, toast.text)), document.body);
+        }
+
+        /** How often a window in front asks for the reminders due, and how long a reminder's banner holds. */
+        const REMINDER_STEP = 30_000;
+        const REMINDER_HOLD = 30_000;
+
+        /**
+         * A reminder in words for DSH's banner: 'Team sync in 10 min · 10:00 – 10:30 AM, Work', 'Team sync starts
+         * now · …', 'Team sync started 3 minutes ago · …', 'Dentist tomorrow · 3:00 – 3:45 PM, Personal';
+         * all day: 'Holiday tomorrow · All day, Personal'.
+         */
+        function reminderText(o, now, zone) {
+            const title = o.title || '(No title)';
+            const today = dayIn(now, zone);
+            const dayWord = (day) => (day === today ? 'today' : day === addDays(today, 1) ? 'tomorrow' : `on ${dayText(day)}`);
+            const where = o.calendar ? `, ${o.calendar}` : '';
+            if (o.allDay) return `${title} ${dayWord(o.startDay)} · ${TEXT.allDay}${where}`;
+            const m = Math.round((o.start - now) / MINUTE);
+            const day = dayIn(o.start, zone);
+            const lead = m < 0 ? `started ${plural(-m, 'minute')} ago` : m === 0 ? 'starts now' : day !== today || m >= 12 * 60 ? dayWord(day) : untilWords(o.start, now);
+            return `${title} ${lead} · ${shortWhen(o, zone)}${where}`;
+        }
+
+        /** A web address opened outside DSH's window, as the Agenda pane's Join link opens it. */
+        function openLink(url) {
+            try {
+                window.open(url, '_blank', 'noopener,noreferrer');
+            } catch (error) {
+                warn('could not open the link', error);
+            }
+        }
+
+        /**
+         * The calendars' reminders, in every DSH window while it is in front: every half minute it asks the host
+         * for the reminders due (remote.reminders, which hands each to one window, once), and shows each as DSH's
+         * banner at the top of the window, one after another, with Open (the event on the Calendar page) and Join
+         * for a call. Nothing while the window is hidden: a reminder still due waits for it, one long over is
+         * never shown. Mounted in DSH's shell overlay, so it needs no page or pane open.
+         */
+        function ReminderHost({ cal }) {
+            const [queue, setQueue] = React.useState([]);
+            const shown = React.useRef(new Set());
+            React.useEffect(() => {
+                if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
+                let stopped = false;
+                let timer;
+                const front = () => document.visibilityState !== 'hidden';
+                const ask = async () => {
+                    clearTimeout(timer);
+                    if (stopped) return;
+                    if (front()) {
+                        let due = { list: [], zone: cal.store.zone() };
+                        try {
+                            due = await cal.store.reminders();
+                        } catch (error) {
+                            warn('could not ask for reminders', error);
+                        }
+                        const fresh = due.list.filter((r) => !shown.current.has(r.reminder.key));
+                        for (const r of fresh) shown.current.add(r.reminder.key);
+                        if (!stopped && fresh.length > 0) setQueue((q) => [...q, ...fresh.map((r) => ({ ...r, zone: due.zone }))]);
+                    }
+                    if (!stopped) timer = setTimeout(() => void ask(), REMINDER_STEP);
+                };
+                const onVisible = () => { if (front()) void ask(); };
+                timer = setTimeout(() => void ask(), 2000);
+                document.addEventListener('visibilitychange', onVisible);
+                return () => {
+                    stopped = true;
+                    clearTimeout(timer);
+                    document.removeEventListener('visibilitychange', onVisible);
+                };
+            }, [cal]);
+            const first = queue[0];
+            if (!first) return null;
+            const done = () => setQueue((q) => q.filter((r) => r.reminder.key !== first.reminder.key));
+            const actions = [
+                { label: 'Open', onClick: () => { done(); cal.openAt(first); } },
+                ...(isUrl(first.conference) ? [{ label: 'Join', onClick: () => { done(); openLink(first.conference); } }] : []),
+            ];
+            const text = reminderText(first, Date.now(), first.zone);
+            if (ui.Toast) {
+                return h(ui.Toast, { key: first.reminder.key, text, holdMs: REMINDER_HOLD, actions, onDone: done, icon: icon('IconClockOutlineRegular') ?? h(BellGlyph) });
+            }
+            return ReactDOM.createPortal(h('div', { className: 'dshcal-toast dshcal-toast-acts', role: 'status', 'data-calendar-reminder': first.reminder.key, key: first.reminder.key },
+                h(BellGlyph), h('span', null, text),
+                actions.map((a) => h('button', { key: a.label, type: 'button', className: 'dshcal-link', onClick: a.onClick }, a.label)),
+                h('button', { type: 'button', className: 'dshcal-link', onClick: done }, TEXT.close)), document.body);
         }
 
         /** A dialog: DSH's Modal on the plugin's glass, its content scrolling inside. */
@@ -4176,6 +4295,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 else if (id.startsWith('color:')) {
                     void store.act('updateCalendar', { id: c.id, patch: { color: id.slice(6) } }).then((r) => { if (!r.ok) store.toast(errorText(r.error), 'error'); });
                 } else if (id === 'default') {
+                    store.choseDefault(c.id);
                     void store.act('setDefaultCalendar', { id: c.id }).then((r) => store.toast(r.ok ? `New events go to “${c.name}”.` : errorText(r.error), r.ok ? 'ok' : 'error'));
                 } else if (id === 'export') void exportIcs(c);
                 else if (id === 'import') {
@@ -5742,6 +5862,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const current = new Set(timed.filter((o) => o.start <= now && o.end > now).map((o) => o.id));
             const next = timed.filter((o) => o.start > now).sort((a, b) => a.start - b.start)[0];
             const attention = (state?.accounts ?? EMPTY).filter((a) => a.status === 'signin' || a.status === 'error');
+            // At the top, what's next ('Next: Team sync in 10 min'), or what's on now when nothing follows within 12 hours.
+            const onNow = timed.filter((o) => current.has(o.id)).sort((a, b) => a.end - b.end)[0];
+            const upNext = next && next.start - now <= 12 * HOUR ? next : undefined;
+            const headline = upNext ?? onNow;
+            const nextLine = headline ? h('div', { className: 'dshcal-pane-next', 'data-calendar-next': headline.id },
+                h('span', { className: 'dshcal-pane-next-label' }, upNext ? 'Next:' : 'Now:'),
+                h('button', {
+                    type: 'button', className: 'dshcal-pane-next-what', 'aria-haspopup': 'dialog',
+                    onClick: (event) => setPop({ occurrence: headline, anchor: rectOf(event.currentTarget) }),
+                }, headline.title),
+                h('span', { className: 'dshcal-pane-next-when' }, upNext ? untilWords(upNext.start, now) : `until ${timeText(headline.end, zone)}`)) : null;
             const groups = agendaDays(occurrences, today, last, zone);
             if (!groups.some((g) => g.day === today)) groups.unshift({ day: today, list: [] });
 
@@ -5794,6 +5925,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('h2', null, TEXT.agendaTab),
                     h(IconBtn, { label: 'New event', glyph: icon('IconPlusOutlineRegular'), size: 'sm', side: 'bottom', onClick: () => setDialog({ kind: 'event' }), 'data-calendar-pane-new': '' }),
                     h(IconBtn, { label: 'Open the calendar', glyph: h(CalendarIcon, { size: 14 }), size: 'sm', side: 'bottom', onClick: () => cal.openPage(), 'data-calendar-pane-open': '' })),
+                state ? nextLine : null,
                 attention.length ? h('div', { className: 'dshcal-pane-note' },
                     icon('IconWarningOutlineRegular', { size: 12 }),
                     h('span', null, attention.length === 1 ? `${attention[0].name}: ${attention[0].problem || (attention[0].status === 'signin' ? 'sign-in needed' : 'the last sync failed')}.` : `${plural(attention.length, 'account')} need attention.`),
@@ -6190,6 +6322,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
                 name: 'sidebar.panellist', id: IDS.page, order: 7, label: TEXT.entry,
             }, CalendarIcon));
+            // Reminders as DSH's banner, in every window, with no page or pane open.
+            ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+                name: 'shell.overlay', id: IDS.reminders, inject: withApi,
+            }, ReminderHost));
             // Cards in chats for the calendar tools' calls.
             ctx.slots.inject('tool.call.toolview', function* () {
                 for (const key of TOOL_NAMES) {
@@ -6228,6 +6364,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             roleOf, othersOf, mailMode, peopleText, sameOccurrence, placed, emailedText, contactText, CHOOSE_CALENDAR, withConsent, consentQuestion, consentWords, asked, removalNotice, returnAddress,
             callArgs, argWhen, runningTitle, doneTitle, resultText, failureText, refusedEmailText, saysNotDone, saysPartly, NOT_DONE,
             CalendarPage, AgendaPane, ToolView, EventDialog, EventPopover, AccountsDialog, ToastHost, toastProps, toastHold,
+            ReminderHost, reminderText, REMINDER_STEP, REMINDER_HOLD,
         };
         return module.exports;
     },

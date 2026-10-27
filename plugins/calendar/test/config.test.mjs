@@ -34,7 +34,7 @@ test('config: nothing set is every default, with no problem', () => {
 
 test('config: right values are kept as given', () => {
     const { settings, problems } = checkConfig({
-        enabled: false, tools: false, askBeforeEmails: false, agentChanges: 'off', syncMinutes: 1440, timeZone: ' Europe/Berlin ',
+        enabled: false, tools: false, askBeforeEmails: false, reminders: false, agentChanges: 'off', syncMinutes: 1440, timeZone: ' Europe/Berlin ',
         storeFile: '/tmp/cal/calendar.json', logFile: '', googleClientId: '123-abc.apps.googleusercontent.com',
         googleClientSecretRef: 'MY_SECRET', microsoftClientId: '11111111-2222-3333-4444-555555555555', microsoftTenant: 'contoso.onmicrosoft.com',
         googleApiBase: 'http://127.0.0.1:9/',
@@ -43,6 +43,7 @@ test('config: right values are kept as given', () => {
     assert.equal(settings.enabled, false);
     assert.equal(settings.tools, false);
     assert.equal(settings.askBeforeEmails, false);
+    assert.equal(settings.reminders, false);
     assert.equal(settings.agentChanges, 'off');
     assert.equal(settings.syncMinutes, 1440);
     assert.equal(settings.timeZone, 'Europe/Berlin');
@@ -55,19 +56,21 @@ test('config: right values are kept as given', () => {
 
 test('config: a wrong type or value is named in words, with what the plugin does meanwhile, and the safe choice holds', () => {
     const { settings, problems } = checkConfig({
-        enabled: 'no', tools: 'yes', askBeforeEmails: 'false', agentChanges: 'sometimes', syncMinutes: '30', timeZone: 'Mars/Phobos',
+        enabled: 'no', tools: 'yes', askBeforeEmails: 'false', reminders: 'on', agentChanges: 'sometimes', syncMinutes: '30', timeZone: 'Mars/Phobos',
         storeFile: 3, logFile: false, googleClientId: 'not-a-client', googleClientSecretRef: 'two words', microsoftClientId: 'abc', microsoftTenant: 5,
         microsoftGraphBase: 42,
     });
     const said = Object.fromEntries(problems.map((p) => [p.key, p.text]));
     assert.deepEqual(Object.keys(said).sort(), ['agentChanges', 'askBeforeEmails', 'enabled', 'googleClientId', 'googleClientSecretRef', 'logFile',
-        'microsoftClientId', 'microsoftGraphBase', 'microsoftTenant', 'storeFile', 'syncMinutes', 'timeZone', 'tools']);
+        'microsoftClientId', 'microsoftGraphBase', 'microsoftTenant', 'reminders', 'storeFile', 'syncMinutes', 'timeZone', 'tools']);
     // Agents get the safe choice while a setting about them is wrong.
     assert.equal(settings.tools, false);
     assert.equal(settings.agentChanges, 'ask');
     assert.equal(settings.askBeforeEmails, true);
-    // The rest take their defaults, and the calendar keeps working.
-    assert.equal(settings.enabled, true);
+    // A touched off switch that isn't true or false means off: the calendar stops, and says why.
+    assert.equal(settings.enabled, false);
+    // The rest take their defaults.
+    assert.equal(settings.reminders, true);
     assert.equal(settings.syncMinutes, 15);
     assert.equal(settings.timeZone, '');
     assert.equal(settings.storeFile, DEFAULTS.storeFile);
@@ -79,7 +82,9 @@ test('config: a wrong type or value is named in words, with what the plugin does
     assert.equal(said.agentChanges, 'agentChanges must be "preset", "ask" or "off" (it is "sometimes"); every change from a chat asks you first until it\'s fixed.');
     assert.equal(said.syncMinutes, 'syncMinutes must be a whole number of minutes from 5 to 1440 (it is "30"); the calendar uses 15 until it\'s fixed.');
     assert.equal(said.timeZone, `timeZone must be a time zone such as Europe/Berlin, or empty for this computer's (it is "Mars/Phobos"); the calendar uses this computer's zone (${localZone()}) until it's fixed.`);
-    assert.match(said.enabled, /it is "no"\); the calendar stays on until it's fixed\.$/);
+    assert.equal(said.enabled, 'enabled must be true or false (it is "no"); the calendar is switched off until it\'s fixed.');
+    assert.equal(said.reminders, 'reminders must be true or false (it is "on"); reminders show in DSH until it\'s fixed.');
+    for (const off of ['false', 'true', 0, 1, 'off', []]) assert.equal(checkConfig({ enabled: off }).settings.enabled, false, JSON.stringify(off));
     assert.match(said.askBeforeEmails, /it is "false"\); a chat's change that emails anyone, or reaches their Google calendars, asks you first until it's fixed\.$/);
     assert.match(said.storeFile, /^storeFile must be a file path \(it is 3\)/);
 });

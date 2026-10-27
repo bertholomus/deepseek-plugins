@@ -1072,3 +1072,47 @@ test('toasts are DSH\'s Toast: a done one with its green check, a failure holdin
     store.clearToast(second.id);
     assert.equal(store.currentToast(), null);
 });
+
+test('a reminder in DSH\'s banner: the event, how soon, its time and calendar; Open and Join', async () => {
+    const zone = 'America/Los_Angeles';
+    const now = Date.parse('2026-10-26T16:50:00Z'); // 9:50 AM here
+    const sync = { title: 'Team sync', calendar: 'Work', allDay: false, start: Date.parse('2026-10-26T17:00:00Z'), end: Date.parse('2026-10-26T17:30:00Z') };
+    const when = I.shortWhen(sync, zone);
+    assert.equal(I.reminderText(sync, now, zone), `Team sync in 10 min · ${when}, Work`);
+    assert.equal(I.reminderText(sync, sync.start, zone), `Team sync starts now · ${when}, Work`);
+    assert.equal(I.reminderText(sync, sync.start + 3 * 60000, zone), `Team sync started 3 minutes ago · ${when}, Work`);
+    const tomorrow = { ...sync, title: 'Dentist', calendar: 'Personal', start: sync.start + 86_400_000, end: sync.end + 86_400_000 };
+    assert.equal(I.reminderText(tomorrow, now, zone), `Dentist tomorrow · ${I.shortWhen(tomorrow, zone)}, Personal`);
+    assert.equal(I.reminderText({ title: 'Holiday', calendar: 'Personal', allDay: true, startDay: '2026-10-27', lastDay: '2026-10-27' }, now, zone), 'Holiday tomorrow · All day, Personal');
+    assert.ok(I.REMINDER_STEP <= 30_000 && I.REMINDER_HOLD >= 20_000, 'asked every half minute, held long enough to read');
+    // The store asks the host, and keeps only well-formed reminders, with the host's zone.
+    const asked = [];
+    const store = I.calendarStore({
+        async call(method) {
+            asked.push(method);
+            return { ok: true, value: { zone, reminders: [{ ...sync, id: 'ev-1', reminder: { key: 'k1', minutes: 10, at: now } }, { title: 'broken' }] } };
+        },
+    });
+    const due = await store.reminders();
+    assert.deepEqual(plain(asked), ['reminders']);
+    assert.equal(due.zone, zone);
+    assert.deepEqual(plain(due.list.map((r) => r.id)), ['ev-1']);
+    const off = I.calendarStore({ async call() { return { ok: false, error: { code: 'calendar/off', message: 'off' } } } });
+    assert.deepEqual(plain((await off.reminders()).list), [], 'switched off: none, and no error');
+});
+
+test('the default calendar moved without the user choosing it (an account added) is said once; their own choice isn\'t news', async () => {
+    let value = { version: 1, defaultCalendar: 'cal-personal', calendars: [{ id: 'cal-personal', name: 'Personal' }, { id: 'cal-work', name: 'Work' }], accounts: [] };
+    const store = I.calendarStore({ async call(method) { return method === 'state' ? { ok: true, value } : { ok: true, value: {} }; } });
+    await store.loadState();
+    value = { ...value, version: 2, defaultCalendar: 'cal-work' };
+    await store.loadState();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(store.currentToast()?.text, 'New events now go to “Work”. To keep them in “Personal”, choose Use for new events in its menu.');
+    store.clearToast(store.currentToast().id);
+    store.choseDefault('cal-personal');
+    value = { ...value, version: 3, defaultCalendar: 'cal-personal' };
+    await store.loadState();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(store.currentToast(), null, 'the user\'s own choice');
+});

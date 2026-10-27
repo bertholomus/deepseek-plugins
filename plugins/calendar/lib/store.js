@@ -29,7 +29,8 @@
  *   calendars: { [id]: { id, accountId, remoteId, name, color?, readOnly?, timeZone?, description?, mode?,
  *     scheduling? (CalDAV: whether its server emails a meeting's guests itself),
  *     own?: {name?, color?} (the user's choices, over the server's), hidden?, error? } },
- *   prefs: { defaultCalendar?, weekStart?, ... } }
+ *   prefs: { defaultCalendar?, weekStart?, ... },
+ *   reminded?: { [key]: when it was shown } (reminders a window has shown, kept two days: manager.dueReminders) }
  *
  * events/<calendar>.json:
  * { version: 1, sync?: the source's opaque state, syncedAt?, items: { [remoteId]: item } }
@@ -125,6 +126,8 @@ export class CalendarStore {
         this.accounts = {};
         this.calendars = {};
         this.prefs = {};
+        /** Reminders a window has shown: key (a hash of the occurrence and its minutes) → when. */
+        this.reminded = {};
         /** @type {Map<string, Record<string, object>>} calendar id → its items by remote id */
         this.items = new Map();
         /** @type {Map<string, {state: any, at?: number}>} calendar id → how far its items are up to date */
@@ -144,6 +147,7 @@ export class CalendarStore {
         this.accounts = {};
         this.calendars = {};
         this.prefs = {};
+        this.reminded = {};
         this.items.clear();
         this.syncs.clear();
         this.issue = undefined;
@@ -169,6 +173,7 @@ export class CalendarStore {
                 this.calendars[id] = { ...calendar, id };
             }
             this.prefs = plain(parsed.prefs);
+            for (const [key, at] of Object.entries(plain(parsed.reminded))) if (/^[0-9a-f]{20}$/.test(key) && Number.isFinite(at)) this.reminded[key] = at;
         }
         for (const id of Object.keys(this.calendars)) this.open(id);
     }
@@ -224,7 +229,7 @@ export class CalendarStore {
     /** Write calendar.json now. */
     save() {
         if (this.held.has(this.file)) throw new Error(`${basename(this.file)} can't be read and couldn't be moved aside, so it isn't written over`);
-        writePrivate(this.file, `${JSON.stringify({ version: 1, accounts: this.accounts, calendars: this.calendars, prefs: this.prefs }, null, 1)}\n`);
+        writePrivate(this.file, `${JSON.stringify({ version: 1, accounts: this.accounts, calendars: this.calendars, prefs: this.prefs, reminded: this.reminded }, null, 1)}\n`);
     }
 
     /**
@@ -328,5 +333,5 @@ export class CalendarStore {
 
 /** Whether a parsed calendar.json is one this store reads: version 1, with objects where it keeps them. */
 function storeShaped(parsed) {
-    return isPlain(parsed) && parsed.version === 1 && ['accounts', 'calendars', 'prefs'].every((key) => parsed[key] === undefined || isPlain(parsed[key]));
+    return isPlain(parsed) && parsed.version === 1 && ['accounts', 'calendars', 'prefs', 'reminded'].every((key) => parsed[key] === undefined || isPlain(parsed[key]));
 }

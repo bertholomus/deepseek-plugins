@@ -871,6 +871,47 @@ test('new events go to the user\'s choice, else an account\'s main calendar, nev
     }
 });
 
+test('adding an account never moves new events away from a calendar the user has used; a store with no events yet takes the account\'s calendar', async () => {
+    const { make, done } = setup();
+    const m = make();
+    try {
+        await m.start();
+        const here = m.defaultCalendarId();
+        // Used: an event in Personal. A new CalDAV account's one calendar doesn't take new events from it.
+        await m.createEvent({ title: 'Dentist', start: '2026-10-13T09:30' });
+        m.holdDefault();
+        standIn(m, { id: 'dav', kind: 'caldav', name: 'alice', url: 'https://dav.example.com/', username: 'alice', createdAt: NOW },
+            { id: 'cal-work', remoteId: 'https://dav.example.com/alice/work/', name: 'Work' }, 'ics');
+        assert.equal(m.defaultCalendarId(), here, 'still Personal');
+        assert.equal(m.store.prefs.defaultCalendar, here, 'kept as the choice');
+        assert.match(readFileSync(m.logFile, 'utf8'), new RegExp(`default kept ${here}\\n`));
+        const made = await m.createEvent({ title: 'Call', start: '2026-10-14T09:00' }, 'agent');
+        assert.equal(made.calendarId, here, 'a chat\'s new event goes there too');
+        // The user's own choice still moves it.
+        await m.setDefaultCalendar('cal-work');
+        assert.equal(m.defaultCalendarId(), 'cal-work');
+        m.holdDefault();
+        assert.equal(m.store.prefs.defaultCalendar, 'cal-work');
+    } finally {
+        m.dispose();
+        done();
+    }
+    // Unused: nothing in Personal, so the account's calendar takes new events (and the window says so).
+    const fresh = setup();
+    const n = fresh.make();
+    try {
+        await n.start();
+        n.holdDefault();
+        assert.equal(n.store.prefs.defaultCalendar, undefined);
+        standIn(n, { id: 'dav', kind: 'caldav', name: 'alice', url: 'https://dav.example.com/', username: 'alice', createdAt: NOW },
+            { id: 'cal-work', remoteId: 'https://dav.example.com/alice/work/', name: 'Work' }, 'ics');
+        assert.equal(n.defaultCalendarId(), 'cal-work');
+    } finally {
+        n.dispose();
+        fresh.done();
+    }
+});
+
 test('a create whose answer was lost goes again with the same uid, so the server makes it once', async () => {
     const { make, done } = setup();
     const m = make();
@@ -1317,6 +1358,82 @@ test('the approval prompt says what a chat\'s change does: the old and new time 
         assert.equal(`${moved.startLocal} ${moved.endLocal}`, '2026-11-02T11:00 2026-11-02T11:30');
         const oct26 = m.events({ from: Date.parse('2026-10-26T07:00:00Z'), to: Date.parse('2026-10-27T07:00:00Z') }).occurrences.find((o) => o.eventId === sam.eventId);
         assert.equal(oct26.startLocal, '2026-10-26T10:00', 'the other occurrences stay where they were');
+    } finally {
+        m.dispose();
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('reminders: due from their time until just after the start, handed to one window once, kept across a restart; none on subscriptions, cancelled events or with reminders off', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'calendar-reminders-'));
+    const vault = new Map();
+    const secrets = { async get(id) { return vault.get(id); }, async set(id, v) { vault.set(id, v); }, async clear(id) { vault.delete(id); } };
+    let clock = Date.parse('2026-10-26T16:00:00Z');
+    const config = { storeFile: join(dir, 'calendar.json'), logFile: join(dir, 'calendar.log'), syncMinutes: 15, timeZone: 'America/Los_Angeles' };
+    const make = (more = {}) => new CalendarManager({ config: { ...config, ...more }, secrets, now: () => clock });
+    let m = make();
+    try {
+        await m.start();
+        const minutes = (n) => n * 60000;
+        // 9:00 AM here. Team sync at 9:30 with reminders 10 and 30 minutes before; Lunch at 12:00 with none.
+        const sync = await m.createEvent({ title: 'Team sync', start: '2026-10-26T09:30', end: '2026-10-26T10:00', alarms: [10, 30], location: 'Room 4' });
+        await m.createEvent({ title: 'Lunch', start: '2026-10-26T12:00' });
+        await m.createEvent({ title: 'Cancelled call', start: '2026-10-26T09:20', alarms: [10], status: 'cancelled' });
+        const keys = (list) => list.map((r) => `${r.title} ${r.reminder.minutes}`);
+        assert.deepEqual(keys(m.dueReminders()), ['Team sync 30'], 'at 9:00 the 30-minute reminder is due');
+        clock += minutes(5);
+        // Looking doesn't claim; claiming hands it out once.
+        assert.deepEqual(keys(m.dueReminders()), ['Team sync 30']);
+        const claimed = m.dueReminders({ claim: true });
+        assert.deepEqual(keys(claimed), ['Team sync 30']);
+        assert.equal(claimed[0].id, sync.id);
+        assert.equal(claimed[0].location, 'Room 4');
+        assert.equal(claimed[0].reminder.at, Date.parse('2026-10-26T16:00:00Z'));
+        assert.match(claimed[0].reminder.key, /^[0-9a-f]{20}$/);
+        assert.deepEqual(m.dueReminders({ claim: true }), [], 'a reminder another window has shown is not handed out again');
+        assert.match(readFileSync(config.logFile, 'utf8'), /reminders shown 1\n/);
+        assert.doesNotMatch(readFileSync(config.logFile, 'utf8'), /Team sync/, 'the log names no event');
+        // 9:20: the 10-minute one. The calendar hidden on the page keeps its reminders.
+        clock = Date.parse('2026-10-26T16:20:00Z');
+        m.updateCalendar(sync.calendarId, { hidden: true });
+        assert.deepEqual(keys(m.dueReminders()), ['Team sync 10'], 'the cancelled call has none');
+        // A restart keeps what was shown: the 30-minute one isn't shown again, the 10-minute one still is.
+        m.dispose();
+        m = make();
+        await m.start();
+        assert.deepEqual(keys(m.dueReminders({ claim: true })), ['Team sync 10']);
+        m.dispose();
+        m = make();
+        await m.start();
+        assert.deepEqual(m.dueReminders({ claim: true }), [], 'nor after another restart');
+        assert.ok(Object.keys(JSON.parse(readFileSync(config.storeFile, 'utf8')).reminded).length === 2, 'calendar.json keeps the two shown');
+        m.updateCalendar(sync.calendarId, { hidden: false });
+        // A subscription's reminders are its publisher's: none.
+        m.store.accounts.feed = { id: 'feed', kind: 'ics', name: 'Team feed', host: 'example.com', createdAt: clock };
+        m.store.calendars['cal-feed'] = { id: 'cal-feed', accountId: 'feed', remoteId: 'feed', name: 'Team feed', readOnly: true, mode: 'masters', color: '#30a46c' };
+        m.store.itemsOf('cal-feed').x = { remoteId: 'x', events: [{ uid: 'feed-1', title: 'Fixture', start: { local: '2026-10-26T09:30:00', tz: 'America/Los_Angeles' }, end: { local: '2026-10-26T10:00:00', tz: 'America/Los_Angeles' }, alarms: [10] }] };
+        m.changed();
+        assert.deepEqual(m.dueReminders(), [], 'the feed\'s event has a reminder, but it is the publisher\'s');
+        assert.equal(m.events({ from: Date.parse('2026-10-26T16:00:00Z'), to: Date.parse('2026-10-26T18:00:00Z') }).occurrences.some((o) => o.title === 'Fixture'), true);
+        // A window opened late still gets one about to start or just started, never one long over.
+        const late = await m.createEvent({ title: 'Standup', start: '2026-10-26T09:25', end: '2026-10-26T09:40', alarms: [15] });
+        clock = Date.parse('2026-10-26T16:30:00Z');
+        assert.deepEqual(keys(m.dueReminders()), ['Standup 15'], '5 minutes after it started');
+        clock = Date.parse('2026-10-26T16:35:01Z');
+        assert.deepEqual(m.dueReminders(), [], 'more than 10 minutes after it started');
+        // A moved event is due again at its new time.
+        await m.updateEvent(late.id, { start: '2026-10-26T11:00', end: '2026-10-26T11:15' }, 'all');
+        clock = Date.parse('2026-10-26T17:46:00Z');
+        assert.deepEqual(keys(m.dueReminders()), ['Standup 15']);
+        // An all-day event's reminder counts from its midnight, here.
+        await m.createEvent({ title: 'Holiday', start: '2026-10-27', end: '2026-10-27', alarms: [720] });
+        clock = Date.parse('2026-10-27T00:00:00Z');
+        assert.deepEqual(keys(m.dueReminders()).filter((k) => k.startsWith('Holiday')), ['Holiday 720'], 'noon the day before');
+        // With reminders off, none at all.
+        m.dispose();
+        m = make({ reminders: false });
+        await m.start();
+        assert.deepEqual(m.dueReminders({ claim: true }), []);
     } finally {
         m.dispose();
         rmSync(dir, { recursive: true, force: true });

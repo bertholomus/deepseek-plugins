@@ -117,6 +117,17 @@ export class CalendarRemote {
         return this.run(async () => ({ version: this.manager.version, syncing: this.manager.syncing.size > 0 }));
     }
 
+    /**
+     * {reminders, zone}: the reminders due now that no window has shown, each
+     * an event's view with `reminder` {key, minutes, at}, and the user's zone
+     * to say their times in; asking claims them, so one window shows each,
+     * once (manager.dueReminders). The window asks every half minute while it
+     * is in front.
+     */
+    async reminders() {
+        return this.run(async () => ({ reminders: this.manager.dueReminders({ claim: true }), zone: this.manager.zone() }));
+    }
+
     /** {occurrences, more}: the events in [from, to) (epoch ms), of the given calendars or the shown ones. */
     async events(from, to, calendars) {
         return this.run(async () => this.manager.events({ from: Number(from), to: Number(to), calendars: list(calendars) }));
@@ -314,7 +325,7 @@ const METHODS = Object.freeze([
     'state', 'version', 'events', 'search', 'event', 'createEvent', 'updateEvent', 'deleteEvent', 'respond',
     'addAccount', 'updateAccount', 'removeAccount', 'syncNow', 'startSignIn', 'signInStatus', 'finishSignIn', 'cancelSignIn',
     'setGoogleClient', 'setMicrosoftClient', 'createCalendar', 'deleteCalendar', 'updateCalendar', 'setDefaultCalendar', 'setPrefs',
-    'exportCalendar', 'importIcs',
+    'exportCalendar', 'importIcs', 'reminders',
 ]);
 markRemote(CalendarRemote, METHODS);
 
@@ -327,13 +338,17 @@ export const OFF_WORDS = 'The calendar is switched off: enabled is false in its 
  * going unanswered.
  */
 export class CalendarOff extends CalendarRemote {
-    constructor(ctx) {
+    /** @param {string} [why] - a wrong `enabled` in words (config.js), which switches it off too; else OFF_WORDS. */
+    constructor(ctx, why) {
         super(ctx, null, {});
+        this.words = why
+            ? `The calendar is switched off, since a setting is wrong: ${why.replace(/; the calendar is switched off until it's fixed\.$/, '.')} Set it to true in its entry (id: calendar) in this profile's cordis.patch.yml to use the calendar.`
+            : OFF_WORDS;
     }
 
     /** Every endpoint runs its work through here (CalendarRemote), so each says the calendar is off, and does nothing. */
     async run() {
-        throw new RemoteError('calendar/off', OFF_WORDS, {});
+        throw new RemoteError('calendar/off', this.words, {});
     }
 }
 markRemote(CalendarOff, METHODS);
