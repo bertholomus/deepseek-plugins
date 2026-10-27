@@ -884,7 +884,8 @@ export function claimsIn(text, { max = 8 } = {}) {
                 : found.kind === 'passed' && measured ? metricsIn(clause)
                     : found.kind === 'passed' || found.kind === 'fixed' ? metricsIn(sentence) : [];
             // "Done — the timeout in `src/config.ts` is now 15000 ms": a bare label says what the clause after it holds.
-            const label = index === 0 && clauses.length > 1 && (found.kind === 'done' || found.kind === 'fixed') && shown(clause).split(/\s+/).length <= 2 && !founds[1];
+            // "Done: `run()` now skips dot files" claims what the clause after the label says, whether or not it claims on its own.
+            const label = index === 0 && clauses.length > 1 && (found.kind === 'done' || found.kind === 'fixed') && shown(clause).split(/\s+/).length <= 2 && (!founds[1] || founds[1].kind === found.kind);
             out.push({
                 kind: found.kind,
                 text: whole,

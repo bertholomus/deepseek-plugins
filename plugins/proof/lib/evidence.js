@@ -2421,7 +2421,7 @@ const CHANGES = (i) => i.change || i.kind === 'change' || i.apply || i.kind === 
 /** A message about the agent's own work ("did that work?", "what did you change?", "write the PR description"). */
 const ABOUT_OWN_WORK = /\b(?:did|have|had|were)\s+you\b|\bwhat\s+(?:did\s+|have\s+)?you\b|\byou(?:'ve|\s+have)?\s+(?:just\s+)?(?:did|done|changed|fixed|made|added|deployed|pushed)\b|\byour\s+(?:changes?|fix(?:es)?|edits?|work|commits?|pr|patch|branch)\b|\bdid\s+(?:that|it|this)\s+(?:work|go through|land|deploy|pass)\b|\bis\s+(?:it|that|this)\s+(?:done|fixed|deployed|pushed|merged|live|finished|working)\b|\bsummar|\bwrite[- ]?up\b|\bpr description\b|\brelease notes\b|\bchangelog\b|\bstand-?up\b|\brecap\b/i;
 /** A message that asks a question or asks to be shown something: "How are retries set up?", "Explain `applyDiscount`". */
-const LOOK_ASK = /\?\s*(?:$|\S)|^(?:(?:please|now|also|ok|okay|so|hey)\s*,?\s+)*(?:explain|describe|tell\s+me|show\s+me|walk\s+me\s+through|look\s+(?:at|into|over)|have\s+a\s+look|take\s+a\s+look|check\s+(?:how|what|where|whether|if|which|why|when)|compare|review|find\s+out|figure\s+out|investigate|diagnose|audit|inspect|help\s+me\s+understand)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:explain|describe|tell|show|look|compare|review|walk|find\s+out|figure\s+out|investigate|diagnose|inspect)\b|\bi\s+(?:want|need|would\s+like|'d\s+like)\s+to\s+(?:know|understand|see|learn)\b/i;
+const LOOK_ASK = /\?\s*(?:$|\S)|^(?:(?:please|now|also|ok|okay|so|hey)\s*,?\s+)*(?:explain|describe|tell\s+me|show\s+me|walk\s+me\s+through|look\s+(?:at|into|over)|have\s+a\s+look|take\s+a\s+look|check\s+(?:how|what|where|whether|if|which|why|when)|compare|review|find\s+out|figure\s+out|investigate|diagnose|audit|inspect|help\s+me\s+understand)\b|\b(?:and|then)\s+(?:explain|describe|tell\s+me|show\s+me|walk\s+me\s+through|summari[sz]e\s+(?:how|what|why|where))\b|\b(?:just|only)\s+(?:look|read|explain|answer)\b|\b(?:do\s+not|don'?t)\s+(?:change|edit|touch|modify)\s+anything\b|\bwithout\s+changing\s+anything\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:explain|describe|tell|show|look|compare|review|walk|find\s+out|figure\s+out|investigate|diagnose|inspect)\b|\bi\s+(?:want|need|would\s+like|'d\s+like)\s+to\s+(?:know|understand|see|learn)\b/i;
 /** A request for a write-up of the work ("write a short note for #releases"): its claims are the work's, not descriptions. */
 const WRITE_UP_ASK = /\bwrite\s+(?:it|that|this|these|them|those|everything)\s+up\b|\b(?:write|draft|put together|prepare|compose|give me|make)\s+(?:me\s+|us\s+)?(?:a|an|the|my|our|some)?\s*(?:short|quick|brief|one-line|small|little|tight|final)?\s*(?:pr description|pull request description|description|summary|recap|note|notes|message|update|status update|standup|stand-up|changelog entry|changelog|release notes?|commit message|email|post|announcement|one-?liner|report|write-?up|paragraph)\b/i;
 /** A clause led by this turn's own work ("Deployed it again", "I updated", "Rolled 2.5.0 out", "Just fixed …"). */
@@ -2450,7 +2450,11 @@ export function described(claim, items, prompt = '') {
     const list = Array.isArray(items) ? items.filter(Boolean) : [];
     const ask = typeof prompt === 'string' ? prompt.trim() : '';
     if (list.length === 0 || !LOOK_ASK.test(ask) || list.some(CHANGES) || asksForWork(ask) || BUILD_ASK.test(ask) || WRITE_UP_ASK.test(ask) || ABOUT_OWN_WORK.test(ask)) return false;
-    if (asksForChange(ask) && !/\?\s*$/.test(ask)) return false;
+    // A change asked for outside a question ("Document it in the README."), not "does anything document how pct works?".
+    // "Explain how you would fix it" asks how, not for the fix.
+    const told = ask.split(/(?<=[.!?\n])\s+/).filter((x) => !/\?\s*$/.test(x.trim())).join(' ')
+        .replace(/\b(?:how|what|where|why|which|whether)\s+(?:you|we|i|one|they|it)\s+(?:would|could|should|might|can|will|'d)\s+(?:\w+\s+){0,2}?\w+/gi, ' ');
+    if (asksForChange(told)) return false;
     const words = String(claim.part ?? claim.text ?? '').replace(/[`*_]/g, '').trim();
     if (words === '' || OWN_WORK.test(words) || CHANGED_NOW.test(words) || !STATIVE.test(words)) return false;
     if (claim.kind === 'deployed') return list.some(deployLook);

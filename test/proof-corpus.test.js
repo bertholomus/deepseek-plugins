@@ -37,7 +37,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OTHER_NAMES } from './helpers/client.mjs';
-import { CLAIM_LABELS, DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, LABELS, LIVE, PROBES, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, TOOL_NAMES, claimsOf, earlierTurns, loadCorpus, measure, measureClaims, normal } from './helpers/proof-corpus.mjs';
+import { CLAIM_LABELS, DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, HOLDOUT12, JUDGE4, LABELS, LIVE, PROBES, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, TOOL_NAMES, claimsOf, earlierTurns, loadCorpus, measure, measureClaims, normal } from './helpers/proof-corpus.mjs';
 
 const DEV_COUNTS = { honest: 114, 'no-claim': 60, unbacked: 80, contradicted: 56 };
 const SEEN_COUNTS = { honest: 40, 'no-claim': 20, unbacked: 25, contradicted: 25 };
@@ -126,7 +126,7 @@ test('the dev corpus is well formed: 310 turns, unique ids, the four labels, onl
 });
 
 test('per claim on the tuned sets: bad turns caught for the right claim, rarely a flag on another, no true claim called contradicted', () => {
-    for (const [where, dir] of [['dev', DEV], ['first hold-out', SEEN], ['second hold-out', SEEN2], ['third hold-out', SEEN3], ['fourth hold-out', SEEN4], ['fifth hold-out', SEEN5], ['sixth hold-out', SEEN6], ['seventh hold-out', SEEN7], ['ninth hold-out, tuned on', SEEN9], ['tenth hold-out, tuned on', SEEN10], ['real model turns', LIVE], ['probes', PROBES]]) {
+    for (const [where, dir] of [['dev', DEV], ['first hold-out', SEEN], ['second hold-out', SEEN2], ['third hold-out', SEEN3], ['fourth hold-out', SEEN4], ['fifth hold-out', SEEN5], ['sixth hold-out', SEEN6], ['seventh hold-out', SEEN7], ['ninth hold-out, tuned on', SEEN9], ['tenth hold-out, tuned on', SEEN10], ['real model turns', LIVE], ['probes', PROBES], ["the round-4 judge's turns", JUDGE4]]) {
         if (!present(dir)) continue;
         claimAim(loadCorpus(dir), where);
     }
@@ -352,14 +352,16 @@ test('tenth hold-out, once tuned on (seen10/): well formed, apart from the corpo
 /** The real model's turns (`live/`) and the probes written apart from the code (`probes/`): their sizes. */
 const LIVE_COUNTS = { honest: 35, 'no-claim': 10, unbacked: 2, contradicted: 1 };
 const PROBE_COUNTS = { honest: 54, 'no-claim': 26, unbacked: 21, contradicted: 22 };
+/** The round-4 judge's turns: its everyday set (45), evidence-kind probes (10), description probes (12) and three look-only real-model replies; two failure reports that list a shown claim are honest here. */
+const JUDGE4_COUNTS = { honest: 22, 'no-claim': 22, unbacked: 12, contradicted: 14 };
 
-for (const [where, dir, counts] of [['real model turns (live/)', LIVE, LIVE_COUNTS], ['probes written apart from the code (probes/)', PROBES, PROBE_COUNTS]]) {
+for (const [where, dir, counts] of [['real model turns (live/)', LIVE, LIVE_COUNTS], ['probes written apart from the code (probes/)', PROBES, PROBE_COUNTS], ["the round-4 judge's turns (judge4/)", JUDGE4, JUDGE4_COUNTS]]) {
     test(`${where}: well formed, apart from every other corpus, and held to the dev bar`, () => {
         const corpus = loadCorpus(dir);
         for (const label of LABELS) assert.equal(corpus[label].length, counts[label], label);
         const ids = checkShape(corpus, where);
         checkClaims(corpus, where, { every: true });
-        const others = [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, SEEN9, SEEN10, HOLDOUT11, LIVE, PROBES].filter((d) => d !== dir && present(d));
+        const others = [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, SEEN9, SEEN10, HOLDOUT11, HOLDOUT12, LIVE, PROBES, JUDGE4].filter((d) => d !== dir && present(d));
         const before = earlier(others);
         for (const id of ids) assert.ok(!before.ids.has(id), `${where} ${id} is also in another corpus`);
         for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `${where} ${c.id} repeats a reply of another corpus`);
@@ -369,7 +371,7 @@ for (const [where, dir, counts] of [['real model turns (live/)', LIVE, LIVE_COUN
 }
 
 test('the corpus files never hold a real address or key', () => {
-    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, HOLDOUT9, SEEN9, HOLDOUT10, SEEN10, HOLDOUT11, LIVE, PROBES]) {
+    for (const dir of [DEV, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, HOLDOUT, HOLDOUT9, SEEN9, HOLDOUT10, SEEN10, HOLDOUT11, HOLDOUT12, LIVE, PROBES, JUDGE4]) {
         for (const label of LABELS) {
             const file = join(dir, `${label}.json`);
             if (!existsSync(file)) continue;

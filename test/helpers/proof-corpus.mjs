@@ -55,6 +55,10 @@ export const HOLDOUT11 = join(DEV, 'holdout11');
 export const LIVE = join(DEV, 'live');
 /** Probes written apart from the code: a fresh writer's and the round-3 judge's, tuned on. */
 export const PROBES = join(DEV, 'probes');
+/** The round-4 judge's own turns (its everyday set, its probes and its look-only real-model replies): measured once at 7cc66ef, then tuned on. */
+export const JUDGE4 = join(DEV, 'judge4');
+/** The twelfth hold-out (pass 2): look-only and explanation turns by a fresh writer, measured once, never tuned on. */
+export const HOLDOUT12 = join(DEV, 'holdout12');
 /** The labels of a claim in a case's `claims` list. */
 export const CLAIM_LABELS = ['shown', 'unshown', 'wrong'];
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);

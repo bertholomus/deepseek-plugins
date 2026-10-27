@@ -7,7 +7,7 @@
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, LABELS, LIVE, PROBES, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, claimTable, loadCorpus, measure, measureClaims, quietTable, table } from '../test/helpers/proof-corpus.mjs';
+import { DEV, HOLDOUT, HOLDOUT9, HOLDOUT10, HOLDOUT11, HOLDOUT12, JUDGE4, LABELS, LIVE, PROBES, SEEN, SEEN2, SEEN3, SEEN4, SEEN5, SEEN6, SEEN7, SEEN9, SEEN10, claimTable, loadCorpus, measure, measureClaims, quietTable, table } from '../test/helpers/proof-corpus.mjs';
 
 const CORPORA = [
     ['Dev (tuned on)', DEV],
@@ -22,10 +22,12 @@ const CORPORA = [
     ['Tenth hold-out (measured once, then tuned on)', SEEN10],
     ['Real model turns in DSH Test (tuned on)', LIVE],
     ['Probes written apart from the code (tuned on)', PROBES],
+    ["The round-4 judge's turns (measured once at 7cc66ef, then tuned on)", JUDGE4],
     ['Eighth hold-out (never tuned on)', HOLDOUT],
     ['Ninth hold-out (never tuned on)', HOLDOUT9],
     ['Tenth hold-out (never tuned on)', HOLDOUT10],
     ['Eleventh hold-out (never tuned on)', HOLDOUT11],
+    ['Twelfth hold-out, look-only turns (never tuned on)', HOLDOUT12],
 ];
 const all = [];
 for (const [name, dir] of CORPORA) {
