@@ -22,7 +22,10 @@
  *     news?: { seq, seen, items }: what the user hears about from anywhere in the window (projects.js noteNews),
  *     awaiting?: [{ to: a chat's session id, name: as the coordinator named it, from: the coordinator's session id,
  *       after: the chat's last event seq before the message, at }]: messages to other chats (chat_message)
- *       whose reply hasn't come back yet } } }
+ *       whose reply hasn't come back yet,
+ *     answering?: 'sent' once the plugin sent the chat a message, 'taken' while a turn that started after it runs
+ *       (cleared when it ends), raisedCut?: the seq of the chat's turn that DSH closing cut off, whose messages were sent
+ *       to it again (both projects.js raiseCutOff) } } }
  *
  * The file is this plugin's own (~/.dsh/coordinator): the projects plugin
  * it grew from kept its own file, which stays as it was, so going back to

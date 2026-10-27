@@ -689,8 +689,9 @@ try {
     await say(coord, call('thread_send', { thread: 't1', text: `E2E:slow 5000\n${call('thread_handback', { status: 'done', summary: 'Finished while the chat was off.' })}` }));
     answer = await command(coord, '/coordinate off');
     const stoppedView = await viewOf(coord);
-    check('/coordinate off stops it, says its threads keep running, and the window\'s record of the chat says it stopped', answer.ok
-        && /^Stopped coordinating\. Its \d+ threads keep running; reports wait until you run \/coordinate here again\.$/.test(answer.value?.result?.text ?? '')
+    const openNow = Object.values(project().threads ?? {}).filter((t) => t.resolved !== true).length;
+    check('/coordinate off stops it, says how many of its threads stay open and how many run (t1 alone), and the window\'s record of the chat says it stopped', answer.ok
+        && answer.value?.result?.text === `Stopped coordinating. Its ${openNow} threads stay open (1 running); what they hand back waits until you run /coordinate here again.`
         && project().off === true && readText(logFile).includes(`coordinate ${coord} off\n`) && stoppedView?.role === 'coordinator' && stoppedView.off === true,
         `${JSON.stringify(answer).slice(0, 300)} ${JSON.stringify(stoppedView)}`);
     const heldBack = await waitFor(() => resultOf(since(mark, 't1')), 't1\'s handback while the chat is off', 30000);
@@ -747,12 +748,19 @@ try {
     check('the first turn handed back', since(mark, 'coordinator').some((r) => r.fresh.includes('Eta part one done.')));
     check('the queued turn that failed gets its note', saw.fresh.includes('[Thread idle without a handback: t7 · "Eta"]') && saw.fresh.includes('The turn failed (HTTP 400):'), saw.fresh.slice(0, 300));
 
-    // 16. DSH dies mid-turn. At the next start the chat hears once that the
+    // 16. DSH dies mid-turn, with a thread at work and the chat in the middle
+    // of answering a handback. At the next start the chat hears once that the
     // thread was cut off, and nothing sends the thread on: it waits for the
-    // user's Resume. Then: the same chat still coordinates, threads still wired.
+    // user's Resume; and the handback the chat never answered is sent to it
+    // again, once, from its thread. Then: the same chat still coordinates,
+    // threads still wired.
     mark = model.requests.length;
     await say(coord, call('thread_start', { ask: 'Please do this.', title: 'Theta', brief: 'E2E:slow 120000\nWork for a long time.' }));
     await waitFor(() => since(mark, 't8').length > 0, 'the Theta request');
+    // t1 hands back; the chat's answer to it is slow (the summary's E2E:slow line), so DSH dies while its turn runs.
+    await bridge('POST', `/sessions/${coord}/prompt`, { text: call('thread_send', { thread: 't1', text: call('thread_handback', { status: 'done', summary: 'Alpha re-checked the notes.\nE2E:slow 120000' }) }) });
+    await waitFor(() => since(mark, 'coordinator').some((r) => r.fresh.includes('Alpha re-checked the notes.')), 'the chat to take the Alpha handback', 60000);
+    await sleep(500);
     const resumes = () => readText(logFile).split('\n').filter((l) => l.endsWith(` coordinator ${coord} ${coord} resumed`)).length;
     const resumedBefore = resumes();
     let signInsBefore = signIns();
@@ -764,8 +772,18 @@ try {
     await waitFor(async () => existsSync(sock) && (await bridge('GET', '/health')).ok, 'the session bridge after restart', 90000);
     await waitFor(() => resumes() > resumedBefore, 'the plugin to bring the chat up again');
     check('a restart keeps the chat coordinating', project().coordinatorSessionId === coord && project().off === undefined, JSON.stringify(project()).slice(0, 200));
-    saw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Theta note after the restart');
+    saw = await waitFor(() => since(mark, 'coordinator').find((r) => r.fresh.includes('t8 · "Theta"')), 'the Theta note after the restart');
+    await waitFor(() => since(mark, 'coordinator').some((r) => r.fresh.includes('Alpha re-checked the notes.')), 'the Alpha handback again', 30000).catch(() => {});
+    await waitIdle(coord);
     await sleep(1000);
+    const againReqs = since(mark, 'coordinator').filter((r) => r.fresh.includes('Alpha re-checked the notes.'));
+    const againLog = (await bridge('GET', `/sessions/${coord}/events?types=user/message&limit=2000&full=1`)).events
+        .filter((e) => e.text?.startsWith('[Handback from thread t1') && e.text.includes('Alpha re-checked the notes.'));
+    check('the handback the chat was answering when DSH died is sent to it again, once, from its thread, saying why', againReqs.length === 1
+        && againReqs[0].fresh.includes('(DSH closed before you answered this, so the plugin sends it again, once. The user has not seen this.')
+        && againLog.length === 2 && fromSession(againLog[1], t1) && new RegExp(` raise-cut ${coord} turn=\\d+ messages=1\n`).test(readText(logFile))
+        && project().raisedCut !== undefined && project().answering !== 'taken',
+        `${describe(since(mark, 'coordinator'))} | log=${againLog.length} ${JSON.stringify(againLog[1]?.source)}`);
     check('a turn cut off by the crash is told once at the next start, and the thread is not sent on', saw.fresh.includes('[Thread idle without a handback: t8 · "Theta"]')
         && saw.fresh.includes('The turn was cut off because DSH closed while it ran.') && saw.fresh.includes('its card has Resume')
         && since(mark, 'coordinator').filter((r) => r.fresh.includes('t8 · "Theta"')).length === 1

@@ -129,6 +129,72 @@ const leftovers = (page) => page.evaluate((bundle) => ({
     styles: document.querySelectorAll(`style[data-plugin="${bundle}"]`).length,
     sheets: document.querySelectorAll(`style[data-plugin-css="${bundle}/client.css"]`).length,
 }), BUNDLE);
+/**
+ * The contrast of every text the plugin draws (its own nodes and what DSH draws inside them), against the ground
+ * under it: each ancestor's background laid down to the first opaque one (DSH's page ground when none is), the
+ * text's own alpha and every ancestor's opacity counted. Colours are read through a canvas, so any CSS colour form
+ * counts. Large text (24 px, or 18.66 px bold) needs 3:1, the rest 4.5:1; disabled controls are left out, as WCAG does.
+ * Returns the lowest ratio, how many texts were measured, and every one under its bar.
+ */
+const contrast = (page) => page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const paint = canvas.getContext('2d', { willReadFrequently: true });
+    const rgba = (css) => {
+        paint.clearRect(0, 0, 1, 1);
+        paint.fillStyle = '#000';
+        paint.fillStyle = css;
+        paint.fillRect(0, 0, 1, 1);
+        const [r, g, b, a] = paint.getImageData(0, 0, 1, 1).data;
+        return { r, g, b, a: a / 255 };
+    };
+    const over = (top, base) => ({ r: top.r * top.a + base.r * (1 - top.a), g: top.g * top.a + base.g * (1 - top.a), b: top.b * top.a + base.b * (1 - top.a), a: 1 });
+    const lum = ({ r, g, b }) => [r, g, b].map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; })
+        .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
+    const page0 = (() => { const b = rgba(getComputedStyle(document.body).backgroundColor); return b.a > 0 ? over(b, { r: 255, g: 255, b: 255, a: 1 }) : { r: 255, g: 255, b: 255, a: 1 }; })();
+    const ground = (el) => {
+        const layers = [];
+        for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+            const bg = rgba(getComputedStyle(node).backgroundColor);
+            if (bg.a > 0) layers.push(bg);
+            if (bg.a >= 1) break;
+        }
+        let base = layers.length > 0 && layers[layers.length - 1].a >= 1 ? layers.pop() : page0;
+        while (layers.length > 0) base = over(layers.pop(), base);
+        return base;
+    };
+    const opacity = (el) => {
+        let o = 1;
+        for (let node = el; node && node.nodeType === 1; node = node.parentElement) o *= Number(getComputedStyle(node).opacity);
+        return o;
+    };
+    const roots = [...document.querySelectorAll('[class*="dshp-"]')];
+    const seen = new Set();
+    const results = [];
+    for (const root of roots) {
+        for (const el of [root, ...root.querySelectorAll('*')]) {
+            if (seen.has(el)) continue;
+            seen.add(el);
+            const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== '');
+            if (!own || el.getClientRects().length === 0) continue;
+            const style = getComputedStyle(el);
+            if (style.visibility === 'hidden' || el.closest('[disabled],[aria-disabled="true"]')) continue;
+            const text = rgba(style.color);
+            const alpha = text.a * opacity(el);
+            if (alpha === 0) continue;
+            const base = ground(el);
+            const fg = over({ ...text, a: alpha }, base);
+            const [hi, lo] = [lum(fg), lum(base)].sort((x, y) => y - x);
+            const ratio = (hi + 0.05) / (lo + 0.05);
+            const size = parseFloat(style.fontSize);
+            const large = size >= 24 || (size >= 18.66 && Number(style.fontWeight) >= 700);
+            results.push({ ratio, need: large ? 3 : 4.5, text: el.textContent.trim().slice(0, 40), cls: `${el.className}`.slice(0, 50) });
+        }
+    }
+    const low = results.filter((r) => r.ratio < r.need).map((r) => `${r.ratio.toFixed(2)} "${r.text}" (${r.cls})`);
+    return { count: results.length, min: results.length ? Math.min(...results.map((r) => r.ratio)) : null, low: [...new Set(low)].slice(0, 12) };
+});
 /** No sideways scroll in the window, and nothing of the plugin's past its right edge. */
 const fits = (page) => page.evaluate(() => {
     const width = document.documentElement.clientWidth;
@@ -317,6 +383,71 @@ try {
         if (window?.page) await shot(window.page, shots, 'failed-pane-settings');
     });
 
+    await step('every text the plugin draws reads at 4.5:1 or better on its ground, in light and dark (the chat, its cards, the Threads menu and panel)', async () => {
+        const { page } = window;
+        await trigger(page).click();
+        await menuOf(page).waitFor({ state: 'visible', timeout: 10000 });
+        await page.waitForTimeout(300);
+        for (const dark of [false, true]) {
+            await setDark(page, dark);
+            await page.waitForTimeout(300);
+            const found = await contrast(page);
+            check(`${dark ? 'dark' : 'light'}: every text of the plugin's measured (${found.count}) reads at 4.5:1 or better, large text at 3:1 (lowest ${found.min?.toFixed(2)})`, found.count >= 20 && found.low.length === 0, found.low.join('\n'));
+        }
+        await setDark(page, false);
+        await page.keyboard.press('Escape');
+        await menuOf(page).waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-contrast');
+    });
+
+    await step('a handback that comes while the chat has stopped coordinating reads as held in the Threads menu, and arrives once it coordinates again', async () => {
+        const { page } = window;
+        await say(ids.chat, call('thread_start', {
+            ask: 'Check the version numbers in the notes.', title: 'Version check',
+            brief: `Check them, then report.\nE2E:slow 6000\n${call('thread_handback', { status: 'done', summary: 'Every version number in the notes matches 2.4.0.' })}`,
+        }));
+        const thread = await waitFor(() => threadsOf(ids.chat).t4, 'the fourth thread in the store', 20000);
+        const stopped = await run.api('commands/execute', { agentId: ids.chat, line: '/coordinate off', submittedAttachments: [] });
+        const open = Object.values(store().projects?.[ids.chat]?.threads ?? {}).filter((t) => t.resolved !== true).length;
+        check('/coordinate off says how many threads stay open and how many run', stopped.ok
+            && /^Stopped coordinating\. Its \d+ threads stay open \((\d+|all|none) running\); what they hand back waits until you run \/coordinate here again\.$/.test(stopped.value?.result?.text ?? '')
+            && stopped.value.result.text.includes(`Its ${open} threads`), json(stopped));
+        await waitFor(() => (store().projects?.[ids.chat]?.pendingHandbacks?.length ?? 0) === 1, 'the handback to be held', 40000);
+        await idle(thread, 30000).catch(() => {});
+        await openChat(page, ids.chat);
+        await trigger(page).click();
+        const menu = menuOf(page);
+        await menu.waitFor({ state: 'visible', timeout: 10000 });
+        const line = await waitFor(async () => {
+            const text = await menu.innerText().catch(() => '');
+            return text.includes('Done · held until you coordinate again') ? text : null;
+        }, 'the held handback in the menu', 40000, 500).catch(async () => menu.innerText().catch(() => ''));
+        check('its row reads "Done · held until you coordinate again" under Done, not "No handback yet"', /Done · held until you coordinate again/.test(line) && !/Version check[^\n]*\n[^\n]*No handback yet/.test(line), line.slice(0, 700));
+        await snap(page, 'stopped-held-light');
+        await setDark(page, true);
+        await snap(page, 'stopped-held-dark');
+        await setDark(page, false);
+        await page.keyboard.press('Escape');
+        await menu.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        const mark = model.requests.length;
+        const again = await run.api('commands/execute', { agentId: ids.chat, line: '/coordinate', submittedAttachments: [] });
+        await waitFor(() => model.requests.slice(mark).some((r) => r.action.text === 'SAW-HANDBACK' && r.fresh.includes('Every version number in the notes matches 2.4.0.')), 'the held handback to reach the chat', 30000);
+        await idle(ids.chat, 30000).catch(() => {});
+        await trigger(page).click();
+        await menu.waitFor({ state: 'visible', timeout: 10000 });
+        const after = await waitFor(async () => {
+            const text = await menu.innerText().catch(() => '');
+            return text.includes('Every version number in the notes matches 2.4.0.') && !text.includes('held until') ? text : null;
+        }, 'the delivered handback in the menu', 30000, 500).catch(async () => menu.innerText().catch(() => ''));
+        check('/coordinate again delivers it, and its row reads the handback itself', again.ok && again.value?.result?.text === COORDINATING
+            && after.includes('Every version number in the notes matches 2.4.0.') && !after.includes('held until'), after.slice(0, 700));
+        await page.keyboard.press('Escape');
+        await menu.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-stopped-held');
+    });
+
     await step('the plugin\'s page in Plugins: its defaults, and a wrong setting named in words', async () => {
         const { page } = window;
         const openPage = async () => {
@@ -346,7 +477,12 @@ try {
             && said.includes('maxHandbacksPerHour must be a whole number of handbacks from 1 to 1000 (it is 0), so the plugin uses 30 until you fix it.')
             && said.includes('cordis.patch.yml'), said.slice(0, 500));
         await snap(page, 'plugin-page-problem-light');
-        await setDark(page, true);
+        for (const dark of [false, true]) {
+            await setDark(page, dark);
+            await page.waitForTimeout(300);
+            const found = await contrast(page);
+            check(`the plugin's page with a problem, ${dark ? 'dark' : 'light'}: every text of the plugin's measured (${found.count}) reads at 4.5:1 or better (lowest ${found.min?.toFixed(2)})`, found.count >= 5 && found.low.length === 0, found.low.join('\n'));
+        }
         await snap(page, 'plugin-page-problem-dark');
         await setDark(page, false);
         rewriteRow();

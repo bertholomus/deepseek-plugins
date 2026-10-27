@@ -237,7 +237,23 @@ const LEAD = {
 };
 
 /** How the closing notes of the plugin's messages begin (old ones: "(For the user" and "(Full conversation"). */
-export const NOTE_START = /\n\n\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the chat|Sent by the coordinator of)\b[^\n]*\)\s*$/;
+export const NOTE_START = /\n\n\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the chat|Sent by the coordinator of|DSH closed before you answered this)\b[^\n]*\)\s*$/;
+
+/** What opens the closing note of a message the plugin sends a chat again (againMessage). */
+export const AGAIN_NOTE = 'DSH closed before you answered this, so the plugin sends it again, once.';
+
+/**
+ * One of the plugin's messages to a chat, sent again because DSH closed (a
+ * quit or a crash) while the chat's turn was taking it: the same message,
+ * its closing note opened by AGAIN_NOTE, so the chat answers it now and the
+ * user's notice and the thread's card read it as before.
+ */
+export function againMessage(text) {
+    const s = String(text ?? '');
+    const m = NOTE_START.exec(s);
+    if (m && !s.slice(m.index + 3).startsWith(AGAIN_NOTE)) return `${s.slice(0, m.index)}\n\n(${AGAIN_NOTE} ${s.slice(m.index + 3)}`;
+    return m ? s : `${s}\n\n(${AGAIN_NOTE})`;
+}
 
 /**
  * What a thread reads as the result of a call the user rejected at DSH's

@@ -1542,6 +1542,12 @@ test('browser half: thread rows, cards and links read the projection as DSH send
     assert.deepEqual(plain([heldOwn.verb, heldOwn.note, heldOwn.icon]),
         ['Handback held · Progress update', 'Threads are paused, so the chat that started this thread gets this handback when you resume.', 'IconPauseOutlineRegular']);
     assert.equal(cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't9', status: 'done' }]).verb, 'Handed back · Progress update');
+    // After its chat stopped coordinating, the thread's own card says what its handback waits for.
+    const offOwn = cardView(threadValue.cards[0], thread, statuses, state.byId, 's-t3', undefined, [{ thread: 't3', status: 'progress' }], 'off');
+    assert.deepEqual(plain([offOwn.verb, offOwn.note]),
+        ['Handback held · Progress update', 'The chat that started this thread stopped coordinating, so it gets this handback when you run /coordinate there again.']);
+    const offCard = cardView({ turn: 2, seq: 12, kind: 'send', thread: 't2' }, coord, statuses, state.byId, 's-c', undefined, [{ thread: 't2', status: 'done' }], 'off');
+    assert.deepEqual(plain([offCard.state.label, offCard.row.line]), ['Done', 'Done · held until you coordinate again']);
     const heldCard = cardView({ turn: 2, seq: 12, kind: 'send', thread: 't2' }, coord, statuses, state.byId, 's-c', undefined, [{ thread: 't2', status: 'blocked' }]);
     assert.deepEqual(plain([heldCard.state.label, heldCard.state.dot, heldCard.row.line, heldCard.row.held]), ['Blocked', 'warning', 'Blocked · held until you resume', true]);
 
@@ -2325,7 +2331,7 @@ test('browser half: the plugin\'s messages get a notice that names them, without
 
 test('browser half: one store of what the plugin says about each coordinating chat, shared by the views and read while they watch', async () => {
     const { client } = loadClient();
-    const { projectFacts, pausedText, withHeld } = client.internals;
+    const { projectFacts, pausedText, withHeld, holdOf } = client.internals;
     const calls = [];
     let paused = true;
     let others = [{ id: 'c2', coordinator: 'c2', paused: false }];
@@ -2401,6 +2407,13 @@ test('browser half: one store of what the plugin says about each coordinating ch
     // And sits where that handback puts it: Done, or Waiting on you for a decision or a block.
     assert.deepEqual(plain(withHeld(rows, [{ thread: 't1', status: 'done' }, { thread: 't3', status: 'needs_decision' }]).map((r) => [r.group, r.dot, r.stateLabel])),
         [['done', 'done', 'Done'], ['running', null, null], ['waiting', 'warning', 'Needs a decision']]);
+    // After /coordinate off the plugin holds handbacks too: the row says it was handed back and what it waits for.
+    assert.deepEqual(plain([holdOf(false, false), holdOf(true, false), holdOf(false, true), holdOf(true, true)]), [null, 'paused', 'off', 'both']);
+    assert.deepEqual(plain(withHeld(rows, [{ thread: 't1', status: 'done' }], 'off').map((r) => [r.group, r.stateLabel, r.line, r.held ?? false])),
+        [['done', 'Done', 'Done · held until you coordinate again', true], ['running', null, 'Working…', false], ['idle', null, 'No handback yet', false]]);
+    assert.equal(withHeld(rows, [{ thread: 't3', status: 'blocked' }], 'both')[2].line, 'Blocked · held until you coordinate again and resume');
+    // Nothing is held while the chat coordinates and runs: its rows stay as they are.
+    assert.equal(withHeld(rows, [{ thread: 't1', status: 'done' }], holdOf(false, false)), rows);
 });
 
 test('browser half: news from threads marks their chat\'s row and shows one notice for the newest, until that chat is opened', async () => {
@@ -2752,6 +2765,14 @@ test('browser half: its one style sheet goes with the plugin, its motion stops u
         const cls = /\.(dshp-[\w-]+)/.exec(selector)?.[1];
         assert.ok(cls && roots.includes(`.${inside[cls] ?? cls}`), `${selector} stops with its view (${cls})`);
     }
+    // Glass: every ground the plugin blurs itself turns opaque and blurs nothing when the system asks for less transparency.
+    const blurred = [...css.matchAll(/([^{}]+)\{[^}]*backdrop-filter:(?!none)[^}]*\}/g)].map((m) => m[1].trim()).filter((sel) => !sel.startsWith('@'));
+    assert.ok(blurred.length >= 1, 'the bar above the message box has DSH\'s menu glass');
+    const reduced = /@media \(prefers-reduced-transparency:reduce\)\{([^{}]+)\{([^}]*)\}\}/.exec(css);
+    assert.ok(reduced, 'a reduced-transparency rule');
+    for (const selector of blurred) assert.ok(reduced[1].split(',').map((x) => x.trim()).includes(selector), `${selector} thickens under reduced transparency`);
+    assert.match(reduced[2], /backdrop-filter:none/);
+    assert.match(reduced[2], /background:linear-gradient\(var\(--dsw-specific-menu\),var\(--dsw-specific-menu\)\),var\(--dsw-alias-bg-layer-2\)/, 'its menu glass on DSH\'s opaque card ground');
     // DSH's header is DSH's: no rule reaches its title crumb, and no :has() looks into DSH's elements.
     assert.doesNotMatch(css, /nav\[aria-label\]/);
     for (const rule of css.split('}')) {

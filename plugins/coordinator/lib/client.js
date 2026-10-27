@@ -427,6 +427,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshp-dock{box-sizing:border-box;width:calc(100% - 2 * var(--dsh-composer-side-clearance,0px) - 4 * var(--dsh-composer-dock-inset,0px));margin:0 auto;container:dshp-dock/inline-size}',
             '.dshp-dock-bar{isolation:isolate;position:relative;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;max-width:calc(var(--dsh-composer-card-max-width,760px) - 4 * var(--dsh-composer-dock-inset,0px));min-height:36px;margin:0 auto;padding:4px 5px 4px 12px;border-radius:var(--dsw-radius-md);box-shadow:var(--dsw-elevation-panel);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1)}',
             '.dshp-dock-bar::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);pointer-events:none}',
+            // Asked for less transparency, the bar's menu glass is laid on DSH's own opaque card ground and blurs nothing.
+            '@media (prefers-reduced-transparency:reduce){.dshp-dock-bar::before{background:linear-gradient(var(--dsw-specific-menu),var(--dsw-specific-menu)),var(--dsw-alias-bg-layer-2);backdrop-filter:none}}',
             '.dshp-dock-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}',
             '.dshp-dock-label{flex:none;font-size:13px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary)}',
             '.dshp-dock-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary-dimmed,var(--dsw-alias-label-secondary))}',
@@ -1386,9 +1388,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             pausedCoordinator: 'New threads and handbacks wait until you resume.',
             pausedNewThreads: 'New threads wait too.',
             pausedThread: 'This thread\'s handbacks wait until you resume.',
-            heldLine: 'held until you resume',
+            // What a held handback waits for: Resume (paused), /coordinate in its chat (stopped coordinating), or both.
+            heldLine: { paused: 'held until you resume', off: 'held until you coordinate again', both: 'held until you coordinate again and resume' },
             handbackHeld: 'Handback held',
-            handbackHeldWhy: 'Threads are paused, so the chat that started this thread gets this handback when you resume.',
+            handbackHeldWhy: {
+                paused: 'Threads are paused, so the chat that started this thread gets this handback when you resume.',
+                off: 'The chat that started this thread stopped coordinating, so it gets this handback when you run /coordinate there again.',
+                both: 'The chat that started this thread stopped coordinating and its threads are paused, so it gets this handback when you run /coordinate there again and resume.',
+            },
             resume: 'Resume',
             resuming: 'Resuming…',
             resumeFailed: 'Couldn\'t resume the threads.',
@@ -2108,16 +2115,26 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /** How many messages a pause holds for a coordinator, as last read. */
         const useHeld = (facts, coordinator) => React.useSyncExternalStore(facts.subscribe, () => facts.info(coordinator)?.paused?.held ?? 0);
-        /** The handbacks a pause holds ([{thread, status}]), as last read. */
+        /** The handbacks the plugin holds for a coordinator ([{thread, status}]), as last read. */
         const useHeldHandbacks = (facts, coordinator) => React.useSyncExternalStore(facts.subscribe, () => facts.info(coordinator)?.paused?.handbacks ?? EMPTY);
+        /**
+         * Whether a coordinating chat has stopped coordinating (/coordinate off): from its own value when the view has
+         * it (a coordinator's), else from the plugin's description of it.
+         */
+        const useStopped = (facts, info) => React.useSyncExternalStore(facts.subscribe,
+            () => (info?.me?.role === 'coordinator' ? info.me.off === true : facts.info(info?.coordinator)?.project?.off === true));
+        /** Why what threads hand back waits now: 'paused', 'off' (the chat stopped coordinating), 'both', or null. */
+        const holdOf = (paused, off) => (paused && off ? 'both' : off ? 'off' : paused ? 'paused' : null);
 
         /**
-         * A thread whose handback a pause holds says so, instead of "No
-         * handback yet", and sits where that handback puts it (Done, or
+         * A thread whose handback is held (its chat paused its threads or
+         * stopped coordinating) says so, and what it waits for, instead of
+         * "No handback yet", and sits where that handback puts it (Done, or
          * Waiting on you for a decision).
+         * @param why - holdOf's answer; null holds nothing.
          */
-        function withHeld(rows, handbacks) {
-            if (!Array.isArray(handbacks) || handbacks.length === 0) return rows;
+        function withHeld(rows, handbacks, why = 'paused') {
+            if (why === null || !Array.isArray(handbacks) || handbacks.length === 0) return rows;
             const held = new Map();
             for (const hb of handbacks) if (isObject(hb) && typeof hb.thread === 'string') held.set(hb.thread, hb.status);
             return rows.map((row) => {
@@ -2125,7 +2142,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const status = held.get(row.id);
                 const state = rowState({ resolved: false, running: false, pending: undefined, hb: { status }, ending: undefined });
                 const label = HANDBACK_LABELS[status] ?? 'Handback';
-                return { ...row, group: state.group, dot: state.dot, stateLabel: state.label, ending: undefined, line: `${label} · ${TEXT.heldLine}`, held: true };
+                return { ...row, group: state.group, dot: state.dot, stateLabel: state.label, ending: undefined, line: `${label} · ${TEXT.heldLine[why] ?? TEXT.heldLine.paused}`, held: true };
             });
         }
 
@@ -2763,7 +2780,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * @param held - the handbacks a pause holds ([{thread, status}]).
          * @param threads - describe's threads for the chat, for newestRoster; `scope` that chat.
          */
-        function useRows(projects, useSessions, listed, statuses, byId, held, threads, scope) {
+        function useRows(projects, useSessions, listed, statuses, byId, held, threads, scope, why = 'paused') {
             // Rename, Mark resolved or Reopen from a row's ⋯ shows at once (newestRoster).
             const seen = React.useRef(null);
             if (seen.current === null) seen.current = new Map();
@@ -2775,7 +2792,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             React.useEffect(() => {
                 for (const id of sessions) projects.refresh(id);
             }, [key, projects]);
-            return React.useMemo(() => withHeld(rowsOf(roster, statuses, byId, endings, live), held), [roster, statuses, byId, endings, live, held]);
+            return React.useMemo(() => withHeld(rowsOf(roster, statuses, byId, endings, live), held, why), [roster, statuses, byId, endings, live, held, why]);
         }
 
         /** The model labels of a roster's sessions, read live from DSH. */
@@ -3163,8 +3180,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             }, [away, unknown, open, coordinator, projects]);
             const paused = usePaused(projects.facts, coordinator, coordinator ? `d:${coordinator}` : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            const why = holdOf(paused, useStopped(projects.facts, info));
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, open);
-            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY, described?.threads, coordinator);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, why ? handbacks : EMPTY, described?.threads, coordinator, why);
             const { cv, models } = useRosterModels(projects, useSessions, rows, open);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), open);
             // In a thread, its own changes as a pill in its header.
@@ -3337,8 +3355,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const visible = tab.visible !== false;
             const paused = usePaused(projects.facts, coordinator, coordinator && visible ? `d:${coordinator}` : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, coordinator);
+            const why = holdOf(paused, useStopped(projects.facts, info));
             const described = useProjectInfo(projects.facts, sessionId, info !== undefined, visible);
-            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, paused ? handbacks : EMPTY, described?.threads, coordinator);
+            const rows = useRows(projects, useSessions, info?.roster, statuses, byId, why ? handbacks : EMPTY, described?.threads, coordinator, why);
             const { cv, models } = useRosterModels(projects, useSessions, rows, info !== undefined && visible);
             const changes = useThreadChanges(projects, useSessions, coordinator, rowSessions(rows), info !== undefined && visible);
             const permissions = usePermissions(useSessions, rowSessions(rows));
@@ -3924,7 +3943,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
          * How one card reads: its icon, its line above the name, and what it
          * opens. `held` lists the handbacks a pause holds.
          */
-        function cardView(card, info, statuses, byId, here, endings, held = EMPTY) {
+        function cardView(card, info, statuses, byId, here, endings, held = EMPTY, why = 'paused') {
             const handback = HANDBACK_LABELS[card.status] ?? card.status;
             if (info.me.role === 'thread') {
                 // A thread's own turn: only its handback is news, and it points at the chat that started it.
@@ -3935,13 +3954,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 return {
                     key: `handback-${card.seq ?? ''}`, kind: card.kind, icon: waits ? ui.IconPauseOutlineRegular : ui.IconTreeCornerRegular,
                     verb: `${waits ? TEXT.handbackHeld : 'Handed back'}${handback ? ` · ${handback}` : ''}`,
-                    note: waits ? TEXT.handbackHeldWhy : undefined,
+                    note: waits ? TEXT.handbackHeldWhy[why] ?? TEXT.handbackHeldWhy.paused : undefined,
                     title: info.project.name || TEXT.coordinator, session: info.coordinator === here ? undefined : info.coordinator,
                 };
             }
             const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.id === card.thread);
             // A handback a pause holds counts as the thread's state, as in the Threads menu.
-            const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], held)[0] : undefined;
+            const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], held, why)[0] : undefined;
             const base = {
                 key: card.thread ?? `${card.kind}-${card.seq ?? ''}`, kind: card.kind, threadId: card.thread, seq: card.seq,
                 title: row?.title ?? card.thread ?? TEXT.thread, session: row?.session, row,
@@ -3989,7 +4008,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         /** The sources DSH draws those messages with: another session's (a handback, a brief) and a plugin's (the notes). */
         const NOTICE_SOURCES = new Set(['agent-message', 'cordis-host-runner']);
         /** The closing note in which the plugin tells the coordinator how to answer (prompts.js NOTE_START); the user's notice leaves it out. */
-        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the chat)\b[^\n]*\)\s*$/;
+        const CLOSING_NOTE = /(?:^|\n\n)\((?:The user has not seen this|For the user|Full conversation|Tell the user|If its last reply|Sent by the chat|DSH closed before you answered this)\b[^\n]*\)\s*$/;
         /** A handback's state as its notice says it: the state the thread reported, not its state now. */
         const NOTICE_STATES = {
             done: { dot: 'done', label: 'Done' },
@@ -4206,11 +4225,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const coordinator = info?.me.role === 'coordinator' ? sessionId : info?.coordinator;
             const paused = usePaused(projects.facts, coordinator, coordinator ? 'list' : null) === true;
             const heldList = useHeldHandbacks(projects.facts, coordinator);
-            React.useEffect(() => { if (paused && coordinator) void projects.facts.describe(coordinator, 15000); }, [paused, coordinator, projects]);
-            const held = paused ? heldList : EMPTY;
+            const why = holdOf(paused, useStopped(projects.facts, info));
+            React.useEffect(() => { if (why && coordinator) void projects.facts.describe(coordinator, 15000); }, [why, coordinator, projects]);
+            const held = why ? heldList : EMPTY;
             const all = info?.me.role === 'coordinator' && Array.isArray(info.me.cards) ? info.me.cards : EMPTY;
             const newest = (view) => view.threadId !== undefined && !all.some((c) => isObject(c) && c.thread === view.threadId && c.seq > view.seq);
-            const views = info === undefined ? EMPTY : cards.map((card) => cardView(card, info, statuses, byId, sessionId, endings, held)).filter(Boolean)
+            const views = info === undefined ? EMPTY : cards.map((card) => cardView(card, info, statuses, byId, sessionId, endings, held, why)).filter(Boolean)
                 .map((view) => (newest(view) ? { ...view, newest: true } : view));
             // A coordinator's cards say what each thread runs on.
             const threadSessions = views.filter((view) => view.threadId !== undefined && view.session !== undefined).map((view) => view.session);
@@ -4823,6 +4843,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const cv = useCatalogView(projects.catalog, info !== undefined);
             const paused = usePaused(projects.facts, info?.coordinator, info?.coordinator ? 'list' : null) === true;
             const handbacks = useHeldHandbacks(projects.facts, info?.coordinator);
+            const why = holdOf(paused, useStopped(projects.facts, info));
             const thread = info?.me.role === 'thread';
             const changed = useThreadChanges(projects, useSessions, thread ? info.coordinator : undefined, thread ? [sessionId] : EMPTY, true)[info?.me.thread?.id];
             const live = useSessions((state) => permissionIn(state, sessionId));
@@ -4841,7 +4862,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const pause = paused ? h('div', { className: 'dshp-t-hover-line', 'data-projects-paused': '' }, `${TEXT.projectPaused}. ${pausedText(info.me.role, 0)}`) : null;
             if (info.me.role === 'thread') {
                 const entry = (info.roster ?? EMPTY).find((t) => isObject(t) && t.session === sessionId);
-                const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], paused ? handbacks : EMPTY)[0] : undefined;
+                const row = entry ? withHeld([threadRow(entry, statuses, byId, endings)], why ? handbacks : EMPTY, why)[0] : undefined;
                 const line = row ? hoverLine(row) : undefined;
                 return h('div', { className: 'dshp-t-hover', 'data-projects-thread-hover': '' },
                     h('div', { className: 'dshp-t-hover-head' }, h(ui.IconTreeCornerRegular, { size: 12 }), project ? `${TEXT.thread} of ${project}` : TEXT.thread),
@@ -6368,7 +6389,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             withHit, valueIn, takeKnown, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, sectionGroups, nestingCss, nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
-            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, holdOf,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, shownCounts, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM, ThreadsMenu,

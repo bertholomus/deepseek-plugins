@@ -51,7 +51,7 @@ import {
 import {
     coordinatorPolicy, threadPolicy, rosterLines, briefMessage, coordinatorMessage, cardSummary,
     handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, describeEnding, endingStateOf, continueMessage, HANDBACK_STATUSES, TAGS, STOPPED_BY_USER, NUDGE,
-    IDLE_NUDGE, outsideMessage, replyMessage, declinedResult, UNTITLED_CHAT,
+    IDLE_NUDGE, outsideMessage, replyMessage, declinedResult, UNTITLED_CHAT, againMessage,
 } from './prompts.js';
 import { META_MARK, MAX_THREADS, PROJECTION_KEY } from './projection.js';
 import { changeRecord, changeTotals, withChange, editsIn, editOf, editSummary, FILE_TOOLS, diffFiles, subagentsIn, placeIn, MAX_NET_CHARS, MAX_VIEW_CHARS } from './changes.js';
@@ -499,6 +499,59 @@ function turnRange(events, current) {
     if (lastEnd < 0) return { start: Math.max(lastIndex('turn/start', events.length), 0), end: events.length, ended: false };
     const start = Math.max(lastIndex('turn/start', lastEnd), lastIndex('turn/end', lastEnd) + 1);
     return { start, end: lastEnd + 1, reason: events[lastEnd].data?.reason ?? null, ended: true };
+}
+
+/** The plugin's messages a chat answers; an approval note is not one of them, as the prompt it was about closes with DSH. */
+const ANSWERED_TAGS = [TAGS.handback, TAGS.idle, TAGS.question, TAGS.reply];
+
+/**
+ * A chat's last turn when DSH closing cut it off (a quit or a crash: DSH
+ * closes it as interrupted at its next start, or has not closed it yet)
+ * while it was taking the plugin's messages, which it so never answered:
+ * the turn's key and each such message, with the session it came from.
+ * null when the last turn finished, or took none of them.
+ */
+function cutOffTurn(events) {
+    const lastIndex = (type, before) => {
+        for (let i = before - 1; i >= 0; i--) if (events[i]?.type === type) return i;
+        return -1;
+    };
+    const lastEnd = lastIndex('turn/end', events.length);
+    const lastStart = lastIndex('turn/start', events.length);
+    let start;
+    let end;
+    if (lastStart > lastEnd) {
+        start = lastStart;
+        end = events.length;
+    } else {
+        if (lastEnd < 0) return null;
+        const reason = events[lastEnd].data?.reason;
+        const cut = reason?.kind === 'interrupted' || (reason?.kind === 'aborted' && reason.reason?.kind === 'disposed');
+        if (!cut) return null;
+        start = Math.max(lastIndex('turn/start', lastEnd), lastIndex('turn/end', lastEnd) + 1);
+        end = lastEnd + 1;
+    }
+    const messageOf = (event) => {
+        const prompt = promptOf(event);
+        if (!prompt?.fromProject || !ANSWERED_TAGS.some((tag) => prompt.text.startsWith(tag))) return null;
+        const source = (event?.data?.message ?? event?.data)?.source;
+        return { text: prompt.text, ...(typeof source?.senderSessionId === 'string' ? { from: source.senderSessionId } : {}) };
+    };
+    const messages = [];
+    for (let i = start; i < end; i++) {
+        const message = messageOf(events[i]);
+        if (message) messages.push(message);
+    }
+    // A turn with no prompt of its own took the last one before it.
+    if (messages.length === 0) {
+        for (let i = start - 1; i >= 0; i--) {
+            if (!promptOf(events[i])) continue;
+            const message = messageOf(events[i]);
+            if (message) messages.push(message);
+            break;
+        }
+    }
+    return messages.length > 0 ? { key: events[start]?.seq ?? start, messages } : null;
 }
 
 /** A model selection as one comparable string. */
@@ -1495,7 +1548,7 @@ export class ProjectManager {
         await this.matchArchive();
         for (const id of [...this.projects.keys()]) {
             if (this.disposed) return;
-            await this.resume(id);
+            await this.resume(id, { atStart: true });
         }
         if (!this.disposed) await this.catchUpReplies();
     }
@@ -1505,8 +1558,11 @@ export class ProjectManager {
      * was held for it delivered and the turns its threads ended meanwhile
      * reviewed. Not while it is archived or stopped coordinating; a chat DSH
      * no longer has is marked gone, and what its threads send it waits.
+     * `atStart`: the plugin is starting (DSH started, or the plugin was
+     * switched on or reloaded), so a turn of the chat that DSH closing cut
+     * off is looked for first (raiseCutOff).
      */
-    async resume(id) {
+    async resume(id, { atStart = false } = {}) {
         if (this.archived(id) || !this.coordinating(id)) return;
         const sessionId = this.store.projects[id]?.coordinatorSessionId;
         if (typeof sessionId !== 'string' || sessionId === '') return;
@@ -1530,8 +1586,54 @@ export class ProjectManager {
         }
         // Reloaded meanwhile: the new manager delivers and reviews.
         if (this.disposed) return;
+        if (atStart) await this.raiseCutOff(id);
         await this.flushPending(id);
         await this.catchUp(id);
+    }
+
+    /**
+     * At a start: when DSH closing (a quit or a crash) cut off the chat's
+     * last turn while it was taking the plugin's messages (a handback, an
+     * idle note, a thread's question, a reply), so the chat never answered
+     * them, each is sent to it again, once (againMessage says so). The
+     * turn's key is kept, so a later start sends nothing again; a chat whose
+     * turn runs now is left alone. Held as any message is while its threads
+     * are paused.
+     */
+    async raiseCutOff(projectId) {
+        const stored = this.store.projects[projectId];
+        const sessionId = stored?.coordinatorSessionId;
+        // Only a chat the plugin sent a message whose turn it never saw end: no other chat's log is read.
+        if (!stored?.answering || typeof sessionId !== 'string' || sessionId === '' || this.ctx.agents.get(sessionId)?.status === 'running') return;
+        let cut;
+        try {
+            cut = cutOffTurn(ownEvents(await this.sc.inspect(sessionId, AbortSignal.timeout(20000))));
+        } catch (error) {
+            this.log(`error raise-cut ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+            return;
+        }
+        if (this.disposed) return;
+        const again = cut && this.store.projects[projectId]?.raisedCut !== cut.key;
+        // Noted before anything is sent, so no later start sends it twice.
+        this.store.putProject(projectId, { answering: undefined, ...(again ? { raisedCut: cut.key } : {}) });
+        if (!again) return;
+        for (const message of cut.messages) await this.deliver(projectId, againMessage(message.text), message.from);
+        this.log(`raise-cut ${projectId} turn=${cut.key} messages=${cut.messages.length}`);
+    }
+
+    /**
+     * A coordinating chat's status, for raiseCutOff: a turn that starts
+     * after the plugin sent it a message takes it, and that turn's end
+     * clears the mark. A status listener: it never throws.
+     */
+    onChatStatus(projectId, status) {
+        try {
+            const answering = this.store.projects[projectId]?.answering;
+            if (status === 'running' && answering === 'sent') this.store.putProject(projectId, { answering: 'taken' });
+            else if (status === 'idle' && answering === 'taken') this.store.putProject(projectId, { answering: undefined });
+        } catch (error) {
+            this.log(`error chat-status ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);
+        }
     }
 
     /**
@@ -1558,8 +1660,7 @@ export class ProjectManager {
             this.retries.delete(who.projectId);
             this.forget(agent);
             this.log(`coordinate ${who.projectId} off`);
-            const open = Object.values(this.store.project(who.projectId).threads).filter((t) => !t.resolved).length;
-            return { kind: 'success', text: open > 0 ? `Stopped coordinating. Its ${open === 1 ? 'thread keeps' : `${open} threads keep`} running; reports wait until you run /coordinate here again.` : 'Stopped coordinating.' };
+            return { kind: 'success', text: this.stoppedText(who.projectId) };
         }
         if (who?.role === 'coordinator' && this.coordinating(who.projectId)) return { kind: 'success', text: 'This chat already coordinates threads.' };
         const projectId = who?.projectId ?? sessionId;
@@ -1581,6 +1682,19 @@ export class ProjectManager {
         }, 0);
         later.unref?.();
         return { kind: 'success', text: 'Coordinating. Ask for work here as usual: what runs long or splits into parts goes to threads that report back to this chat.' };
+    }
+
+    /**
+     * What /coordinate off answers: that the chat's open threads stay, how
+     * many of them run now, and that what they hand back waits.
+     */
+    stoppedText(projectId) {
+        const open = Object.values(this.store.project(projectId).threads).filter((t) => !t.resolved);
+        if (open.length === 0) return 'Stopped coordinating.';
+        const running = open.filter((t) => this.liveStatus(t.sessionId) === 'running').length;
+        const now = running === 0 ? 'none running' : running === open.length ? (open.length === 1 ? 'running' : 'all running') : `${running} running`;
+        const stay = open.length === 1 ? `Its thread stays open (${running === 0 ? 'idle' : now})` : `Its ${open.length} threads stay open (${now})`;
+        return `Stopped coordinating. ${stay}; what ${open.length === 1 ? 'it hands' : 'they hand'} back waits until you run /coordinate here again.`;
     }
 
     /** What the user typed after /coordinate: nothing or "on" starts, "off" or "stop" stops. */
@@ -1828,6 +1942,8 @@ export class ProjectManager {
                 text: () => (role === 'coordinator' ? this.coordinatorText(projectId) : this.threadText(projectId, threadId)),
             }));
             for (const tool of this.buildTools(this, who)) add(scoped.tools.register(tool));
+            // The chat's turns, for raiseCutOff: whether one that took the plugin's message has ended.
+            if (role === 'coordinator') add(scoped.on('agent/status', ({ status }) => this.onChatStatus(projectId, status)));
             if (role !== 'thread') return () => { for (const d of disposers.reverse()) { try { d(); } catch {} } };
             if (this.selectionMode === 'override') {
                 // Outermost, so the Host's own selection listener cannot undo it.
@@ -3023,6 +3139,8 @@ export class ProjectManager {
             const next = this.store.project(projectId).pendingHandbacks[0];
             const text = typeof next === 'string' ? next : typeof next?.text === 'string' ? next.text : '';
             try {
+                // Marked before it goes, so a quit while the chat takes it is found at the next start (raiseCutOff).
+                if (text.trim() !== '' && this.store.project(projectId).answering !== 'sent') this.store.putProject(projectId, { answering: 'sent' });
                 if (text.trim() !== '') await this.prompt(sessionId, text, 'queue', typeof next?.from === 'string' ? next.from : undefined);
             } catch (error) {
                 this.log(`error deliver ${projectId} ${String(error?.message ?? error).slice(0, 200)}`);

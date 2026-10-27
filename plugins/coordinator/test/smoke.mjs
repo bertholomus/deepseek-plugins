@@ -18,7 +18,7 @@ import * as plugin from '../lib/index.js';
 import { effectiveSettings, effectiveAccess, applyRoute, checkSelection, parseModelSpec, pluginDefaults } from '../lib/settings.js';
 import { timing, clipTitle, guardList, guardedIn, personalMark, withPersonal, unsaidPart } from '../lib/projects.js';
 import { changeRecord, withChange, changeTotals, changesLine, MAX_TURNS, lineDelta, editOf, editsIn, editSummary, hunksOf, subagentsIn, diffFiles, placeIn, MAX_HUNK_CHARS, MAX_VIEW_CHARS } from '../lib/changes.js';
-import { describeEnding, endingStateOf, continueMessage, readableError, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, NUDGE, IDLE_NUDGE } from '../lib/prompts.js';
+import { describeEnding, endingStateOf, continueMessage, readableError, handbackSummary, handbackMessage, idleMessage, approvalMessage, questionMessage, userMustFix, cardSummary, threadMarkdown, outsideMessage, replyMessage, againMessage, NUDGE, IDLE_NUDGE } from '../lib/prompts.js';
 import { ProjectStore, dataPath, dshHome } from '../lib/store.js';
 import { NetTexts, canonicalPath } from '../lib/net.js';
 import { grantsIn, asksFor } from '../lib/grants.js';
@@ -656,7 +656,7 @@ test('/coordinate off: the chat is a plain chat again; its threads keep running 
     await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
     const thread = threadOf(host, coord);
     const cp = host.sessions.get(CHAT).prompts;
-    assert.deepEqual(await coordinateIn(host, coord, 'off'), { kind: 'success', text: 'Stopped coordinating. Its thread keeps running; reports wait until you run /coordinate here again.' });
+    assert.deepEqual(await coordinateIn(host, coord, 'off'), { kind: 'success', text: 'Stopped coordinating. Its thread stays open (idle); what it hands back waits until you run /coordinate here again.' });
     assert.deepEqual([coord.ctx.registered.size, coord.ctx.sections.size], [0, 0]);
     assert.equal(storedIn(dir).off, true);
     // Its thread keeps its tools and its guards; what it hands back waits.
@@ -682,6 +682,19 @@ test('/coordinate off: the chat is a plain chat again; its threads keep running 
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, 'coordinator.json'), 'utf8')).projects), [CHAT]);
     assert.equal(storedIn(dir).off, undefined);
     assert.match(readFileSync(join(dir, 'coordinator.log'), 'utf8'), / coordinate dsh-plugins off\n[^]* coordinate dsh-plugins on again\n/);
+    // The answer counts what runs: of three open threads, one running (one more is resolved and not counted).
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Tests', brief: 'Run the tests.' });
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Lint', brief: 'Lint it.' });
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Old', brief: 'Old work.' });
+    await coord.ctx.call('thread_update', { thread: 't4', resolved: true });
+    const t2 = host.live.get(storedIn(dir).threads.t2.sessionId);
+    t2.ctx.emitStatus(t2, 'running');
+    assert.equal((await coordinateIn(host, coord, 'off')).text, 'Stopped coordinating. Its 3 threads stay open (1 running); what they hand back waits until you run /coordinate here again.');
+    await coordinateIn(host, coord, 'on');
+    await tick();
+    for (const id of ['t1', 't3']) { const a = host.live.get(storedIn(dir).threads[id].sessionId); a.ctx.emitStatus(a, 'running'); }
+    assert.equal((await coordinateIn(host, coord, 'off')).text, 'Stopped coordinating. Its 3 threads stay open (all running); what they hand back waits until you run /coordinate here again.');
+    for (const id of ['t1', 't2', 't3']) { const a = host.live.get(storedIn(dir).threads[id].sessionId); a.status = 'idle'; }
 });
 
 test('/coordinate is refused in a thread, a subagent\'s session and a chat without a folder; a chat DSH no longer has is marked gone', async () => {
@@ -1338,7 +1351,7 @@ test('window: Coordinate and the Thread settings endpoints read and change a cha
     for (const name of ['create', 'rename', 'remove', 'addCoordinator', 'createCategory', 'renameCategory', 'removeCategory', 'moveCategory', 'fileWorkspace', 'listCategories']) {
         assert.equal(name in remote, false, name);
     }
-    assert.deepEqual(Object.keys(await remote.list()).sort(), ['guarded', 'permissions', 'problems', 'projects']);
+    assert.deepEqual(Object.keys(await remote.list()).sort(), ['guarded', 'permissions', 'problems', 'projects', 'store']);
     assert.deepEqual((await remote.list()).problems, [], 'no setting to fix');
     const refused = async (promise, pattern) => {
         await assert.rejects(promise, (error) => error.code === 'coordinator/refused' && pattern.test(error.message));
@@ -1400,7 +1413,7 @@ test('window: Coordinate and the Thread settings endpoints read and change a cha
 
     // Coordinate in the chat's header: the same as the command, logged in the chat; refused for a thread.
     let done = await remote.coordinate(coord.id, false);
-    assert.deepEqual(plain([done.coordinating, done.session, done.text, done.projects[0].off]), [false, coord.id, 'Stopped coordinating. Its thread keeps running; reports wait until you run /coordinate here again.', true]);
+    assert.deepEqual(plain([done.coordinating, done.session, done.text, done.projects[0].off]), [false, coord.id, 'Stopped coordinating. Its thread stays open (idle); what it hands back waits until you run /coordinate here again.', true]);
     done = await remote.coordinate(coord.id, true);
     assert.deepEqual(plain([done.coordinating, done.text]), [true, 'Coordinating. Ask for work here as usual: what runs long or splits into parts goes to threads that report back to this chat.']);
     assert.deepEqual(host.sessions.get(CHAT).events.filter((e) => e.type === 'command/run').map((e) => e.data.args), ['', ' off', '']);
@@ -2699,6 +2712,100 @@ test('a thread turn cut off by DSH closing is reported at the next start, once, 
     await tick();
     assert.equal(third.sessions.get(coord.id).prompts.length, 0, 'reported once');
     assert.equal(third.sessions.get(thread.id).prompts.length, 0, 'not sent on');
+});
+
+test('a handback the chat was answering when DSH closed is sent to it again at the next start, once, from its thread; nothing else is', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    await coord.ctx.call('thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
+    const thread = threadOf(first.host, coord);
+    thread.ctx.emitStatus(thread, 'running');
+    await thread.ctx.call('thread_handback', { status: 'needs_decision', summary: 'Delete README.md or keep it?' });
+    thread.ctx.emitStatus(thread, 'idle');
+    await tick();
+    // The chat's turn takes the handback, and DSH quits (or crashes) before it answers.
+    turnMarks(first.host, coord.id).start();
+    assistantSays(first.host, coord.id, 'Let me look at');
+    const handback = first.host.sessions.get(coord.id).prompts[0].text;
+    // The chat's turn started (it takes the handback), and never ends.
+    coord.ctx.emitStatus(coord, 'running');
+    assert.match(handback, /^\[Handback from thread t1 · "Docs" · status: needs_decision\]\n\nDelete README\.md or keep it\?\n\n\(The user has not seen this\. Reply now\./);
+
+    const second = restart(first.host.sessions, first.config);
+    await tick();
+    const sent = second.sessions.get(coord.id).prompts;
+    assert.equal(sent.length, 1, 'sent once more');
+    assert.equal(sent[0].text, handback.replace('\n\n(The user has not seen this.', '\n\n(DSH closed before you answered this, so the plugin sends it again, once. The user has not seen this.'));
+    assert.deepEqual(sourceOf(second.sessions.get(coord.id), 1), { kind: 'agent-message', form: 'relay', senderSessionId: thread.id }, 'it comes from its thread, as it did');
+    // Its body and its card read as before.
+    assert.equal(handbackSummary(sent[0].text), 'Delete README.md or keep it?');
+    const log = () => readFileSync(join(dir, 'coordinator.log'), 'utf8');
+    assert.match(log(), / raise-cut dsh-plugins turn=\d+ messages=1\n/);
+    // Nothing for the thread: its turn had ended with its handback.
+    assert.deepEqual(second.sessions.get(thread.id).prompts, []);
+
+    // Another start finds the same cut turn (the chat hasn't answered yet): nothing is sent again.
+    const third = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(third.sessions.get(coord.id).prompts.length, 0, 'once');
+    assert.equal(log().match(/ raise-cut /g).length, 1);
+});
+
+test('a chat\'s cut-off turn sends nothing again when it took only the user\'s words or an approval note, or when it finished', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'projects-'));
+    const first = setup({}, dir);
+    await tick();
+    const coord = coordinatorOf(first.host);
+    const typed = userTyping(first.host);
+    // The user's own message, cut off: theirs to send again, not the plugin's.
+    await typed(coord, 'Plan the release.');
+    turnMarks(first.host, coord.id).start();
+    let next = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(next.sessions.get(coord.id).prompts.length, 0);
+    // An approval note: the prompt it was about closed with DSH (the thread's cut-off note says so instead).
+    const events = first.host.sessions.get(coord.id).events;
+    events.push({ seq: events.length + 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } });
+    first.host.sessions.get(coord.id).events.push({ seq: events.length + 1, type: 'user/message', time: Date.now(), data: { role: 'user', content: [{ type: 'text', text: '[Thread waiting for approval: t1 · "Docs"]\n\nIt waits.\n\n(Tell the user in one line.)' }], source: { kind: 'cordis-host-runner' } } });
+    turnMarks(first.host, coord.id).start();
+    next = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(next.sessions.get(coord.id).prompts.length, 0);
+    // A handback whose turn finished: answered.
+    events.push({ seq: events.length + 1, type: 'turn/end', data: { reason: { kind: 'interrupted' } } });
+    events.push({ seq: events.length + 1, type: 'user/message', time: Date.now(), data: { role: 'user', content: [{ type: 'text', text: '[Handback from thread t1 · "Docs" · status: done]\n\nDone.\n\n(The user has not seen this. Reply now.)' }], source: { kind: 'agent-message', form: 'relay', senderSessionId: 's1' } } });
+    turnMarks(first.host, coord.id).start();
+    assistantSays(first.host, coord.id, 'Docs is done.');
+    turnMarks(first.host, coord.id).end();
+    next = restart(first.host.sessions, first.config);
+    await tick();
+    assert.equal(next.sessions.get(coord.id).prompts.length, 0);
+    assert.doesNotMatch(readFileSync(join(dir, 'coordinator.log'), 'utf8'), / raise-cut /);
+    // A chat whose turn took the plugin's message and ended is not read at the next start: only a turn the plugin never
+    // saw end is looked for.
+    const { host, config } = setup({}, mkdtempSync(join(tmpdir(), 'projects-')));
+    await tick();
+    const chat = coordinatorOf(host);
+    await chat.ctx.call('thread_start', { ask: 'Please do this.', title: 'Docs', brief: 'Write docs.' });
+    const t1 = threadOf(host, chat);
+    t1.ctx.emitStatus(t1, 'running');
+    await t1.ctx.call('thread_handback', { status: 'done', summary: 'Docs written.' });
+    t1.ctx.emitStatus(t1, 'idle');
+    await tick();
+    chat.ctx.emitStatus(chat, 'running');
+    chat.ctx.emitStatus(chat, 'idle');
+    const inspect = host.sessionController.inspect;
+    const reads = [];
+    host.sessionController.inspect = (id, ...rest) => { reads.push(id); return inspect(id, ...rest); };
+    await reload(host, config);
+    await tick();
+    assert.deepEqual(reads.filter((id) => id === chat.id), [], 'its turn ended: no read of its log');
+    // againMessage keeps the closing note one note, whatever the message.
+    assert.equal(againMessage('[Reply from "Ops"]\n\nNo.'), '[Reply from "Ops"]\n\nNo.\n\n(DSH closed before you answered this, so the plugin sends it again, once.)');
+    assert.equal(againMessage(againMessage('[Reply from "Ops"]\n\nNo.')), againMessage('[Reply from "Ops"]\n\nNo.'), 'never twice');
+    assert.equal(handbackSummary(againMessage('[Reply from "Ops"]\n\nNo.')), 'No.');
 });
 
 test('a thread waiting on a permission prompt when DSH quits gets the cut-off note at the next start, not another approval note', async () => {
