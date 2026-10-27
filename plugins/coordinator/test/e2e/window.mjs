@@ -136,7 +136,20 @@ const leftovers = (page) => page.evaluate((bundle) => ({
  * counts. Large text (24 px, or 18.66 px bold) needs 3:1, the rest 4.5:1; disabled controls are left out, as WCAG does.
  * Returns the lowest ratio, how many texts were measured, and every one under its bar.
  */
-const contrast = (page) => page.evaluate(() => {
+const contrast = async (page) => page.evaluate(async (png) => {
+    // The window as it shows now: text whose ground no ancestor paints (a layout can paint it on a layer beside the
+    // text, not behind it in the tree) is measured against what the picture shows under it.
+    const picture = await (async () => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const board = document.createElement('canvas');
+        board.width = img.naturalWidth;
+        board.height = img.naturalHeight;
+        const draw = board.getContext('2d', { willReadFrequently: true });
+        draw.drawImage(img, 0, 0);
+        return { draw, width: board.width, height: board.height };
+    })();
     const canvas = document.createElement('canvas');
     canvas.width = 1;
     canvas.height = 1;
@@ -152,15 +165,29 @@ const contrast = (page) => page.evaluate(() => {
     const over = (top, base) => ({ r: top.r * top.a + base.r * (1 - top.a), g: top.g * top.a + base.g * (1 - top.a), b: top.b * top.a + base.b * (1 - top.a), a: 1 });
     const lum = ({ r, g, b }) => [r, g, b].map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; })
         .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i], 0);
-    const page0 = (() => { const b = rgba(getComputedStyle(document.body).backgroundColor); return b.a > 0 ? over(b, { r: 255, g: 255, b: 255, a: 1 }) : { r: 255, g: 255, b: 255, a: 1 }; })();
-    const ground = (el) => {
+    const near = (a, b) => Math.abs(a.r - b.r) + Math.abs(a.g - b.g) + Math.abs(a.b - b.b) < 24;
+    /** What the picture shows at the corners of the text's box (not on its letters): the most common colour there. */
+    const shown = (el, text) => {
+        const r = el.getClientRects()[0];
+        if (!r || r.left < 0 || r.top < 0 || r.right > picture.width || r.bottom > picture.height) return null;
+        const at = (x, y) => {
+            const [red, green, blue] = picture.draw.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+            return { r: red, g: green, b: blue, a: 1 };
+        };
+        const corners = [[r.left + 1, r.top + 1], [r.right - 2, r.top + 1], [r.left + 1, r.bottom - 2], [r.right - 2, r.bottom - 2]].map(([x, y]) => at(x, y));
+        const ground = corners.filter((c) => !near(c, text));
+        const pool = ground.length > 0 ? ground : corners;
+        return pool.map((c) => ({ c, n: pool.filter((d) => near(c, d)).length })).sort((x, y) => y.n - x.n)[0].c;
+    };
+    const ground = (el, text) => {
         const layers = [];
         for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
             const bg = rgba(getComputedStyle(node).backgroundColor);
             if (bg.a > 0) layers.push(bg);
             if (bg.a >= 1) break;
         }
-        let base = layers.length > 0 && layers[layers.length - 1].a >= 1 ? layers.pop() : page0;
+        if (layers.length === 0 || layers[layers.length - 1].a < 1) return shown(el, text);
+        let base = layers.pop();
         while (layers.length > 0) base = over(layers.pop(), base);
         return base;
     };
@@ -172,6 +199,7 @@ const contrast = (page) => page.evaluate(() => {
     const roots = [...document.querySelectorAll('[class*="dshp-"]')];
     const seen = new Set();
     const results = [];
+    let unseen = 0;
     for (const root of roots) {
         for (const el of [root, ...root.querySelectorAll('*')]) {
             if (seen.has(el)) continue;
@@ -183,7 +211,12 @@ const contrast = (page) => page.evaluate(() => {
             const text = rgba(style.color);
             const alpha = text.a * opacity(el);
             if (alpha === 0) continue;
-            const base = ground(el);
+            const base = ground(el, text);
+            // Off the picture with no ground of its own: nothing to measure it against.
+            if (base === null) {
+                unseen += 1;
+                continue;
+            }
             const fg = over({ ...text, a: alpha }, base);
             const [hi, lo] = [lum(fg), lum(base)].sort((x, y) => y - x);
             const ratio = (hi + 0.05) / (lo + 0.05);
@@ -193,8 +226,8 @@ const contrast = (page) => page.evaluate(() => {
         }
     }
     const low = results.filter((r) => r.ratio < r.need).map((r) => `${r.ratio.toFixed(2)} "${r.text}" (${r.cls})`);
-    return { count: results.length, min: results.length ? Math.min(...results.map((r) => r.ratio)) : null, low: [...new Set(low)].slice(0, 12) };
-});
+    return { count: results.length, unseen, min: results.length ? Math.min(...results.map((r) => r.ratio)) : null, low: [...new Set(low)].slice(0, 12) };
+}, (await page.screenshot({ scale: 'css' })).toString('base64'));
 /** No sideways scroll in the window, and nothing of the plugin's past its right edge. */
 const fits = (page) => page.evaluate(() => {
     const width = document.documentElement.clientWidth;
@@ -392,7 +425,7 @@ try {
             await setDark(page, dark);
             await page.waitForTimeout(300);
             const found = await contrast(page);
-            check(`${dark ? 'dark' : 'light'}: every text of the plugin's measured (${found.count}) reads at 4.5:1 or better, large text at 3:1 (lowest ${found.min?.toFixed(2)})`, found.count >= 20 && found.low.length === 0, found.low.join('\n'));
+            check(`${dark ? 'dark' : 'light'}: every text of the plugin's measured (${found.count}${found.unseen ? `; ${found.unseen} off screen` : ''}) reads at 4.5:1 or better, large text at 3:1 (lowest ${found.min?.toFixed(2)})`, found.count >= 20 && found.low.length === 0, found.low.join('\n'));
         }
         await setDark(page, false);
         await page.keyboard.press('Escape');
