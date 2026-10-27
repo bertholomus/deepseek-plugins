@@ -64,9 +64,10 @@ it), or no support.
 **How a click brings the Desktop app's window up.** A window's own `focus()`
 cannot do it: the app check below found it leaves a window behind other
 windows where it is, and the app gives its window no call to show itself
-when its close button hid it or it is minimised. What the app does offer: opened again while it runs, it hands over to the running
-app, which restores, shows and focuses its window — the same as a click on
-its Dock icon or a `dsh://open` link. So on a click:
+when its close button hid it or it is minimised. What the app does offer:
+opened again while it runs, it hands over to the running app, which
+restores, shows and focuses its window — the same as a click on its Dock
+icon or a `dsh://open` link. So on a click:
 
 1. A hidden or minimised window asks the plugin's host half — which the app
    runs as its own child process — to open the app once more with the
@@ -115,7 +116,8 @@ line in its log file and an entry in the recent list. The caller's answer
   without an ask; a second launch hands over to the running app, which
   restores a minimised window, shows it and focuses it.
 - Untested: a banner on the screen itself, and a person's click on one;
-  bringing the window up on Linux (the same code as on macOS, unit-tested;
+  Fleet's page opening on a click (the tests have no Fleet: they check the
+  notification names its page, `fs-fleet`); bringing the window up on Linux (the same code as on macOS, unit-tested;
   no Linux desktop here); the Windows PowerShell toast and `notify-send`
   (their commands are unit-tested, not run); DSH's own `desktopRuntime` (no
   DSH here provides it).
