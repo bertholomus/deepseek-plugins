@@ -1,0 +1,15 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g transform="translate(3.24 3.24) scale(0.82)">
+    <circle cx="18" cy="20" r="11.5" stroke="url(#fc-icon-b)" stroke-width="2.2"/>
+    <path d="M18 20V13.5" stroke="url(#fc-icon-b)" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M13.5 4.5h9" stroke="url(#fc-icon-b)" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M18 4.5v4" stroke="url(#fc-icon-b)" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M27 9.5l1.8 1.8" stroke="url(#fc-icon-b)" stroke-width="2.2" stroke-linecap="round"/>
+    <defs>
+      <linearGradient id="fc-icon-b" x1="6" y1="4" x2="30" y2="32" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#7FA7F5"/>
+        <stop offset="1" stop-color="#3F6FD8"/>
+      </linearGradient>
+    </defs>
+  </g>
+</svg>
