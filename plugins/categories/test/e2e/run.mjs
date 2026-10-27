@@ -953,7 +953,8 @@ try {
         json({ store: readText(storeFile) === storeKept, log: readText(logFile).slice(logKept.length), order: json(await dshOrder()) === json(orderKept) }));
 
     // 8. A store that can't be used (cut off mid-write by hand, say), at DSH's next start: the plugin starts with no
-    //    categories and its log says so, the file stays as it was, and the first change keeps it beside the new store.
+    //    categories, its log and the Categories page say so, the file stays as it was, and the first change (made on
+    //    the page) keeps it beside the new store, which the page names.
     await stopDsh(child);
     writeProfile(names);
     const broken = '{"version": 1, "categories": {"cut-off';
@@ -964,10 +965,47 @@ try {
     const empty = await waitFor(async () => { const r = await webApi(webBad, 'dsh-plugin-categories/list', {}); return r.ok ? r : null; }, 'the list over an unusable store', 30000);
     const badLines = readText(logFile).slice(logBad).split('\n').filter(Boolean).map((line) => line.replace(/^\S+ /, ''));
     check('a store that can\'t be used: the plugin starts with no categories, its log says so, and the file is left as it was',
-        empty.value?.categories?.length === 0 && readText(storeFile) === broken
+        empty.value?.categories?.length === 0 && readText(storeFile) === broken && empty.value?.store?.problem === 'unusable'
         && badLines.includes(`warn the store ${storeFile} is not JSON: the categories start empty, and the file as it was is kept beside it before a change writes a new one`),
         json({ categories: empty.value?.categories?.length, lines: badLines }));
-    const made = await webApi(webBad, 'dsh-plugin-categories/createCategory', { name: 'Fresh' });
+    let made;
+    if (pw) {
+        const link = [...readText(dshLog).matchAll(/dsh web: (\S+)/g)].at(-1)?.[1];
+        win = await openWindow({ signIn: async () => ({ link }) }, pw, { width: 1280, height: 860 });
+        const { page } = win;
+        await dismissNotices(page).catch(() => {});
+        await page.getByRole('button', { name: 'Categories', exact: true }).first().click();
+        const note = page.locator('[data-categories-page] [data-categories-store-note]');
+        await note.waitFor({ state: 'visible', timeout: 20000 });
+        const said = (await note.innerText()).replace(/\s+/g, ' ').trim();
+        check('… and the Categories page says so, as an alert: the file, why, and that it is kept at the first change',
+            (await note.getAttribute('data-categories-store-note')) === 'unusable' && (await note.getAttribute('role')) === 'alert'
+            && /^The categories file couldn't be used: \S*categories\.json is not JSON, so the categories started empty\. The file is left as it is: the first change keeps it beside the new store, to put back by hand\.$/.test(said),
+        json(said));
+        await shot(page, shots, 'page-store-unusable-light');
+        // The first change, made on the page: New category.
+        await page.locator('[data-categories-new]').click();
+        const field = page.locator('[data-categories-name-input]');
+        await field.waitFor({ state: 'visible', timeout: 5000 });
+        await field.fill('Fresh');
+        await field.press('Enter');
+        await page.getByRole('dialog').first().waitFor({ state: 'hidden', timeout: 5000 });
+        await waitFor(async () => ((await note.getAttribute('data-categories-store-note').catch(() => null)) === 'kept' ? true : null), 'the note to name the kept file', 10000).catch(() => {});
+        const keptSaid = (await note.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+        const keptName = readdirSync(categoriesDir).find((name) => name.startsWith('categories.json.unreadable-')) ?? '(none)';
+        check('… a category made on the page keeps the file beside the new store, and the page names it there',
+            new RegExp(`^The categories file couldn't be used: \\S*categories\\.json is not JSON at the start, so the categories started empty\\. It is kept as ${keptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} in the same folder: put it back by hand, with DSH stopped, to bring them back\\.$`).test(keptSaid)
+            && (await page.locator('[data-categories-page] [role="treeitem"][data-categories-node="category"] > .dshc-tree-row .dshc-tree-title').allInnerTexts()).includes('Fresh'),
+        json({ keptSaid, keptName }));
+        await shot(page, shots, 'page-store-kept-light');
+        const ours = win.errors.filter((text) => /categor/i.test(text));
+        check('… no errors from the plugin in that window', ours.length === 0, ours.join('\n'));
+        await win.browser?.close().catch(() => {});
+        win = undefined;
+        made = { ok: true };
+    } else {
+        made = await webApi(webBad, 'dsh-plugin-categories/createCategory', { name: 'Fresh' });
+    }
     const keptFiles = readdirSync(categoriesDir).filter((name) => name.startsWith('categories.json.unreadable-'));
     check('… and the first change keeps it beside the new store (mode 600), then writes the new one',
         made.ok && keptFiles.length === 1 && readText(join(categoriesDir, keptFiles[0])) === broken && (statSync(join(categoriesDir, keptFiles[0])).mode & 0o777) === 0o600

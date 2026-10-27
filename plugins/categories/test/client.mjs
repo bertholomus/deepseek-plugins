@@ -2524,10 +2524,10 @@ test('browser half: a change that couldn\'t be saved reads as a failure, and the
     const draw = mount(react, () => CategoriesPage(props));
     let shown = byHook(draw(), 'data-categories-store-note');
     assert.deepEqual([shown.props.role, shown.props['data-categories-store-note'], textIn(shown)], ['alert', 'unsaved', `Not saved: ${unsaved.text}`]);
-    note = { problem: 'unusable', text: '~/.dsh/categories/categories.json isn\'t JSON, so the categories started empty. The file is left as it is: the first change keeps it beside the new store, to put back by hand.' };
+    note = { problem: 'unusable', text: '~/.dsh/categories/categories.json is not JSON, so the categories started empty. The file is left as it is: the first change keeps it beside the new store, to put back by hand.' };
     shown = byHook(draw(), 'data-categories-store-note');
     assert.equal(textIn(shown), `The categories file couldn't be used: ${note.text}`);
-    note = { problem: 'kept', text: '~/.dsh/categories/categories.json isn\'t JSON at the start, so the categories started empty. It is kept as categories.json.unreadable-2026-10-26T19-30-00Z in the same folder: put it back by hand, with DSH stopped, to bring them back.' };
+    note = { problem: 'kept', text: '~/.dsh/categories/categories.json is not JSON at the start, so the categories started empty. It is kept as categories.json.unreadable-2026-10-26T19-30-00Z in the same folder: put it back by hand, with DSH stopped, to bring them back.' };
     shown = byHook(draw(), 'data-categories-store-note');
     assert.deepEqual([shown.props['data-categories-store-note'], textIn(shown)], ['kept', `The categories file couldn't be used: ${note.text}`]);
     // All well: no note.
