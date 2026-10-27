@@ -570,12 +570,12 @@ async function settleWindow(page) {
 }
 
 /** The stand-in for the wallpaper plugin, on this test page only: its public contract on <body>, a picture behind DSH. */
-async function wallpaperOn(page, flat = '') {
-    await page.evaluate((flat) => {
+async function wallpaperOn(page, flat = '', tint = '0.55') {
+    await page.evaluate(([flat, tint]) => {
         const b = document.body;
         b.classList.add('wp-on');
         b.style.setProperty('--wp-blur', '22px');
-        b.style.setProperty('--wp-tint', '0.55');
+        b.style.setProperty('--wp-tint', tint);
         if (!document.getElementById('test-wall')) {
             const wall = document.createElement('div');
             wall.id = 'test-wall';
@@ -591,7 +591,7 @@ async function wallpaperOn(page, flat = '') {
             document.head.append(style);
         }
         if (flat) document.getElementById('test-wall').style.background = flat;
-    }, flat);
+    }, [flat, tint]);
     await page.waitForTimeout(300);
 }
 
@@ -2374,6 +2374,71 @@ try {
             JSON.stringify({ review: review?.title, location: after?.location }));
     });
 
+    // 14b. A reminder: DSH's banner at the top of this (throwaway) window, once, with Open.
+    await step('a reminder in DSH\'s banner, once, with Open', async () => {
+        const wall = (ms) => {
+            const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+                .formatToParts(ms).map((x) => [x.type, x.value]));
+            return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+        };
+        // It starts in six minutes; its reminder, ten minutes before, is due now.
+        const startMs = Date.now() + 6 * 60_000;
+        const made = (await api('createEvent', { input: { title: 'E2E Reminder', start: wall(startMs), end: wall(startMs + 30 * 60_000), timeZone: ZONE, alarms: [10], conference: 'https://meet.example.com/e2e-reminder' } })).value?.occurrence;
+        await openPage();
+        const banner = page.locator(TOAST, { hasText: 'E2E Reminder in' }).first();
+        const shown = await banner.waitFor({ state: 'visible', timeout: 75000 }).then(() => true, () => false);
+        const words = shown ? ((await banner.textContent()) ?? '') : '';
+        const where = shown ? await banner.evaluate((el) => ({ top: Math.round(el.getBoundingClientRect().top), dsh: !el.classList.contains('dshcal-toast') })) : null;
+        const buttons = shown ? await banner.getByRole('button').allTextContents() : [];
+        await shot(page, 'reminder-light');
+        // Open shows the event on the Calendar page.
+        const open = banner.getByRole('button', { name: 'Open', exact: true });
+        if (shown && (await open.count())) await open.click({ timeout: 5000 }).catch(() => open.evaluate((b) => b.click()));
+        const opened = await page.locator('[data-calendar-details]', { hasText: 'E2E Reminder' }).first().waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
+        await page.keyboard.press('Escape');
+        // Shown once: asked again, by this window after a reload or by any other, it doesn't come back.
+        const again = await api('reminders');
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await settleWindow(page);
+        await page.waitForTimeout(6000);
+        const back = await page.locator(TOAST, { hasText: 'E2E Reminder in' }).count();
+        if (made) await api('deleteEvent', { id: made.id, scope: 'all' });
+        check('a reminder that is due shows as DSH\'s banner at the top of the window: the event, how soon and when, with Open and Join; Open shows the event; it shows once, not again after a reload',
+            Boolean(made) && shown && /E2E Reminder in [3-6] min/.test(words) && where?.dsh === true && where.top < 120 && buttons.includes('Open') && buttons.includes('Join') && opened
+            && again.ok === true && !(again.value?.reminders ?? []).some((r) => r.title === 'E2E Reminder') && back === 0,
+            JSON.stringify({ made: Boolean(made), shown, words, where, buttons, opened, again: again.ok ? (again.value?.reminders ?? []).map((r) => r.title) : again.error, back }));
+    });
+
+    // 14c. A sync that failed: the account says why, and one line under the header names it, with Retry.
+    await step('a sync that failed: its account says why, and a line under the header has Retry', async () => {
+        await openPage();
+        const google = providers.google;
+        // Google's stand-in answers its events reads with 500 until Retry.
+        google.store.failures.push({ times: 1000, method: 'GET', path: /\/events$/, status: 500, reason: 'backendError', message: 'Backend Error', domain: 'global' });
+        await api('syncNow', { accountId: googleAccount?.id });
+        const line = page.locator(`[data-calendar-trouble="${googleAccount?.id}"]`);
+        const shown = await line.waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
+        const words = shown ? ((await line.textContent()) ?? '') : '';
+        const row = (await api('state')).value?.accounts?.find((a) => a.id === googleAccount?.id);
+        await shot(page, 'sync-failed-light');
+        await openAccounts();
+        const rowWords = (await page.locator(`[data-calendar-account="${googleAccount?.id}"] .dshcal-acct-status`).textContent().catch(() => '')) ?? '';
+        await shot(page, 'sync-failed-accounts-light');
+        await closeAccounts();
+        // The server answers again: Retry syncs it, and the line goes.
+        google.store.failures.splice(0);
+        const retry = line.getByRole('button', { name: 'Retry' });
+        if (shown) await retry.click();
+        const gone = await line.waitFor({ state: 'detached', timeout: 20000 }).then(() => true, () => false);
+        const after = (await api('state')).value?.accounts?.find((a) => a.id === googleAccount?.id);
+        check('a failed sync: the account\'s row says why and when it last synced (never "Synced now"), one line under the header names the account with Retry, and Retry syncs it again',
+            Boolean(googleAccount) && shown && words.startsWith(`${googleAccount.name}: `) && /HTTP 500/.test(words) && /Last synced/.test(words)
+            && row?.status === 'error' && Number.isFinite(row?.syncedAt) && row.triedAt > row.syncedAt
+            && /HTTP 500/.test(rowWords) && /Last synced/.test(rowWords) && !/Synced now/.test(rowWords)
+            && gone && after?.status === 'ok' && after.syncedAt > row.syncedAt,
+            JSON.stringify({ shown, words, row, rowWords, gone, after }));
+    });
+
     // 15. The Microsoft account removed, with the page to withdraw DSH's access there; then a sign-in with a code instead.
     await step('Microsoft: the account removed, and a code instead', async () => {
         await openAccounts();
@@ -2664,9 +2729,9 @@ try {
                 root: getComputedStyle(root).backgroundColor, dark: document.body.hasAttribute('data-ds-dark-theme'),
             };
         });
-        // The wallpaper's numbers: the side column at its tint, the view at tint + .2, both blurred by its blur; DSH's
-        // own fallbacks (22px, .55) without them.
-        const follows = (g, tint, blur) => Math.abs(alphaOf(g.side) - tint) < 0.005 && Math.abs(alphaOf(g.background) - Math.min(1, tint + 0.2)) < 0.005
+        // The wallpaper's numbers: the side column (all small text) and the view at tint + .2, both blurred by its blur;
+        // DSH's own fallbacks (22px, .55) without them.
+        const follows = (g, tint, blur) => Math.abs(alphaOf(g.side) - Math.min(1, tint + 0.2)) < 0.005 && Math.abs(alphaOf(g.background) - Math.min(1, tint + 0.2)) < 0.005
             && g.blur === `blur(${blur}) saturate(1.4)` && g.sideBlur === g.blur;
         await wallpaperOn(page);
         const light = await glass();
@@ -2694,7 +2759,7 @@ try {
         await page.locator('[data-calendar-view="week"]').click();
         await setDark(page, false);
         const clear = (c) => c === 'rgba(0, 0, 0, 0)' || c === 'transparent';
-        check('the page keeps no background of its own and its cards are glass, in light and dark: the side column at the wallpaper\'s tint, the view at tint + .2, both blurred by its blur, with the same fallbacks without it',
+        check('the page keeps no background of its own and its cards are glass, in light and dark: the side column and the view at the wallpaper\'s tint + .2, so no small text sits on the plain tint, both blurred by its blur, with the same fallbacks without it',
             clear(light.root) && clear(dark.root) && follows(light, 0.55, '22px') && follows(dark, 0.55, '22px') && follows(other, 0.3, '10px') && follows(none, 0.55, '22px')
             && light.background !== dark.background && dark.dark === true, JSON.stringify({ light, dark, other, none }));
     });
@@ -2707,6 +2772,7 @@ try {
         await page.locator('[data-calendar-view="week"]').click();
         await showDay(before);
         const runs = {};
+        const hard = {};
         for (const dark of [false, true]) {
             await setDark(page, dark);
             for (const view of ['week', 'month', 'agenda']) {
@@ -2717,6 +2783,13 @@ try {
                 runs[name].past = await page.locator('[data-calendar-main] [data-past]').count();
                 await wallpaperOn(page, '#808080');
                 runs[`${name}, grey wall`] = await contrastSweep(page, '[data-calendar-page]');
+                // A low tint (DESIGN.md section 12): .3 over the mid-grey picture, every text held to 4.5:1 too.
+                await wallpaperOn(page, '#808080', '0.3');
+                runs[`${name}, grey wall at tint .3`] = await contrastSweep(page, '[data-calendar-page]');
+                // The hard cases at .3, measured and said (not held: there the tint is the owner's lever): light glass
+                // over a dark picture, dark glass over a light one.
+                await wallpaperOn(page, dark ? '#d8d8d8' : '#262626', '0.3');
+                hard[`${name}, ${dark ? 'light' : 'dark'} wall at tint .3`] = await contrastSweep(page, '[data-calendar-page]');
                 await wallpaperOff(page);
             }
         }
@@ -2727,10 +2800,12 @@ try {
         if (ended) await api('deleteEvent', { id: ended.id, scope: 'all' });
         const short = Object.fromEntries(Object.entries(runs).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.glass} on glass, lowest there ${r.glassMin}:1`]));
         console.log(`# contrast: ${JSON.stringify(short)}`);
+        const hardShort = Object.fromEntries(Object.entries(hard).map(([k, r]) => [k, `${r.count} texts, lowest ${r.min}:1, ${r.failCount} under, ${JSON.stringify(r.fails.slice(0, 4).map((f) => `${f.what} ${f.ratio}`))}`]));
+        console.log(`# contrast, hard cases at tint .3 (measured, not held): ${JSON.stringify(hardShort)}`);
         // Over the grey wall the glass shows it: some text sits on glass all the way down to the wall. Week shows an ended event.
-        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (k.endsWith('grey wall') && (!r.wall || r.glass < 10))
+        const bad = Object.entries(runs).filter(([k, r]) => r.failCount > 0 || r.count < 20 || (/grey wall/.test(k) && (!r.wall || r.glass < 10))
             || (/week$/.test(k) && !(r.past > 0)));
-        check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, events that have ended too, without a wallpaper and over a mid-grey one at the default tint',
+        check('every piece of the page\'s text reaches 4.5:1 (3:1 when large) over its grounds, in light and dark, in Week, Month and Agenda, events that have ended too, the side column too, without a wallpaper and over a mid-grey one at the default tint and at tint .3',
             Boolean(ended) && bad.length === 0, JSON.stringify(Object.fromEntries(bad)));
     });
 

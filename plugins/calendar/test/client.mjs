@@ -1000,8 +1000,11 @@ test('the look is DSH\'s (DESIGN.md): its tokens deepened for glass, its ring, i
         const value = new RegExp(`${name}:([^;]+);`).exec(tokens)?.[1] ?? '';
         assert.match(value, /^(var\(--dsw-|color-mix\(in srgb,var\(--dsw-)/, `${name} is ${value}`);
     }
-    // Secondary text deepened toward DSH's label colour, as section 3 does.
-    assert.ok(tokens.includes('--cal-meta:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,var(--dsw-alias-label-primary))'));
+    // Secondary text deepened toward DSH's label colour, as section 3 does, and more on thinner glass (a tint under .55).
+    assert.ok(tokens.includes('--cal-meta:color-mix(in srgb,var(--dsw-alias-label-secondary) min(55%,calc(var(--wp-tint,.55) * 100%)),var(--dsw-alias-label-primary))'));
+    assert.ok(tokens.includes('--cal-faint:color-mix(in srgb,var(--dsw-alias-label-secondary) min(65%,calc(var(--wp-tint,.55) * 118.2%)),var(--dsw-alias-label-primary))'));
+    // The side column, all small text, sits at tint + .2 as the view does, never on the plain tint.
+    assert.ok(css.includes('.dshcal-side.dshcal-glass{background:var(--cal-conv)}'));
     // No token DSH doesn't define, and Wallpaper read only by its public values.
     assert.ok(!/--dsh-font-mono|--dsh-color-bg-hover|--wp-(?!blur|tint)[\w-]+/.test(css));
     assert.ok(css.includes('var(--ds-font-family-code,'));

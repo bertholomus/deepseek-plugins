@@ -332,6 +332,13 @@ export class CalendarManager {
      * for the user; `problem`, its fixed category, is all agents are told.
      */
     accountView(account) {
+        // A calendar of it that failed (its server couldn't be reached, or refused it) is the account's trouble too:
+        // its row says so, with the calendar's name when the account has more than one.
+        const own = account.error;
+        const mine = Object.values(this.store.calendars).filter((c) => c.accountId === account.id);
+        const failing = own ? undefined : mine.find((c) => c.error);
+        const error = own ?? failing?.error;
+        const words = error ? (failing && mine.length > 1 ? `${this.calendarName(failing)}: ${error.message}` : error.message) : '';
         return {
             id: account.id,
             kind: account.kind,
@@ -342,9 +349,11 @@ export class CalendarManager {
             ...(account.url && account.kind !== 'ics' ? { url: safeAddress(account.url) } : {}),
             ...(account.host ? { host: account.host } : {}),
             ...(account.preset ? { preset: account.preset } : {}),
-            status: this.syncing.has(account.id) ? 'syncing' : account.error?.code === 'auth' ? 'signin' : account.error ? 'error' : 'ok',
-            ...(account.error ? { error: account.error.message, problem: problemOf(account.error.code) } : {}),
+            status: this.syncing.has(account.id) ? 'syncing' : own?.code === 'auth' ? 'signin' : error ? 'error' : 'ok',
+            ...(error ? { error: words, problem: problemOf(error.code) } : {}),
+            // When every calendar of it last synced (a failed try leaves it), and when it last tried.
             ...(account.syncedAt ? { syncedAt: account.syncedAt } : {}),
+            ...(account.triedAt ? { triedAt: account.triedAt } : {}),
         };
     }
 
@@ -467,6 +476,7 @@ export class CalendarManager {
             await this.refreshCalendars(id);
             const [calendar] = Object.values(this.store.calendars).filter((c) => c.accountId === id);
             await this.syncCalendar(calendar.id, { throwErrors: true });
+            account.syncedAt = account.triedAt = this.now();
             if (!input.name && calendar.name) account.name = calendar.name;
         } catch (error) {
             this.forgetAccount(id);
@@ -828,8 +838,12 @@ export class CalendarManager {
                 if (!ok) failed = true;
                 if (account.error?.code === 'auth') break;
             }
-            if (!failed) delete account.error;
-            account.syncedAt = this.now();
+            // Synced means every calendar of it synced: a try with one failing keeps the last good time.
+            account.triedAt = this.now();
+            if (!failed) {
+                delete account.error;
+                account.syncedAt = account.triedAt;
+            }
             this.saveState();
         } finally {
             this.syncing.delete(accountId);
@@ -1051,12 +1065,22 @@ export class CalendarManager {
         return out;
     }
 
-    /** The occurrences in [from, to) as views. */
+    /**
+     * The names of the calendars hidden on the page, which a list that names
+     * no calendars leaves out (busy and free time count them all the same).
+     */
+    hiddenNames(calendars) {
+        if (calendars?.length) return [];
+        return Object.values(this.store.calendars).filter((c) => c.hidden === true).map((c) => this.calendarName(c));
+    }
+
+    /** The occurrences in [from, to) as views; `hidden`: the calendars left out, when it named none. */
     events({ from, to, calendars, limit = 3000 }) {
         if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new CalendarError('Give a start and an end, the end after the start.');
         if (to - from > 3 * 366 * DAY) throw new CalendarError('Ask for at most three years at a time.');
         const found = this.find({ from, to, calendars });
-        return { occurrences: found.slice(0, limit).map((f) => this.view(f)), more: found.length > limit };
+        const hidden = this.hiddenNames(calendars);
+        return { occurrences: found.slice(0, limit).map((f) => this.view(f)), more: found.length > limit, ...(hidden.length ? { hidden } : {}) };
     }
 
     /**
@@ -1079,7 +1103,8 @@ export class CalendarManager {
         const upcoming = hits.filter(({ o }) => o.end >= now);
         const past = hits.filter(({ o }) => o.end < now).reverse();
         const ordered = [...upcoming, ...past];
-        return { occurrences: ordered.slice(0, limit).map((f) => this.view(f)), more: ordered.length > limit };
+        const hidden = this.hiddenNames(calendars);
+        return { occurrences: ordered.slice(0, limit).map((f) => this.view(f)), more: ordered.length > limit, ...(hidden.length ? { hidden } : {}) };
     }
 
     /** One occurrence by id. */
@@ -1105,10 +1130,12 @@ export class CalendarManager {
     /**
      * Busy times in [from, to): merged spans when the user is taken (events
      * that show as busy, not declined, not cancelled), and the free gaps.
+     * Every calendar counts, or the ones given: one hidden on the page to
+     * calm it is still time the user is taken.
      */
     busy({ from, to, calendars }) {
         const spans = [];
-        for (const f of this.find({ from, to, calendars })) {
+        for (const f of this.find({ from, to, calendars, all: true })) {
             const { o, calendar } = f;
             if (o.record.busy === false || o.record.status === 'cancelled') continue;
             const self = this.selfOf(o.record, this.store.accounts[calendar.accountId]);

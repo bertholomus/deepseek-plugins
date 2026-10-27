@@ -92,13 +92,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const RING = 'var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))';
         /** One of DSH's colours deepened toward its label colour (DESIGN.md sections 3 and 4). */
         const DEEP = (token, share) => `color-mix(in srgb,var(${token}) ${share}%,var(--dsw-alias-label-primary))`;
+        /**
+         * Secondary text deepened by the tint: at the default tint (.55) and above its share is as given; below, it falls
+         * with the tint (at .3 about half of it), so small secondary text keeps 4.5:1 on thinner glass (DESIGN.md section 3).
+         */
+        const DEEP_BY_TINT = (token, share) => `color-mix(in srgb,var(${token}) min(${share}%,calc(var(--wp-tint,.55) * ${Math.round((share / 0.55) * 10) / 10}%)),var(--dsw-alias-label-primary))`;
         const GLASS = 'background:var(--cal-glass);-webkit-backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%);backdrop-filter:blur(var(--wp-blur,22px)) saturate(140%)';
         const CSS = [
             // Tokens: DSH's own (DESIGN.md section 4), so light and dark follow DSH. Secondary text, the accent and the state
             // colours are deepened toward DSH's label colour, so small text holds 4.5:1 on glass (section 3); the glass
             // grounds are the wallpaper plugin's recipe, dark by default and light where DSH is light.
             `:is(${ROOTS}){--cal-text:var(--dsw-alias-label-primary);--cal-strong:var(--dsw-alias-label-primary);`
-                + `--cal-soft:${DEEP('--dsw-alias-label-secondary', 45)};--cal-meta:${DEEP('--dsw-alias-label-secondary', 55)};--cal-faint:${DEEP('--dsw-alias-label-secondary', 65)};`
+                + `--cal-soft:${DEEP_BY_TINT('--dsw-alias-label-secondary', 45)};--cal-meta:${DEEP_BY_TINT('--dsw-alias-label-secondary', 55)};--cal-faint:${DEEP_BY_TINT('--dsw-alias-label-secondary', 65)};`
                 + `--cal-accent:${DEEP('--dsw-alias-state-business-primary', 85)};--cal-link:${DEEP('--dsw-alias-link', 50)};--cal-on-accent:var(--dsw-alias-label-primary-inverted);`
                 + '--cal-accent-soft:var(--dsw-alias-state-business-tertiary);'
                 + `--cal-danger:${DEEP('--dsw-alias-state-error-primary', 75)};--cal-warn:${DEEP('--dsw-alias-state-warn-label', 50)};--cal-ok:${DEEP('--dsw-alias-state-success-primary', 50)};`
@@ -122,6 +127,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-main{position:relative;flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}',
             // The view itself: the wallpaper's tint + .2, as the open conversation has, so its small text stays readable.
             '.dshcal-main.dshcal-glass{background:var(--cal-conv)}',
+            // The side column is all small text (the small month, the calendars, Accounts): it sits at tint + .2 too, never
+            // on the plain tint, where small text falls under 4.5:1 at a low tint (DESIGN.md section 3).
+            '.dshcal-side.dshcal-glass{background:var(--cal-conv)}',
             // The page takes the focus of a click on its empty parts (its keys work from there); it shows no ring for it.
             '.dshcal-root:focus,.dshcal-root[tabindex]:focus-visible{outline:none}',
             '.dshcal-root[data-calendar-dragging],.dshcal-root[data-calendar-dragging] *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}',
@@ -209,10 +217,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-mini-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px}',
             '.dshcal-mini-grid[data-week-numbers]{grid-template-columns:20px repeat(7,1fr)}',
             '.dshcal-mini-wk{height:28px;display:flex;align-items:center;justify-content:center;font-size:var(--dsw-font-xxxs-11-font-size,11px);color:var(--cal-meta);font-variant-numeric:tabular-nums}',
-            '.dshcal-mini-wd{height:20px;display:flex;align-items:center;justify-content:center;font-size:var(--dsw-font-xxxs-11-font-size,11px);font-weight:600;color:var(--cal-faint);text-transform:uppercase}',
+            '.dshcal-mini-wd{height:20px;display:flex;align-items:center;justify-content:center;font-size:var(--dsw-font-xxxs-11-font-size,11px);font-weight:600;color:var(--cal-meta);text-transform:uppercase}',
             '.dshcal-mini-day{height:28px;display:flex;align-items:center;justify-content:center;border:0;border-radius:var(--dsw-radius-sm);background:none;color:var(--cal-text);font:inherit;font-size:var(--dsw-font-xxs-12-font-size,12px);font-variant-numeric:tabular-nums;cursor:pointer}',
             '.dshcal-mini-day:hover{background:var(--cal-hover)}',
-            '.dshcal-mini-day[data-out]{color:var(--cal-faint)}',
+            '.dshcal-mini-day[data-out]{color:var(--cal-meta)}',
             '.dshcal-mini-day[data-in-range]{background:var(--cal-accent-soft)}',
             '.dshcal-mini-day[data-today]{color:var(--cal-on-accent);background:var(--cal-accent);font-weight:600}',
             '.dshcal-cals{display:flex;flex-direction:column;gap:12px;min-height:0}',
@@ -492,7 +500,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshcal-notes{display:flex;flex-direction:column;gap:6px;padding:8px 12px 0}',
             '.dshcal-notice{display:flex;align-items:flex-start;gap:8px;padding:7px 6px 7px 10px;border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--cal-accent) 10%,transparent);font-size:var(--dsw-font-xxs-12-font-size,12px);line-height:1.45;color:var(--cal-text)}',
             '.dshcal-notice>svg{flex:none;margin-top:2px;color:var(--cal-meta)}',
-            '.dshcal-notice>span{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-notice>span,.dshcal-notice-body{flex:1;min-width:0;overflow-wrap:anywhere}',
+            '.dshcal-notice-list{margin:3px 0 0;padding:0 0 0 16px}',
+            '.dshcal-notice-list>li+li{margin-top:2px}',
+            // Switched off, by the owner's choice: secondary text, no alarm.
+            '.dshcal-off{color:var(--cal-soft)}',
+            '.dshcal-off>svg{flex:none;color:var(--cal-meta)}',
             '.dshcal-notice[data-tone=warn]{background:color-mix(in srgb,var(--cal-warn) 14%,transparent)}',
             '.dshcal-notice[data-tone=warn]>svg{color:var(--cal-warn)}',
             '.dshcal-pane-note{display:flex;align-items:center;gap:6px;margin:0 0 10px;padding:7px 9px;border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--cal-warn) 14%,transparent);font-size:var(--dsw-font-xxs-12-font-size,12px)}',
@@ -604,6 +617,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
         const pad = (n, width = 2) => String(n).padStart(width, '0');
         const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+        /** Names in a sentence: "A", "A and B", "A, B and C". */
+        const andList = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+        /** A message as a sentence: its stop added when it has none. */
+        const stopped = (text) => (/[.!?…]$/.test(text) ? text : `${text}.`);
         const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
         /** A DSH icon by name, or nothing where this DSH has none. */
         const icon = (name, props = {}) => (ui && ui[name] ? h(ui[name], { size: 14, 'aria-hidden': true, ...props }) : null);
@@ -1339,6 +1356,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             let state;
             let stateJson = '';
             let stateError = '';
+            /** The code of the last failed state() ('calendar/off' while the plugin is switched off). */
+            let stateCode = '';
             let loading;
             /** When state() was last read, for the read every minute whatever version() says. */
             let stateAt = 0;
@@ -1416,11 +1435,21 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         state = result.value;
                         stateJson = json;
                         stateError = '';
+                        stateCode = '';
                         if (moved) for (const entry of spans.values()) entry.stale = true;
                     } else {
                         const text = errorText(result.error);
-                        if (text === stateError) return;
+                        const code = String(result.error?.code ?? '');
+                        // Switched off: what was shown goes, and the page says it's off; it comes back on its own.
+                        const off = code === 'calendar/off' && state !== undefined;
+                        if (off) {
+                            state = undefined;
+                            stateJson = '';
+                            spans.clear();
+                        }
+                        if (text === stateError && code === stateCode && !off) return;
                         stateError = text;
+                        stateCode = code;
                     }
                     emit();
                 })();
@@ -1459,6 +1488,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 /** state() as last read, or undefined before the first answer. */
                 state: () => state,
                 stateError: () => stateError,
+                /** Whether the plugin is switched off (enabled: false in its entry): the owner's choice, not a failure. */
+                stateOff: () => stateCode === 'calendar/off',
                 /** The user's zone: the plugin's (its setting, else the computer's), else this browser's. */
                 zone: () => (state && isZone(state.zone) ? state.zone : browserZone()),
                 calendar: (id) => (state?.calendars ?? EMPTY).find((c) => c.id === id),
@@ -4920,7 +4951,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const back = h(Btn, { kind: 'ghost', size: 'sm', className: 'dshcal-back', onClick: () => go({ page: toList ? 'list' : 'add' }) },
                 icon('IconChevronLeftOutlineRegular', { size: 12 }), toList ? 'Accounts' : 'Add account');
             if (!state) {
-                body = h('div', { className: 'dshcal-state' }, store.stateError() ? h('span', { className: 'dshcal-error' }, store.stateError()) : h(Spinner));
+                body = h('div', { className: 'dshcal-state' }, store.stateError() ? h('span', { className: store.stateOff() ? 'dshcal-off' : 'dshcal-error' }, store.stateError()) : h(Spinner));
             } else if (page.page === 'list') {
                 body = h('div', { className: 'dshcal-form' },
                     removed ? h('div', { key: removed.key, className: 'dshcal-notice', role: 'status', 'data-calendar-removed': '' },
@@ -4943,7 +4974,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                             statusLine = h(React.Fragment, null, icon('IconWarningOutlineRegular', { size: 12 }), h('span', null, a.error || 'Needs signing in again.'),
                                 a.kind === 'caldav' ? h(Btn, { size: 'sm', onClick: () => go({ page: 'password', account: a }) }, 'New password')
                                     : h(Btn, { size: 'sm', kind: 'primary', onClick: () => signInPage(a), 'data-calendar-resign': a.id }, 'Sign in again'));
-                        } else if (status === 'error') statusLine = h(React.Fragment, null, icon('IconWarningOutlineRegular', { size: 12 }), h('span', null, a.error || 'The last sync failed.'));
+                        } else if (status === 'error') {
+                            // Why, from the account or the calendar of it that failed, and how old what's shown is.
+                            const why = a.error || 'The last sync failed.';
+                            statusLine = h(React.Fragment, null, icon('IconWarningOutlineRegular', { size: 12 }),
+                                h('span', null, /[.!?…]$/.test(why) ? why : `${why}.`, a.syncedAt ? ` Last synced ${relativeText(a.syncedAt)}.` : ''));
+                        }
                         else statusLine = a.kind === 'local' ? null : a.syncedAt ? `Synced ${relativeText(a.syncedAt)}` : 'Not synced yet';
                         const kindName = a.kind === 'caldav' && a.preset ? (PROVIDERS.find((p) => p.id === a.preset)?.name ?? a.kindName) : a.kindName;
                         return h('div', { key: a.id, className: 'dshcal-acct', 'data-calendar-account': a.id, 'data-status': status },
@@ -5345,7 +5381,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const occurrences = React.useMemo(() => (pending ? read.map((o) => (o.id === pending.id ? placedAt(o, pending.t) : o)) : read), [read, pending]);
             const loading = state !== undefined && entry !== null && (entry.loading || !entry.data);
             // A read again that failed, over what was read before: the events', or state's.
-            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateError()) : '';
+            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateOff() ? '' : store.stateError()) : '';
             const dataNow = entry?.data;
             const dataRef = React.useRef(dataNow);
             dataRef.current = dataNow;
@@ -5463,9 +5499,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     : 'Saved.'}${told ? ` ${told}` : ''}`);
                 if (isDay(day) && !inView(day)) go(day);
             };
-            const syncNow = async () => {
+            const syncNow = async (accountId = '') => {
                 setSyncBusy(true);
-                const result = await store.act('syncNow', { accountId: '' });
+                const result = await store.act('syncNow', { accountId });
                 if (!alive.current) return;
                 setSyncBusy(false);
                 if (!result.ok) store.toast(errorText(result.error), 'error');
@@ -5595,7 +5631,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const labels = { ...TEXT.views, week: compact ? '3 days' : TEXT.views.week };
             const drags = { movable, onDrop: dropTo, onDragging: setDragging };
             let body;
-            if (!state) {
+            if (!state && store.stateOff()) {
+                // Switched off is the owner's choice: a calm note saying where, no error and no Retry (it comes back on its own).
+                body = h('div', { className: 'dshcal-state dshcal-off', 'data-calendar-state': 'off', role: 'status' }, icon('IconInfoOutlineRegular'), h('span', null, store.stateError()));
+            } else if (!state) {
                 body = h('div', { className: 'dshcal-state', 'data-calendar-state': store.stateError() ? 'error' : 'loading' },
                     store.stateError()
                         ? h(React.Fragment, null, h('span', { className: 'dshcal-error' }, store.stateError()), h(Btn, { onClick: () => void store.refresh() }, TEXT.retry))
@@ -5744,11 +5783,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     icon('IconWarningOutlineRegular'),
                     h('span', null, `Couldn't refresh: ${stale}`),
                     h(Btn, { size: 'sm', kind: 'ghost', onClick: () => void store.refresh() }, TEXT.retry)) : null,
+                // An account that couldn't sync: which, why and how old what's shown is, under the header, with Retry
+                // (Accounts, for one that needs signing in again).
+                attention.length && !stale ? h('div', { className: 'dshcal-stale', role: 'status', 'data-calendar-trouble': attention.length === 1 ? attention[0].id : '' },
+                    icon('IconWarningOutlineRegular'),
+                    h('span', null, attention.length === 1
+                        ? `${attention[0].name}: ${stopped(attention[0].error || (attention[0].status === 'signin' ? 'it needs signing in again' : 'the last sync failed'))}${attention[0].syncedAt ? ` Last synced ${relativeText(attention[0].syncedAt)}.` : ''}`
+                        : `${plural(attention.length, 'account')} couldn't sync: ${andList(attention.map((a) => a.name))}.`),
+                    attention.some((a) => a.status === 'signin')
+                        ? h(Btn, { size: 'sm', kind: 'ghost', onClick: () => setDialog({ kind: 'accounts' }), 'data-calendar-trouble-accounts': '' }, 'Accounts')
+                        : h(Btn, { size: 'sm', kind: 'ghost', disabled: syncBusy, onClick: () => void syncNow(attention.length === 1 ? attention[0].id : ''), 'data-calendar-trouble-retry': '' }, TEXT.retry)) : null,
                 issues.length || kept.length || wrongSettings.length ? h('div', { className: 'dshcal-notes' },
-                    // A setting in the profile that is wrong: what it must be, what the plugin does meanwhile, and where to change it.
-                    wrongSettings.map((p) => h('div', { key: `setting:${p.key}`, className: 'dshcal-notice', role: 'status', 'data-tone': 'warn', 'data-calendar-setting-problem': p.key },
+                    // Settings in the profile that are wrong, in one box: where to change them, then each one, what it must be
+                    // and what the plugin does meanwhile.
+                    wrongSettings.length ? h('div', { key: 'settings', className: 'dshcal-notice', role: 'status', 'data-tone': 'warn', 'data-calendar-settings-problem': String(wrongSettings.length) },
                         icon('IconWarningOutlineRegular'),
-                        h('span', null, `A setting of the calendar plugin is wrong: ${p.text} Change it in the calendar's entry (id: calendar) in this profile's cordis.patch.yml.`))),
+                        h('div', { className: 'dshcal-notice-body' },
+                            h('span', null, `${wrongSettings.length === 1 ? 'A setting of the calendar plugin is wrong' : `${wrongSettings.length} settings of the calendar plugin are wrong`}; change ${wrongSettings.length === 1 ? 'it' : 'them'} in its entry (id: calendar) in this profile's cordis.patch.yml:`),
+                            h('ul', { className: 'dshcal-notice-list' }, wrongSettings.map((p) => h('li', { key: p.key, 'data-calendar-setting-problem': p.key }, p.text))))) : null,
                     kept.map((n) => h('div', { key: `kept:${n.id}`, className: 'dshcal-notice', role: 'alert', 'data-tone': 'warn', 'data-calendar-kept-notice': '' },
                         icon('IconWarningOutlineRegular'),
                         h('span', null, n.text),
@@ -5845,7 +5897,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const last = addDays(today, PANE_DAYS - 1);
             const entry = state && visible ? store.events(startOfDay(today, zone), startOfDay(addDays(last, 1), zone)) : null;
             const occurrences = entry?.data?.occurrences ?? EMPTY;
-            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateError()) : '';
+            const stale = state ? (entry?.data && entry.error ? entry.error : store.stateOff() ? '' : store.stateError()) : '';
             const saved = (o, words) => {
                 const told = isObject(o) ? contactText(o) : '';
                 if (!placed(o)) {
@@ -5906,7 +5958,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             };
 
             let body;
-            if (!state) {
+            if (!state && store.stateOff()) {
+                body = h('div', { className: 'dshcal-pane-empty dshcal-off', 'data-calendar-state': 'off', role: 'status' }, store.stateError());
+            } else if (!state) {
                 body = store.stateError()
                     ? h('div', { className: 'dshcal-pane-empty' }, h('div', { className: 'dshcal-error' }, store.stateError()), h(Btn, { size: 'sm', style: { marginTop: 8 }, onClick: () => void store.refresh() }, TEXT.retry))
                     : h('div', { className: 'dshcal-pane-empty', role: 'status' }, h(Spinner), ' Loading…');
