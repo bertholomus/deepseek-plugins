@@ -99,10 +99,6 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="danger"]{color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 75%,var(--dsw-alias-label-primary))}`,
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="success"]{color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 50%,var(--dsw-alias-label-primary))}`,
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 65%,var(--dsw-alias-label-primary))}`,
-        // Quiet and neutral words ("idle", "stopped") would be drawn in DSH's glyph colour, which is for glyphs, not small text.
-        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:var(--${P}-text-2)}`,
-        // The settings form sits on DSH's Plugins page, outside the page's colours: the same secondary text, said here.
-        `.${P}-settings .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}`,
         // DSH tints a tag's ground with its tone over nothing (see-through), so over a picture at a low tint its words
         // lose contrast. On the suite's pages the same tint lies over the card's own colour instead: a solid chip.
         `:is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-chip:rgb(14,18,17)}body:not([data-ds-dark-theme]) :is(.${P}-page,.${P}-pane,.${P}-pop){--${P}-chip:rgb(250,250,246)}`,
@@ -110,6 +106,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="danger"]{background-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,var(--${P}-chip))}`,
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="success"]{background-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 10%,var(--${P}-chip))}`,
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{background-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--${P}-chip))}`,
+        // Quiet and neutral words ("idle", "stopped") would be drawn in DSH's glyph colour, which is for glyphs, not small text.
+        `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:var(--${P}-text-2)}`,
+        // The settings form sits on DSH's Plugins page, outside the page's colours: the same secondary text, said here.
+        `.${P}-settings .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}`,
         `.${P}-choice{display:inline-flex;flex-direction:column;align-items:inherit;gap:4px;min-width:0}`,
         `.${P}-choice-hint{font:var(--dsw-font-xxs-12);color:var(--${P}-text-2)}`,
         `.${P}-choice[aria-busy="true"]{cursor:progress}`,

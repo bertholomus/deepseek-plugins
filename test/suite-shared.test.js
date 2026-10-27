@@ -546,6 +546,42 @@ test('kit: state tags write their words at 4.5:1 or more on DSH\'s tag fill, in 
     assert.ok(contrast(rgb(LABELS.light.tertiary), rgb(DSH.light.ground)) < 4.5, 'DSH\'s glyph colour falls short for words in light');
 });
 
+test('kit: a value saved in the profile that equals its default is no change: no "Changed" and nothing to reset, in any kind of row', () => {
+    const kit = kitWith();
+    const fields = [
+        { name: 'same', kind: 'number', title: 'Same', hint: '', default: 2, min: 1, max: 10 },
+        { name: 'sameList', kind: 'numbers', title: 'Same list', hint: '', default: [120, 600], min: 0, max: 86400 },
+        { name: 'sameSwitch', kind: 'switch', title: 'Same switch', hint: '', default: true },
+        { name: 'sameChoice', kind: 'choice', title: 'Same choice', hint: '', default: 'a', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'Ask first' }] },
+        { name: 'fine', kind: 'number', title: 'Fine', hint: '', default: 2, min: 1, max: 10 },
+        { name: 'other', kind: 'switch', title: 'Other switch', hint: '', default: true },
+        { name: 'unset', kind: 'number', title: 'Unset', hint: '', default: 2, min: 1, max: 10 },
+    ];
+    const snap = {
+        writable: true, saving: false,
+        same: { text: '2', overridden: true, invalid: false },
+        sameList: { text: '120, 600', overridden: true, invalid: false },
+        sameSwitch: { text: 'on', overridden: true, invalid: false },
+        sameChoice: { text: 'a', overridden: true, invalid: false },
+        fine: { text: '3', overridden: true, invalid: false },
+        other: { text: 'off', overridden: true, invalid: false },
+        unset: { text: '', overridden: false, invalid: false },
+    };
+    const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    const body = kit.SettingsBody({ form, name: 'X', fields });
+    const row = (name) => elementsOf(body).find((e) => e.props?.['data-suite-setting'] === name);
+    const field = (name) => elementsOf(row(name)).find((e) => e.type === 'SettingsValueField');
+    for (const name of ['same', 'sameList', 'unset']) assert.equal(field(name).props.overridden, false, name);
+    for (const name of ['sameSwitch', 'sameChoice']) {
+        assert.equal(elementsOf(row(name)).find((e) => e.props?.className === 'dshx-set-badges'), undefined, name);
+        assert.doesNotMatch(textIn(row(name)), /Changed|Use the default/, name);
+    }
+    // One that differs is still a change, in DSH's field and in the kit's own rows alike.
+    assert.equal(field('fine').props.overridden, true);
+    assert.match(textIn(row('other')), /Changed/);
+    assert.match(textIn(row('other')), /Use the default/);
+});
+
 test('kit: a state tag on a suite page stands on a solid chip of its tone, so its words hold 4.5:1 over any picture at any tint', () => {
     const kit = kitWith();
     const TOKEN = { warning: 'warn', danger: 'error', success: 'success', info: 'business' };
@@ -776,11 +812,6 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
         { name: 'fine', kind: 'number', title: 'Fine', hint: '', default: 2, min: 1, max: 10 },
         { name: 'quoted', kind: 'number', title: 'Quoted', hint: '', default: 2, min: 1, max: 10 },
-        { name: 'same', kind: 'number', title: 'Same', hint: '', default: 2, min: 1, max: 10 },
-        { name: 'sameList', kind: 'numbers', title: 'Same list', hint: '', default: [120, 600], min: 0, max: 86400 },
-        { name: 'sameSwitch', kind: 'switch', title: 'Same switch', hint: '', default: true },
-        { name: 'sameChoice', kind: 'choice', title: 'Same choice', hint: '', default: 'a', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'Ask first' }] },
-        { name: 'other', kind: 'switch', title: 'Other switch', hint: '', default: true },
     ];
     // What DSH's form shows for values typed into the profile: each stored value as text, wrong ones included.
     assert.equal(kit.fieldSpec(fields[0]).format(2), '2');
@@ -807,11 +838,6 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
         resume: { text: 'yes', overridden: true, invalid: false },
         fine: { text: '3', overridden: true, invalid: false },
         quoted: { text: '"2"', overridden: true, invalid: false },
-        same: { text: '2', overridden: true, invalid: false },
-        sameList: { text: '120, 600', overridden: true, invalid: false },
-        sameSwitch: { text: 'on', overridden: true, invalid: false },
-        sameChoice: { text: 'a', overridden: true, invalid: false },
-        other: { text: 'off', overridden: true, invalid: false },
     };
     const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
     const body = kit.SettingsBody({ form, name: 'X', fields });
@@ -848,15 +874,6 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.match(resetRule, /font-size:12px;line-height:1\.5;color:var\(--dsw-alias-label-secondary\)/, 'as DSH draws its own');
     assert.doesNotMatch(resetRule, /underline|--dsw-alias-link/);
     assert.ok(kit.css.includes('.dshx-settings .dshx-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}'), '"Changed" in the suite\'s secondary text, as on its pages');
-    // A value saved in the profile that equals its default is no change: no "Changed" and nothing to reset, in any kind of row.
-    for (const name of ['same', 'sameList']) assert.equal(field(name).props.overridden, false, name);
-    for (const name of ['sameSwitch', 'sameChoice']) {
-        assert.equal(elementsOf(row(name)).find((e) => e.props?.className === 'dshx-set-badges'), undefined, name);
-        assert.doesNotMatch(textIn(row(name)), /Changed|Use the default/, name);
-    }
-    // One that differs is still a change.
-    assert.equal(field('fine').props.overridden, true);
-    assert.match(textIn(row('other')), /Changed/);
 });
 
 test('kit: a choice with no valid saved value can still be reached with Tab; once fixed, DSH\'s selection takes the focus again', () => {
