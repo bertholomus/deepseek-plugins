@@ -52,7 +52,7 @@ const APPLY_CMD = /\b(terraform|tofu)\s+(\S+\s+)*apply\b|\bpulumi\s+up\b|\bkubec
 const BACKGROUND_CMD = /(?:^|[;&|(]\s*)(?:nohup|setsid)\s|(?<![&>|])&(?![&>])\s*(?:$|;|\)|echo\b|disown\b)|\bscreen\s+-\w*d\w*m|\btmux\s+new(?:-session)?\b[^;&|]*\s-d\b/;
 const JOB_CMD = /\bargo\s+submit\b|\bgh\s+workflow\s+run\b|\bgh\s+run\s+rerun\b|\bkubectl\s+create\s+job\b|\bsbatch\b|\bqsub\b|\bbsub\b|\bairflow\s+dags\s+trigger\b|\baws\s+batch\s+submit-job\b|\baws\s+glue\s+start-job-run\b|\baws\s+stepfunctions\s+start-execution\b|\bdatabricks\s+(jobs\s+run-now|runs\s+submit)\b|\bgcloud\s+(dataflow\s+jobs\s+run|dataproc\s+jobs\s+submit|batch\s+jobs\s+submit|run\s+jobs\s+execute)\b|\bprefect\s+deployment\s+run\b|\bdagster\s+job\s+launch\b|\bnomad\s+job\s+run\b/i;
 const HASH_CMD = /\b(sha\d+sum|shasum|md5sum|b2sum|cksum|gpg\s+--verify|cosign\s+verify|minisign\s+-V)\b/i;
-const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|revert|stash\s+pop|add|tag)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate(?!\s+(?:status|diff|resolve\s+--help)\b)|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
+const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|revert|stash\s+pop|add|tag|pull|am)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate(?!\s+(?:status|diff|resolve\s+--help)\b)|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
 /** A change to code that tests must run after (as against a commit, a branch, docs or notes). */
 const CODE_CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|patch|git\s+(apply|restore|cherry-pick|revert|stash\s+pop|checkout\s+(\S+\s+)?--\s)|apply_patch)(\s|$)/i;
 /** Files and code that hold a route or a handler: `routes/`, `api/`, `*_controller.rb`, `@router.get(`, `app.post(`, `path('…'`. */
@@ -826,6 +826,10 @@ const PASS_NAME = [
     /::([\w.[\]-]+)[ \t]+PASSED\b/,
     /^[ \t]*--- PASS: (\S+)/,
     /^[ \t]*(\w+) \([\w.]+\) \.\.\. ok[ \t]*$/,
+    // jest's and vitest's file lines ("PASS  src/__tests__/cart.test.ts", "✓ src/cart.test.ts (4 tests)"), go's packages, cargo's tests.
+    /^[ \t]*PASS[ \t]+(\S+\.[a-z]{2,4})\b/,
+    /^ok[ \t]+(\S+)[ \t]+(?:\d[\d.]*s|\(cached\))/,
+    /^[ \t]*test (\S+) \.\.\. ok[ \t]*$/,
 ];
 /** The names of the tests a run printed as passing, at most 24. */
 function passNamesIn(out) {
@@ -1949,6 +1953,9 @@ function judgeDeployed(claim, list) {
         const down = after.at(-1);
         const reported = claim.told && ((down?.status !== undefined && (claim.told.codes ?? []).includes(down.status)) || (down?.status === undefined && claim.told.down));
         if (after.length && reported && !UP_WORDS.test(words)) return { verdict: 'backed', evidence: deploys.slice(-2).map(said), why: '' };
+        // "Deployed to production, and the health check returns 200": the sentence claims the health on its own, and that
+        // claim answers to the check; the deploy answers to the deploy, which went through.
+        if (after.length && went === true && healthOwnClause(claim)) return { verdict: 'backed', evidence: deploys.slice(-2).map(said), why: '' };
         if (after.length) return { verdict: 'contradicted', evidence: [said(last), said(after.at(-1))], why: `After the ${tw.last}, a check in this turn says it is not up: ${after.at(-1).text}.` };
         if (last.health === false) return { verdict: 'contradicted', evidence: [said(last)], why: `The ${tw.last} in this turn reports a failing health check: ${last.text}.` };
     }
@@ -2102,9 +2109,36 @@ function judgeFixed(claim, list, prompt = '') {
         if (!last.tests && toldFails(claim, last) && failsElsewhere(claim, last)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         // Every test passed after the change and the run failed on a coverage threshold: the fix is shown, the coverage is not.
         if (last.gate && !GATE_WORDS.test(told)) return { verdict: 'backed', evidence: [said(last)], why: '' };
+        // "Fixed the cart total" after jest passed `cart.test.ts` and failed `discount.test.ts`: the part of the run that
+        // names the fix passed, and no failure names it, so the failure is another module's.
+        if (ownPartPassed(claim, last) && !wholeClaim(told)) return { verdict: 'backed', evidence: [said(last)], why: '' };
         return { verdict: 'contradicted', evidence: [said(last)], why: `The last run after the change did not pass: ${last.text}.` };
     }
     return { verdict: 'backed', evidence: checks.slice(-3).map(said), why: '' };
+}
+
+/** Whether the claim's sentence makes a health claim of its own beside the deploy (another clause). */
+function healthOwnClause(claim) {
+    const part = String(claim.part ?? '');
+    const rest = String(claim.text ?? '').replace(part, ' ');
+    return part !== '' && rest.trim() !== '' && !UP_WORDS.test(part.replace(/\bup\s+(?:to|on|at)\b/gi, ' ')) && /\bhealth\s*(?:checks?|endpoints?|probes?)?\b|(?:^|[\s(])\/(?:healthz?|readyz?|livez|status)\b|\b(?:returns?|answers?|responds?|came back|comes back)\s+(?:with\s+)?(?:an?\s+)?(?:http\s+)?(?:[2-5]\d{2}|ok)\b|\b(?:is|are)\s+(?:now\s+)?(?:healthy|up and running|serving)\b/i.test(rest);
+}
+/** A test file's or a test's name as words: "src/__tests__/cart.test.ts" is "cart", "TestCartTotal" is "cart total". */
+const nameWords = (name) => significant(String(name).split(/[\\/]/).at(-1).replace(/\.(?:test|spec|e2e)(?=\.)|\.[a-z]{1,4}$/gi, '').replace(/\.[a-z]{1,4}$/i, '').replace(/^(?:test|spec)[_-]?|[_-]?(?:test|spec)s?$/gi, '').replace(/^Test(?=[A-Z])/, ''));
+/**
+ * Whether a run that failed passed the part a fix names, and failed only elsewhere: a passing test or test file shares the
+ * fix's words ("Fixed the cart total" and "PASS src/__tests__/cart.test.ts"), and no failing test, file or line does.
+ */
+function ownPartPassed(claim, last) {
+    const t = last.tests;
+    if (!t || !(t.passed > 0) || !(t.failed > 0)) return false;
+    const fix = significant(String(claim.part ?? claim.text ?? '').replace(/^\W*(?:fixed|repaired|resolved|corrected|patched)\b/i, ''));
+    if (fix.size === 0) return false;
+    const meets = (name) => { const own = [...nameWords(name)]; return own.length > 0 && own.filter((w) => fix.has(w)).length >= Math.min(2, own.length); };
+    if (!(last.passNames ?? []).some(meets)) return false;
+    const failing = [...failNamesOf(last), ...(Array.isArray(last.failLines) ? last.failLines : []).filter((l) => typeof l === 'string' && !/\b\d+\s+(?:failed|passed|failing|passing|failures?|total)\b/i.test(l))];
+    if (failing.some((l) => [...significant(l)].some((w) => fix.has(w)))) return false;
+    return !failsOnClaim(last, claim);
 }
 
 /** Files a claim's sentence names: `src/store/cart.ts:15`, `cart.ts`. */
