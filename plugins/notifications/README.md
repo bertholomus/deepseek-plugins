@@ -108,12 +108,12 @@ line in its log file and an entry in the recent list. The caller's answer
   instance's own window (`test/app/raise-check.mjs`): with the window hidden
   by its close button, minimised, and behind another window, a click brought
   it up in front on the right chat each time, and the log said the plugin
-  brought it up: in 0.4 to 1.3 s each time over five runs but once, when the
+  brought it up: in 0.4 to 1.3 s each time over six runs but once, when the
   minimised window took over 10 s while this machine ran at a load average
-  of about 75 (the app started again to hand over is what takes the time). A recorder stood in for the banner (the
-  click is its `onclick`, the handler a banner's click calls), so the system
-  did not bring the app forward as it does for a real click; that makes the
-  check the harder case.
+  of about 75 (the app started again to hand over is what takes the time).
+  A recorder stood in for the banner (the click is its `onclick`, the
+  handler a banner's click calls), so the system did not bring the app
+  forward as it does for a real click; that makes the check the harder case.
 - Proven by reading the app's code: its window may show notifications
   without an ask; a second launch hands over to the running app, which
   restores a minimised window, shows it and focuses it.
@@ -336,7 +336,11 @@ node plugins/notifications/test/app/raise-check.mjs --instance <DSH Test name>  
   the window's buttons through the accessibility API (the terminal needs
   that access), reads the window's place from the window server's list (no
   pixels), and keeps pictures of the window's own page and a report in
-  `.e2e/shots/notifications/app-window/`. It stops the instance at the end.
+  `.e2e/shots/notifications/app-window/`. Each chat is in a folder named for
+  its case (`raise-hidden-…`, `raise-minimised-…`, `raise-behind-…`): DSH
+  lists a chat with no turns as "New Session", so the folder's name, shown
+  above the open chat's message box and picked out in the sidebar, is what
+  tells the pictures apart. It stops the instance at the end.
 - By hand, in a DSH Test instance with the plugin and `test/e2e/caller`
   loaded: `node plugins/notifications/test/e2e/send.mjs "$(dsh-test url)"`
   sends one the way another plugin does and prints the answer and what came
