@@ -1523,4 +1523,13 @@ test('browser half: when Autopilot cannot work, the page says why and what to do
     // A held session says why on its row.
     const rows = SessionsCard({ data: { ...base, sessions: [{ sessionId: 's', title: 'Parser', folder: 'work', word: 'idle', work: '1 open todo', rule: 'auto', own: false, updatedAt: 1, hold: 'waits for you: its last reply asks you something' }] }, busy: false, act: () => {}, onOpen: () => {} });
     assert.match(textIn(rows), /Waits for you: its last reply asks you something\./);
+    // Open work keeps a session Autopilot gave up on, todos or not (a failed carry-on after a stop has none), and a
+    // failed one with nothing open, which says why it is left to the person.
+    const gaveUp = { sessionId: 'pb', title: 'Power blip', folder: 'work', word: 'gave up', work: '', rule: 'auto', own: false, updatedAt: 1, gaveUp: 5 };
+    const failedAlone = { sessionId: 'f', title: 'Vacuum', folder: 'work', word: 'failed', work: '', rule: 'auto', own: false, updatedAt: 1, hold: 'its last turn failed with nothing left open (no todos, no goal), so Autopilot leaves it to you' };
+    const quiet = { sessionId: 'q', title: 'Done', folder: 'work', word: 'idle', work: '', rule: 'auto', own: false, updatedAt: 1 };
+    const openWork = textIn(SessionsCard({ data: { ...base, sessions: [gaveUp, failedAlone, quiet] }, busy: false, act: () => {}, onOpen: () => {} }));
+    assert.match(openWork, /Power blip/);
+    assert.match(openWork, /Its last turn failed with nothing left open \(no todos, no goal\), so Autopilot leaves it to you\./);
+    assert.doesNotMatch(openWork, /Done/);
 });

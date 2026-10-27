@@ -1361,7 +1361,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         function SessionsCard({ data, busy, act, onOpen, failure }) {
             const [filter, setFilter] = React.useState('work');
-            const withWork = data.sessions.filter((s) => s.work || s.next || s.word === 'cut off' || s.word === 'failed');
+            // A session Autopilot gave up or backed off on stays here (Try again), todos or not: a carry-on after a stop has none.
+            const withWork = data.sessions.filter((s) => s.work || s.next || s.word === 'cut off' || s.word === 'failed' || s.gaveUp || s.backedOff);
             const shown = filter === 'work' ? withWork : data.sessions;
             return h(kit.Card, {
                 title: TEXT.sessions,

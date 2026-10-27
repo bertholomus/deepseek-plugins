@@ -238,6 +238,7 @@ From the repository root:
 
 ```sh
 node --test test/autopilot.test.js   # the engine over the watcher and a stand-in DSH; the page; the browser half
+node --test test/autopilot-ends.test.js  # what holds the nudge, measured on labelled reply endings
 node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH build here
 ```
 
@@ -247,14 +248,17 @@ and from the installed app's own DSH (run as Node by the app's binary, as a
 separate process), each in a throwaway home, with a scripted model playing
 the agent and a stand-in window that gets DSH's own prompts. It lets
 sessions go quiet with work open (a nudge, back-off, progress, Ask first,
-Off, a question left alone), stops and kills DSH under running turns (one
-of them waiting for approval and one with a question in the question box),
+Off, a question left alone, an offer that goes on nudged and one that hands
+over held, with its words on the row), stops and kills DSH under running
+turns (one of them waiting for approval, one with a question in the
+question box, and one with no todos and no goal whose carry-on fails, as
+when DSH comes back before its gateway: two tries, then *gave up*),
 and drives the page in a browser (`npm i --prefix .e2e/tools
 playwright-core`, with Playwright's Chrome), light and dark, wide and
 narrow: the buttons, the rule keys, where the cursor goes after an answer
 and after Try again, a refusal in its row, the contrast of every state word
-on the page, the cards' small text at Wallpaper's tint .2 over a mid
-picture, a question open across a quit, a rule choice kept while the list
+on the page, the cards' small text and the Waiting card's tags at
+Wallpaper's tint .2 over a mid picture, a question open across a quit, a rule choice kept while the list
 redraws, numbers in quotes for Autopilot and for Session Watch in the
 profile (both named on the page with the value, and Autopilot's fixed
 through the form, which shows it in quotes and flagged), a wrong setting
