@@ -169,3 +169,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-27 12:06 AM PDT: PASS 2 notifications (a09f584) judged 9.4 NOT YET (U 9.5, R 9.5, UX 9, T 9.5, D 9.5).
 - 2026-10-27 12:07 AM PDT: PASS 2 autopilot (0d9b123) judged 9.0 NOT YET (U 9, R 9.5, UX 9.5, T 9, D 9.5).
 - 2026-10-27 12:11 AM PDT: PASS 2 fleet (e69263d) judged 9.0 NOT YET (U 9, R 9.5, UX 9.5, T 9, D 9.5).
+- 2026-10-27 12:18 AM PDT: PASS 2 calendar (e1c2930) judged 8.9 NOT YET (U 9, R 9, UX 9, T 8.5, D 9).
