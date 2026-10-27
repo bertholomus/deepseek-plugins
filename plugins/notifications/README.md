@@ -108,9 +108,9 @@ line in its log file and an entry in the recent list. The caller's answer
   instance's own window (`test/app/raise-check.mjs`): with the window hidden
   by its close button, minimised, and behind another window, a click brought
   it up in front on the right chat each time, and the log said the plugin
-  brought it up: in 0.3 to 1.3 s over five runs, and once over 10 s for the
-  minimised window while this machine ran at a load average of about 75
-  (the app started again to hand over is what takes the time). A recorder stood in for the banner (the
+  brought it up: in 0.4 to 1.3 s each time over five runs but once, when the
+  minimised window took over 10 s while this machine ran at a load average
+  of about 75 (the app started again to hand over is what takes the time). A recorder stood in for the banner (the
   click is its `onclick`, the handler a banner's click calls), so the system
   did not bring the app forward as it does for a real click; that makes the
   check the harder case.
