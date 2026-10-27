@@ -5945,7 +5945,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const onNow = timed.filter((o) => current.has(o.id)).sort((a, b) => a.end - b.end)[0];
             const upNext = next && next.start - now <= 12 * HOUR ? next : undefined;
             const headline = upNext ?? onNow;
-            const nextLine = headline ? h('div', { className: 'dshcal-pane-next', 'data-calendar-next': headline.id },
+            const nextLine = headline ? h('div', { className: 'dshcal-pane-next', 'data-calendar-pane-next': headline.id },
                 h('span', { className: 'dshcal-pane-next-label' }, upNext ? 'Next:' : 'Now:'),
                 h('button', {
                     type: 'button', className: 'dshcal-pane-next-what', 'aria-haspopup': 'dialog',

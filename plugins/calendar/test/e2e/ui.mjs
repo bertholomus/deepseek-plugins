@@ -2624,6 +2624,14 @@ try {
 
     // 18. The Agenda pane.
     await step('the Agenda pane in the right sidebar', async () => {
+        // Something starting in a few minutes: the pane says what's next at its top.
+        const wallAt = (ms) => {
+            const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: ZONE, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+                .formatToParts(ms).map((x) => [x.type, x.value]));
+            return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+        };
+        const soonAt = Date.now() + 4 * 60_000;
+        const soon = (await api('createEvent', { input: { title: 'E2E Next up', start: wallAt(soonAt), end: wallAt(soonAt + 20 * 60_000), timeZone: ZONE } })).value?.occurrence;
         await openSession(await titleOf(listCall.sessionId));
         const opener = page.getByRole('button', { name: 'Open right sidebar' });
         if (await opener.count()) await opener.first().click();
@@ -2632,8 +2640,12 @@ try {
         const pane = page.locator('[data-calendar-pane]');
         await pane.waitFor({ state: 'visible', timeout: 10000 });
         await pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first().waitFor({ state: 'visible', timeout: 10000 });
+        const nextLine = pane.locator('[data-calendar-pane-next]');
+        await nextLine.filter({ hasText: 'E2E Next up' }).first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+        const nextText = ((await nextLine.first().textContent().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
         const text = await pane.textContent();
         await shot(page, 'agenda-pane');
+        if (soon) await api('deleteEvent', { id: soon.id, scope: 'all' });
         // An event's details open beside the pane; the chat stays. Open in Calendar shows it on the page.
         const row = pane.locator('[data-calendar-event]', { hasText: 'E2E Planning' }).first();
         await row.locator('.dshcal-pane-what').click();
@@ -2651,9 +2663,10 @@ try {
         await page.locator('[data-calendar-page]').waitFor({ state: 'visible', timeout: 10000 });
         await details.waitFor({ state: 'visible', timeout: 10000 });
         const pageText = await details.textContent();
-        check('the Agenda pane lists today and the next days; an event\'s details open beside it, the chat staying, and Open in Calendar shows it on the page',
-            /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '') && /E2E Planning/.test(detailsText ?? '') && beside && stayed && /E2E Planning/.test(pageText ?? ''),
-            JSON.stringify({ text: (text ?? '').slice(0, 300), beside, stayed, pageText: (pageText ?? '').slice(0, 100) }));
+        check('the Agenda pane says what\'s next at its top (Next: E2E Next up in 3 or 4 min) and lists today and the next days; an event\'s details open beside it, the chat staying, and Open in Calendar shows it on the page',
+            Boolean(soon) && /^Next: ?E2E Next up ?in [2-4] min$/.test(nextText)
+            && /Today/.test(text ?? '') && /E2E Offsite/.test(text ?? '') && /E2E Planning/.test(detailsText ?? '') && beside && stayed && /E2E Planning/.test(pageText ?? ''),
+            JSON.stringify({ nextText, text: (text ?? '').slice(0, 300), beside, stayed, pageText: (pageText ?? '').slice(0, 100) }));
         await page.keyboard.press('Escape');
     });
 
