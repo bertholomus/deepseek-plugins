@@ -269,12 +269,23 @@ export function timeWords(at, now = Date.now()) {
     return `${when.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${clock}`;
 }
 
-/** "45 seconds", "10 minutes", "2 hours", "3 days". */
+/** "45 seconds", "90 seconds", "2 minutes 30 seconds", "10 minutes", "2 hours", "3 days": never rounded up past what it says. */
 export function spanWords(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
-    if (s < 90) return `${s} second${s === 1 ? '' : 's'}`;
+    if (s < 120) return `${s} second${s === 1 ? '' : 's'}`;
+    if (s < 600 && s % 60 !== 0) {
+        const whole = Math.floor(s / 60);
+        const rest = s % 60;
+        return `${whole} minute${whole === 1 ? '' : 's'} ${rest} second${rest === 1 ? '' : 's'}`;
+    }
     const m = Math.round(s / 60);
     if (m < 90) return `${m} minute${m === 1 ? '' : 's'}`;
+    // Hours and minutes up to ten hours, so 90 minutes never reads as 2 hours.
+    if (m < 600 && m % 60 !== 0) {
+        const whole = Math.floor(m / 60);
+        const rest = m % 60;
+        return `${whole} hour${whole === 1 ? '' : 's'} ${rest} minute${rest === 1 ? '' : 's'}`;
+    }
     const h = Math.round(m / 60);
     if (h < 36) return `${h} hour${h === 1 ? '' : 's'}`;
     const d = Math.round(h / 24);

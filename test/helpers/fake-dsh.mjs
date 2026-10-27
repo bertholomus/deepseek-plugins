@@ -283,8 +283,12 @@ export function fakeDsh({ now = Date.now, autoRead = true, dshQueue = false } = 
                 const g = sessions.get(agent.id)?.goal;
                 if (!g || g.id !== id || g.revision !== revision) throw new Error('That goal changed.');
                 if (g.phase === 'active' && g.activation === 'armed') throw new Error('The goal is already running.');
+                if (g.roundsStarted >= g.maxGoalRounds) throw new Error(`goal "${g.id}" exhausted ${g.maxGoalRounds} goal rounds; increase maxGoalRounds before resuming`);
+                // As DSH's own: a start writes the goal's next revision, and the round it begins carries it.
                 g.phase = 'active';
                 g.activation = 'armed';
+                g.revision += 1;
+                commit(agent.id, 'goal/change', { operation: 'resume', goal: { id: g.id, revision: g.revision, objective: g.objective, phase: 'active', maxGoalRounds: g.maxGoalRounds }, roundsStarted: g.roundsStarted });
                 setImmediate(() => driveGoal(agent.id));
             },
         },
@@ -311,8 +315,8 @@ export function fakeDsh({ now = Date.now, autoRead = true, dshQueue = false } = 
                 if (!s) throw new Error(`Session ${id} not found`);
                 const events = [...s.events];
                 const st = foldOf(s);
-                // A cold read closes an open turn, as DSH's own reader does.
-                if (st.open) events.push({ type: 'turn/end', time: now(), data: { turn: st.turn, reason: { kind: 'interrupted' } } });
+                // A cold read closes an open turn, as DSH's own reader does: at the time of the log's last event.
+                if (st.open) events.push({ type: 'turn/end', time: events.at(-1)?.time ?? now(), data: { turn: st.turn, reason: { kind: 'interrupted' } } });
                 return { meta: { sessionId: id }, events };
             },
             async resolveAgent(id) {
