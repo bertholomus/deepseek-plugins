@@ -76,7 +76,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { Script } from 'node:vm';
-import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
+import { DshRun, checks, dismissNotices, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
 import { startRecallModel } from './fake-model.mjs';
 import { writeCorpus } from '../../../../test/fixtures/recall/corpus.mjs';
 
@@ -487,7 +487,14 @@ try {
     pw = await findPlaywright();
     if (!pw) check('Playwright is here for the window checks (NO_WINDOW=1 runs without them)', process.env.NO_WINDOW === '1', 'install it: npm i --prefix .e2e/tools playwright-core (or set PLAYWRIGHT_MODULE)');
     const openRecall = async (page) => {
-        await page.getByRole('button', { name: 'Recall', exact: true }).first().click();
+        // DSH's own first-run notice can come late, over the whole window (the app's DSH showed its Preview Notice
+        // after the window had been calm for 4 s): put it away, and again if the click meets it.
+        await dismissNotices(page);
+        const entry = page.getByRole('button', { name: 'Recall', exact: true }).first();
+        await entry.click({ timeout: 5000 }).catch(async () => {
+            await dismissNotices(page);
+            await entry.click();
+        });
         await page.locator('[data-recall-page]').waitFor({ state: 'visible', timeout: 20000 });
     };
     const searchBox = (page) => page.getByRole('searchbox', { name: 'Search past work' });
