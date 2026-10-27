@@ -491,7 +491,13 @@ async function terminalShows(page, want, timeout = 20000) {
     }, `the terminal tab to show “${want}”`, timeout, 300);
 }
 const terminalTab = (page, title) => page.locator('[role="tab"]', { hasText: title });
-const suiteErrors = () => errors.filter((text) => /agent-terminals|session-watch|suite-kit|dshat/i.test(text));
+/**
+ * Whether a window error is the suite's: its words or its stack name the suite. DSH serves every plugin's browser
+ * half in one combined file whose address lists them all, so an error of DSH's own carries the suite's names in its
+ * addresses: they are left out.
+ */
+const isSuiteError = (text, names = /agent-terminals|session-watch|suite-kit|dshat/i) => names.test(String(text).replace(/\bhttps?:\/\/\S+/g, ''));
+const suiteErrors = () => errors.filter((text) => isSuiteError(text));
 
 const ids = {};
 const agents = {};
@@ -1301,9 +1307,9 @@ try {
         // The window's errors meanwhile: none from Agent Terminals' browser half. Another plugin's, while the test had it
         // switched off (Session Watch), are said here and left out of the run's last check, which is about the rest.
         const fresh = errors.slice(errorsBefore);
-        const ours = fresh.filter((text) => /agent-terminals|dshat/i.test(text));
+        const ours = fresh.filter((text) => isSuiteError(text, /agent-terminals|dshat/i));
         check('no error from Agent Terminals\' browser half while parts of DSH were switched off and on', ours.length === 0, ours.join('\n'));
-        const others = fresh.filter((text) => !ours.includes(text) && /session-watch|suite-kit/i.test(text));
+        const others = fresh.filter((text) => !ours.includes(text) && isSuiteError(text, /session-watch|suite-kit/i));
         if (others.length) console.log(`# while Session Watch was switched off, the window logged: ${others.slice(0, 3).join(' | ')}`);
         for (const text of others) errors.splice(errors.indexOf(text), 1);
     }, async () => {
@@ -1647,6 +1653,8 @@ try {
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-profile-on-again');
     });
+    const dshOwn = errors.filter((text) => !isSuiteError(text));
+    if (dshOwn.length) console.log(`# the window's other errors (DSH's own or the neighbour's; not the suite's): ${dshOwn.length}: ${dshOwn.slice(0, 4).map((t) => String(t).split('\n')[0].slice(0, 160)).join(' | ')}`);
     check('no errors from the suite in the window', suiteErrors().length === 0, suiteErrors().join('\n'));
     // Every quit of DSH in this run (restarts with agents running, in a job, in a first turn) ended by itself.
     console.log(`# DSH quits: ${quits.map((q) => `${(q.ms / 1000).toFixed(1)} s${q.killed ? ' (killed)' : ''}`).join(', ')}`);
