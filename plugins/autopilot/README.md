@@ -44,20 +44,27 @@ want a stricter check, use …*. Nor does any offer when the reply's last
 sentence says what the agent does next (*Next: the CLI.*, *Moving on to
 the docs.*, *I will carry on with the remaining todos.*), unless that
 sentence waits on you itself (*Let me know if this looks good, and I'll
-move on to the tests.*). The row quotes the
+move on to the tests.*). Nor does advice to you that ends *if you want*:
+*Run `npm run bench` if you want the raw timings.* The row quotes the
 words that held it (*Waits for you: its last reply leaves the next step to
 you (“Let me know if you want me to continue with steps 2 and 3.”).*).
-Measured on 32 endings written after the rule was frozen
+Measured on 30 endings written after the rule was frozen and read once
 (`test/autopilot-ends.test.js`, `test/fixtures/autopilot/endings.json`):
-no false hold among the 16 that do not wait on you, and 3 misses among the
-16 that do (*If you're OK with the rename, I'll update all the imports.*,
+1 false hold among the 15 that do not wait on you (*Let me know if you hit
+any snags.*: such a session waits for you with its work open), and 2
+misses among the 15 that do (*If it helps, I can draft the release notes
+too.*, *I'm holding off on the deploy until you confirm the maintenance
+window.*): such a session gets the nudge, which asks the agent to end with
+a `DECISION NEEDED` line if it is blocked. Two earlier held-out sets were
+each read once and then used to build the rule: 44 endings (no false hold
+among 22, 4 misses among 22) and 32 (none among 16, 3 misses among 16, which
+still miss: *If you're OK with the rename, I'll update all the imports.*,
 *I need the API token for the sandbox before I can go on.*, *I can add
-retries as well, if that's useful.*): such a session gets the nudge, which
-asks the agent to end with a `DECISION NEEDED` line if it is blocked. The
-84 real endings from the suite's DSH Test sessions, the round-5 judge's
-nine and 84 written ones that the rule was built on all read right. The
-suite's broader rule (any offer in the last six lines) held 24 of the 122
-endings that do not wait on you, and missed 26 of the 87 that do.
+retries as well, if that's useful.*). The 84 real endings from the suite's
+DSH Test sessions, the round-5 judge's nine and 40 written ones all read
+right. The suite's broader rule (any offer in the last six lines) held 31
+of the 137 endings that do not wait on you, and missed 31 of the 102 that
+do.
 
 Every note starts with
 `[Autopilot]` and asks the agent to end with a `DECISION NEEDED` line if it

@@ -7,8 +7,9 @@
 // - written: 40 endings written for the rule, 20 that hand over and 20 that do not;
 // - held-out-1: 44 endings written after the rule was frozen and measured once (0 false holds, 4 misses), then
 //   used to widen the rule, so they count as development endings now;
-// - held-out-2: 32 endings written after that and measured once with the rule as shipped: its numbers are the
-//   ones the README gives.
+// - held-out-2: 32 endings written after that and measured once (ends.js f22a4e0…): 0 false holds, 3 misses;
+// - held-out-3: 30 endings written after one more change (advice such as "Run it if you want" is no offer) and
+//   measured once with the rule as shipped (ends.js a5fa8b4…): 1 false hold, 2 misses. The README gives both.
 //
 // A false hold is an ending that does not wait on the person but holds the nudge (the session is left idle with
 // its work open); a miss is one that waits on the person but gets the nudge.
@@ -34,11 +35,12 @@ function measure(items, rule) {
 
 const rate = (n, of) => `${n} of ${of} (${of ? Math.round((100 * n) / of) : 0}%)`;
 
-test('the corpus: real endings from DSH Test, the judge\'s nine, written ones and two held-out sets, each labelled', () => {
-    assert.deepEqual(Object.keys(sets), ['real', 'judge', 'written', 'heldOut1', 'heldOut2']);
+test('the corpus: real endings from DSH Test, the judge\'s nine, written ones and three held-out sets, each labelled', () => {
+    assert.deepEqual(Object.keys(sets), ['real', 'judge', 'written', 'heldOut1', 'heldOut2', 'heldOut3']);
     assert.equal(sets.real.length, 84);
     assert.equal(sets.judge.length, 9);
     assert.equal(sets.heldOut2.length, 32);
+    assert.equal(sets.heldOut3.length, 30);
     for (const [name, items] of Object.entries(sets)) {
         for (const item of items) {
             assert.equal(typeof item.text, 'string', name);
@@ -60,15 +62,19 @@ test('the development endings: no false hold and no miss', (t) => {
     }
 });
 
-test('the held-out endings, measured once with the rule as shipped: no false hold; 3 misses of 16, as the README says', (t) => {
-    const m = measure(sets.heldOut2, waitsOnPerson);
-    t.diagnostic(`held-out-2: false holds ${rate(m.falseHolds.length, m.endings - m.waits)}, misses ${rate(m.misses.length, m.waits)}`);
-    assert.deepEqual(m.falseHolds, []);
-    // A miss sends one note the agent can answer with a DECISION NEEDED line; a false hold leaves the work idle.
-    assert.deepEqual(m.misses, [
+test('the held-out endings, each set measured once: 1 false hold of 31 and 5 misses of 31, as the README says', (t) => {
+    const two = measure(sets.heldOut2, waitsOnPerson);
+    const three = measure(sets.heldOut3, waitsOnPerson);
+    for (const [name, m] of [['held-out-2', two], ['held-out-3', three]]) t.diagnostic(`${name}: false holds ${rate(m.falseHolds.length, m.endings - m.waits)}, misses ${rate(m.misses.length, m.waits)}`);
+    // A false hold leaves the session idle with its work open; a miss sends the nudge, which the agent can answer
+    // with a DECISION NEEDED line.
+    assert.deepEqual([...two.falseHolds, ...three.falseHolds], ['Let me know if you hit any snags.']);
+    assert.deepEqual([...two.misses, ...three.misses], [
         'If you\'re OK with the rename, I\'ll update all the imports.',
         'I need the API token for the sandbox before I can go on.',
         'I can add retries as well, if that\'s useful.',
+        'If it helps, I can draft the release notes too.',
+        'I\'m holding off on the deploy until you confirm the maintenance window.',
     ]);
 });
 
@@ -89,8 +95,8 @@ test('the suite\'s broad rule (asksSomeone: any offer in the last 6 lines) holds
         'Feel free to review the diff; I will carry on with the remaining two todos.',
         'If you would like a different name, say so. Next up: the README.',
     ]);
-    assert.ok(falseHolds >= 20, `${falseHolds} false holds`);
-    assert.ok(misses >= 20, `${misses} misses`);
+    assert.equal(falseHolds, 31);
+    assert.equal(misses, 31);
 });
 
 test('the judge\'s nine endings, one by one', () => {
@@ -124,6 +130,9 @@ test('the parts: which sentence hands over, what says the agent goes on, and wha
     assert.equal(goesOn('I will carry on with the remaining two todos.'), true);
     assert.equal(goesOn('Moving on to the docs next.'), true);
     assert.equal(goesOn('The build is green.'), false);
+    assert.equal(handsOver('Run make bench if you want more numbers.'), false, 'advice to the person');
+    assert.equal(handsOver('You can rerun it with --verbose if you like.'), false);
+    assert.equal(handsOver('I can add retries if you want.'), true, 'an offer');
     for (const empty of [undefined, null, '', '   ', 42]) {
         assert.equal(waitsOnPerson(empty), false);
         assert.equal(handOverIn(empty), undefined);

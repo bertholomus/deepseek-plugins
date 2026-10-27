@@ -73,6 +73,9 @@ const GOES_ON = [
     /^on to\b/i,
 ];
 
+/** A sentence that tells the person what they can do: advice, not an offer ("Run it again if you want"). */
+const ADVICE = /^(?:you (?:can|could|may|might|should)|(?:just )?(?:run|use|try|see|check|open|read|look|install|set|pass|call|edit|change|rerun|re-run|start|stop|view|inspect|compare|search|grep|tail|cat)\b)/i;
+
 /** What may start a line before its words: quote marks, a bullet, a list number, a heading mark. */
 const LEAD = /^[\s>*_`#-]*(?:\d{1,3}[.)]\s+)?/;
 
@@ -95,7 +98,9 @@ export function handsOver(sentence) {
     // "If you want …" after an offer ("Happy to try another colour if you'd like", "… if you want it") leaves the
     // choice to the person; at a sentence's start it is advice ("If you want a stricter check, use …"), unless it
     // asks them for the go ("If you'd like me to…", "If you want, I can…").
-    const trailingIf = /\S.*?\bif you(?:['’]d| would)? (?:like|want|prefer)\b/i.test(sentence) && !/^if you/i.test(sentence);
+    // Nor after an instruction to the person ("Run make bench if you want more numbers", "You can rerun it if you
+    // like"): that is advice too.
+    const trailingIf = /\S.*?\bif you(?:['’]d| would)? (?:like|want|prefer)\b/i.test(sentence) && !/^if you/i.test(sentence) && !ADVICE.test(sentence);
     if (!trailingIf && !HANDS_OVER.some((pattern) => pattern.test(sentence))) return false;
     return !COURTESY.test(sentence) || NEXT_STEP.test(sentence);
 }

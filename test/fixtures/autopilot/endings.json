@@ -1053,5 +1053,157 @@
    "hold": false,
    "from": "held-out-2"
   }
+ ],
+ "heldOut3": [
+  {
+   "text": "Would you rather I keep the old config format, or migrate everything to TOML?",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Let me know how you'd like to handle the deprecated endpoints.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "If it helps, I can draft the release notes too.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Say so if you'd like the tests split by module.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "I'm holding off on the deploy until you confirm the maintenance window.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Should the CLI exit non-zero on warnings?",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Tell me which branch to base it on and I'll rebase.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Once you've tried it locally, let me know and I'll tag the release.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "I could also add a progress bar, if you want one.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Happy to pair on the flaky test whenever suits you.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Let me know if I should keep going with the remaining two todos.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "The PR is open; it's ready for your review.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Which of these error messages reads better to you?",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "If you prefer, I'll switch the chart to a log scale.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Ping me once the API keys are in the vault.",
+   "hold": true,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Run `npm run bench` if you want the raw timings.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "You can open the report in your browser if you like.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Let me know if you hit any snags.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Next I'll add the retry logic to the uploader.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Moving on to the second todo now.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Everything passes locally; CI should go green shortly.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Feel free to skim the diff — the change is small.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Happy to report all 212 tests pass.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "I'll carry on with the docs next.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Now let me check the integration tests.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "If you want to reproduce it, run `make repro`.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Done: the parser, the lexer and the tests. Up next: the formatter.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "Let me know if you have any feedback on the naming.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "**Status:** 3 of 5 todos done. Continuing with the exporter.",
+   "hold": false,
+   "from": "held-out-3"
+  },
+  {
+   "text": "I've left a note in HANDOFF.md for whoever picks this up next.",
+   "hold": false,
+   "from": "held-out-3"
+  }
  ]
 }
