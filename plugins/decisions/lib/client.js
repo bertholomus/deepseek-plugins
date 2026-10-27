@@ -846,7 +846,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         };
         return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, 'data-suite-secret': info.configured ? (fromEnvironment ? 'env' : 'set') : 'unset' },
             h('div', { className: `${P}-set-text` },
-                h(ui.SettingsSecretField, { id: `${P}-set-${f.name}`, label: f.title, hint: fromEnvironment ? (f.envHint ?? f.hint) : f.hint, disabled: disabled || info.writable === false, text: draft, configured: info.configured === true, stateLabel, onEdit }),
+                h(ui.SettingsSecretField, { id: `${P}-set-${f.name}`, label: f.title, hint: fromEnvironment ? (f.envHint ?? f.hint) : info.configured ? (f.setHint ?? f.hint) : f.hint, disabled: disabled || info.writable === false, text: draft, configured: info.configured === true, stateLabel, onEdit }),
                 problem ? h('p', { className: `${P}-set-error`, role: 'alert' }, problem) : null,
                 info.configured && !fromEnvironment && info.writable !== false && keeper
                     ? h('button', { type: 'button', className: `${P}-set-reset`, disabled: disabled || removing, onClick: () => void remove() }, f.removeLabel ?? 'Remove it') : null));
@@ -1055,7 +1055,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
      * serves them, which is while the plugin runs. Each field:
      * `{ name, kind: 'switch'|'choice'|'number'|'numbers'|'text'|'secret', title, hint, default, min?, max?, options?, group? }`;
      * a secret also takes `keyFrom`, `defaultKey`, `check(text)`, its
-     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `removeLabel`)
+     * labels (`setLabel`, `envLabel`, `unsetLabel`, `envHint`, `setHint`, `removeLabel`)
      * and, to log it, `stored(change)` ('set' or 'removed', never the value),
      * and needs DSH's `remote.credentials`.
      * Does nothing on a DSH without settings forms.
@@ -1136,7 +1136,6 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             disabled: 'Decisions is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it lists nothing and holds nothing. To use it, set enabled to true there; DSH applies it when you save the file. To remove it instead, switch it off in Plugins.',
             waiting: 'Waiting on you',
             nothing: 'Nothing waits on you',
-            nothingText: 'When a session asks you something (a DECISION NEEDED line, a tool that needs approval, a question in the question box, a thread that needs a decision), it shows here, and you can answer it here.',
             dismissed: 'Dismissed',
             dismissedSub: 'Hidden from the list. A session that still waits for an answer still waits in the session.',
             history: 'What happened',
@@ -1191,7 +1190,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 name: 'webhookAddress',
                 kind: 'secret',
                 title: 'Webhook address',
-                hint: 'Kept in DSH\'s key store, never in the settings file. Leave it empty to keep the one you have.',
+                hint: 'Kept in DSH\'s key store, never in the settings file.',
+                setHint: 'Kept in DSH\'s key store, never in the settings file. Leave it empty to keep the one you have.',
                 keyFrom: 'mirrorUrlEnv',
                 defaultKey: 'DECISIONS_WEBHOOK_URL',
                 check: webhookProblem,
@@ -1247,11 +1247,23 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
 
         const listWords = (items) => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`);
 
-        /** What it lists, and what is switched off. */
         /** What it does not list now, or '' when it lists everything (the summary above already says what that is). */
         function sourcesText(sources) {
             const off = Object.keys(SOURCE_WORDS).filter((k) => sources?.[k] === false).map((k) => SOURCE_WORDS[k]);
             return off.length ? `Not listed, as its settings say: ${listWords(off)}. DECISION NEEDED and BLOCKED lines and other plugins' questions always are.` : '';
+        }
+
+        /** What would show while nothing waits: only what it lists now (a kind switched off is left out). */
+        function nothingText(sources) {
+            const kinds = [
+                'a DECISION NEEDED or BLOCKED line',
+                sources?.replies !== false ? 'a reply that ends with a question' : '',
+                sources?.approvals !== false ? 'a tool that needs approval' : '',
+                sources?.questions !== false ? 'a question in the question box' : '',
+                sources?.threads !== false ? 'a thread that needs a decision' : '',
+                'a plugin\'s question',
+            ].filter(Boolean);
+            return `When a session asks you something (${kinds.slice(0, -1).join(', ')} or ${kinds.at(-1)}), it shows here, and you can answer it here.`;
         }
 
         function notifyText(data, installed) {
@@ -1277,8 +1289,13 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             if (!Number.isFinite(at) || at <= 0) return null;
             const seconds = Math.max(0, ((now ?? Date.now()) - at) / 1000);
             // Rounded as it is shown: 59 minutes 40 seconds reads "1 hour", never "60 minutes".
-            const shown = seconds >= 3570 && seconds < 3600 ? 3600 : seconds;
-            return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString() }, seconds < 60 ? 'waiting less than a minute' : `waiting ${kit.spanText(shown)}`);
+            return h('time', { className: `${P}-num`, dateTime: new Date(at).toISOString(), title: new Date(at).toLocaleString() }, seconds < 60 ? 'waiting less than a minute' : `waiting ${waitText(seconds)}`);
+        }
+
+        /** How long a card has waited: "4 minutes", "1 hour" (never "60 minutes"), "5.5 hours", from two days on in days ("2.5 days"). */
+        function waitText(seconds) {
+            if (seconds >= 48 * 3600) return `${Math.round(seconds / 43200) / 2} days`;
+            return kit.spanText(seconds >= 3570 && seconds < 3600 ? 3600 : seconds);
         }
 
         /** Where a card comes from, in words, beside its session. */
@@ -1343,10 +1360,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** Whether the mirror's last send of a new card failed (a test's failure is said where you sent it). */
         const mirrorFailed = (m) => Boolean(m && m.mode !== 'off' && !m.problem && kit.isRecord(m.last) && m.last.ok === false && !m.last.test && !m.last.held && Number.isFinite(m.last.at));
 
-        function HeaderCard({ data, busy, act, said }) {
-            // "Test message sent" stays only until a newer send says more.
+        /** How long "Test message sent" stays under its button: its news is then old. */
+        const SENT_SAID_MS = 60000;
+
+        function HeaderCard({ data, busy, act, said, now }) {
+            // "Test message sent" stays only until a newer send says more, or for a minute; a failure until then.
             const last = data.mirror?.last;
-            const testSaid = said?.where === 'mirror' && Boolean(said.text) && !(kit.isRecord(last) && !last.test && Number.isFinite(said.at) && last.at > said.at);
+            const stale = !said?.failed && Number.isFinite(said?.at) && Number.isFinite(now) && now - said.at >= SENT_SAID_MS;
+            const testSaid = said?.where === 'mirror' && Boolean(said.text) && !stale && !(kit.isRecord(last) && !last.test && Number.isFinite(said.at) && last.at > said.at);
             const waiting = data.waiting.length;
             const urgent = data.waiting.filter((c) => c.answer === 'approval' || c.live === true || ((c.kind === 'approval' || c.kind === 'question') && c.running === true)).length;
             // With nothing waiting, the list's own empty state says so: said once.
@@ -1565,7 +1586,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 // What your last answer did, said where you are looking (and to screen readers).
                 h('p', { ref: line, tabIndex: -1, className: shown ? `${P}-note ${warn ? `${P}-warn` : `${P}-ok`}` : `${P}-sr`, role: 'status', 'aria-live': 'polite', 'data-decisions-said': '' }, shown),
                 data.waiting.length === 0
-                    ? h(kit.Empty, { title: TEXT.nothing, text: TEXT.nothingText })
+                    ? h(kit.Empty, { title: TEXT.nothing, text: nothingText(data.sources) })
                     : h('ul', { className: `${P}-list` }, ...data.waiting.map((card) => h(DecisionCard, { key: card.id, card, onOpen, act, busyId, now }))));
         }
 
@@ -1637,6 +1658,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const data = live.data;
             // Not running (or Session Watch is off): old data would mislead, so the page says why and what to do.
             const down = live.code === 'not-running' || (data === undefined && live.error);
+            // What a test said is about the page as it was: once the page goes down, it is not said again when it comes back.
+            React.useEffect(() => {
+                if (down) setSaid((was) => (was.where === 'mirror' ? { text: '', where: '', n: was.n + 1 } : was));
+            }, [Boolean(down)]);
             return h(kit.Page, { label: TEXT.title, attrs: { 'data-decisions-page': '' } },
                 down
                     ? h(kit.Card, { title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary },
@@ -1650,7 +1675,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                                 h(HistoryCard, { key: 'history', data, onOpen }),
                             ]
                             : [
-                                h(HeaderCard, { key: 'head', data, busy: busyId !== undefined, act, said }),
+                                h(HeaderCard, { key: 'head', data, busy: busyId !== undefined, act, said, now }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
                                 failure ? h('p', { key: 'act', className: `${P}-alert`, role: 'alert', 'data-decisions-failure': '' }, /^Not /.test(failure) ? failure : `Not done: ${failure}`) : null,
                                 data.enabled ? h(WaitingCard, { key: 'waiting', data, onOpen, act, busyId, now, said }) : null,
@@ -1722,7 +1747,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         module.exports.inject = inject;
         module.exports.apply = apply;
         // For the plugin's own tests.
-        module.exports.internals = { kit, TEXT, KIND_WORD, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, wordOf, sourcesText, notifyText, mirrorText, webhookProblem, originWords, DecisionsPage, DecisionsIcon, DecisionCard, HeaderCard, WaitingCard, HistoryCard, DismissedCard };
+        module.exports.internals = { kit, TEXT, KIND_WORD, CSS, SETTINGS, SETTINGS_SUMMARY, SETTINGS_NOTE, wordOf, sourcesText, nothingText, notifyText, mirrorText, webhookProblem, originWords, waitText, Waited, DecisionsPage, DecisionsIcon, DecisionCard, HeaderCard, WaitingCard, HistoryCard, DismissedCard };
         return module.exports;
     },
 });

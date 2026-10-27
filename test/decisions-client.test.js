@@ -111,6 +111,14 @@ test('browser half: the header says what waits, what it lists, and where else ne
     }
     // A test sent after the last new card still says so.
     assert.match(textIn(HeaderCard({ data: { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 3, last: { at: failedAt - 5000, ok: true } } }, busy: false, act, said: { text: 'Test message sent to hooks.example.com.', where: 'mirror', n: 1, at: failedAt } })), /Test message sent/);
+    // Its news gets old: a minute on, the success line is gone; a failure stays until something newer says more.
+    const sentAt = Date.now() - 61000;
+    const hookData = { ...base, mirror: { mode: 'webhook', place: 'hooks.example.com', perHour: 30, lastHour: 3 } };
+    assert.match(textIn(HeaderCard({ data: hookData, busy: false, act, said: { text: 'Test message sent to hooks.example.com.', where: 'mirror', n: 1, at: sentAt }, now: sentAt + 59000 })), /Test message sent/);
+    const old = HeaderCard({ data: hookData, busy: false, act, said: { text: 'Test message sent to hooks.example.com.', where: 'mirror', n: 1, at: sentAt }, now: sentAt + 61000 });
+    assert.doesNotMatch(textIn(old), /Test message sent/);
+    assert.equal(elementsOf(old).find((e) => e.props?.['data-decisions-test-said'] !== undefined).props['data-decisions-test-said'], '', 'its live region stays, empty');
+    assert.match(textIn(HeaderCard({ data: hookData, busy: false, act, said: { text: 'Not sent: hooks.example.com: it could not be reached.', where: 'mirror', failed: true, n: 2, at: sentAt }, now: sentAt + 300000 })), /Not sent: hooks\.example\.com/);
     const opened = [];
     kit.setNavigation({ openBundle: (name) => opened.push(name) });
     const missing = HeaderCard({ data: { ...base, mirror: { mode: 'webhook', perHour: 30, lastHour: 0, problem: 'No webhook address is set yet: add it in Decisions\' settings in Plugins' } }, busy: false, act });
@@ -140,6 +148,30 @@ test('browser half: the header says what waits, what it lists, and where else ne
     assert.equal(elementsOf(HeaderCard({ data: base, busy: false, act })).find((e) => e.type === 'Button'), undefined, 'no settings button on a DSH that cannot open it');
     assert.match(textIn(HeaderCard({ data: { ...base, mirror: { mode: 'command', place: 'notify', perHour: 30, lastHour: 0 } }, busy: false, act })), /New cards also go to notify: 0 of 30 this hour\./);
     assert.match(textIn(HeaderCard({ data: { ...base, watchProblem: { text: 'How long a message may wait to be read (deliveryTimeoutSeconds) must be a whole number of seconds from 10 to 86400 (it is 5)' } }, busy: false, act })), /Session Watch uses its default for a wrong setting: .*\(it is 5\)\. Change it in Session Watch's settings in Plugins\./);
+});
+
+test('browser half: the empty state names only what it lists, and a long wait reads in days', () => {
+    const { client } = loadClient(CLIENT);
+    const { nothingText, waitText, Waited, WaitingCard } = client.internals;
+    const all = nothingText(base.sources);
+    assert.equal(all, 'When a session asks you something (a DECISION NEEDED or BLOCKED line, a reply that ends with a question, a tool that needs approval, a question in the question box, a thread that needs a decision or a plugin\'s question), it shows here, and you can answer it here.');
+    const some = nothingText({ ...base.sources, approvals: false, threads: false });
+    assert.doesNotMatch(some, /approval|thread/, 'a kind switched off is not named');
+    assert.match(some, /a DECISION NEEDED or BLOCKED line, a reply that ends with a question, a question in the question box or a plugin's question\)/);
+    // On the page: the list's empty state, with approvals off.
+    const page = WaitingCard({ data: { ...base, sources: { ...base.sources, approvals: false }, waiting: [] }, onOpen: () => {}, act: () => {}, now: Date.now() });
+    assert.match(textIn(page), /Nothing waits on you/);
+    assert.doesNotMatch(textIn(page), /a tool that needs approval/);
+    // Waits: minutes, never "60 minutes", hours, then days from two days on (720 hours is allowed).
+    assert.equal(waitText(4 * 60), '4 minutes');
+    assert.equal(waitText(3580), '1 hour');
+    assert.equal(waitText(5.5 * 3600), '5.5 hours');
+    assert.equal(waitText(47 * 3600), '47 hours');
+    assert.equal(waitText(50.2 * 3600), '2 days', 'it read "50.2 hours"');
+    assert.equal(waitText(2.6 * 86400), '2.5 days');
+    assert.equal(waitText(30 * 86400), '30 days');
+    const now = Date.now();
+    assert.equal(textIn(Waited({ at: now - 3 * 86400000, now })), 'waiting 3 days');
 });
 
 test('browser half: with notifications not running, the header offers Notifications in Plugins only when it is installed', async () => {
@@ -470,6 +502,7 @@ test('settings in Plugins: Decisions\' page there has its live settings, and the
     assert.equal(field.props.label, 'Webhook address');
     assert.equal(field.props.configured, false);
     assert.equal(field.props.stateLabel, 'No address yet');
+    assert.equal(field.props.hint, 'Kept in DSH\'s key store, never in the settings file.', 'no "keep the one you have" while there is none');
     assert.equal(field.props.disabled, false);
     assert.equal(elementsOf(page).find((e) => e.type === 'button' && textIn(e) === 'Remove the address'), undefined, 'nothing to remove yet');
     // A typed address: one that cannot work is not staged; one that can is.
@@ -488,6 +521,7 @@ test('settings in Plugins: Decisions\' page there has its live settings, and the
     field = elementsOf(page).find((e) => e.type === 'SettingsSecretField');
     assert.equal(field.props.configured, true);
     assert.equal(field.props.stateLabel, 'An address is set');
+    assert.equal(field.props.hint, 'Kept in DSH\'s key store, never in the settings file. Leave it empty to keep the one you have.');
     assert.equal(field.props.text, '', 'the field never shows a stored value');
     elementsOf(page).find((e) => e.type === 'button' && textIn(e) === 'Remove the address').props.onClick();
     await settle();
