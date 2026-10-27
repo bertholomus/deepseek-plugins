@@ -1883,7 +1883,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 onStarted(value?.agent, value?.problem);
             };
             const ids = { program: `${P}-program`, args: `${P}-args`, data: `${P}-data`, folder: `${P}-folder`, name: `${P}-name`, task: `${P}-task`, folders: `${P}-folders` };
-            return h(kit.Card, { title: TEXT.start, sub: TEXT.startSub, attrs: { 'data-agent-terminals-start': '' } },
+            return h(kit.Card, { title: TEXT.start, main: true, sub: TEXT.startSub, attrs: { 'data-agent-terminals-start': '' } },
                 h('form', { className: `${P}-form`, onSubmit: submit, noValidate: true },
                     found.length || recent.length ? h('div', { className: `${P}-field` },
                         found.length ? h('div', { className: `${P}-label`, id: `${P}-found` }, 'Found on this computer') : null,
@@ -1976,7 +1976,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [all, setAll] = React.useState(false);
             const names = React.useMemo(() => new Map(data.agents.map((a) => [a.key, a.name])), [data.agents]);
             const shown = all ? data.history : data.history.slice(0, 30);
-            return h(kit.Card, { title: TEXT.history, sub: TEXT.historySub, attrs: { 'data-agent-terminals-history': '' } },
+            return h(kit.Card, { title: TEXT.history, main: true, sub: TEXT.historySub, attrs: { 'data-agent-terminals-history': '' } },
                 data.history.length === 0 ? h(kit.Empty, { title: TEXT.noHistory, text: TEXT.noHistoryText })
                     : [
                         h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((entry) => h(HistoryRow, { key: entry.id, entry, names, onOpen }))),

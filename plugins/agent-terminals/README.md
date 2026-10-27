@@ -227,6 +227,10 @@ closing the tab, and *What happened* says who stopped it.
   session's first turn, each message and whether it was proven read,
   questions to you, and each change of its settings, each with why.
 
+Its cards are glass, in DSH's own colours: with Wallpaper on, each one
+stands on the reading glass (Wallpaper's tint + .2), so its small text
+never sits on the plain tint.
+
 When it cannot work, the page says why and what to do, with a button to
 the place to do it: *Agent Terminals needs Session Watch, which is not
 running*, *Agent Terminals is waiting for a setting to be fixed* (which
@@ -411,7 +415,12 @@ and starts a program given as `~/…`. With
 went in, it presses no Enter into the prompt, and the message is read once
 the prompt is answered in the terminal. In a browser, light and dark, wide
 and narrow, it
-checks the page, the row's mark, hover line and menu beside a neighbour's
+checks the page; pictures it with a Wallpaper stand-in (Wallpaper's values
+on the page and its glass on DSH's sidebar and dock) over a light and a
+dark picture at tint .2, and with Wallpaper off; checks that every card
+stands on tint + .2 there; and measures the page's small text (4.5:1 or
+more with Wallpaper off, and for its secondary text over a mid picture at
+tint .2; the lowest over each picture's far end is logged); then the row's mark, hover line and menu beside a neighbour's
 (which keeps its seat), the terminal tab beside the session, a tool call
 answered in that tab (the held message goes in after), a start from the
 page with a found program, Stop, Start again, Start anew and Forget (it
@@ -471,4 +480,7 @@ its own transcript line, the oldest first, through a restart too); the
 listing note and its replies read by Session Watch's own `askIn` (none
 asks); the cause of each stop and start of following, from stand-ins of
 DSH's parts; and an agent that still runs under `enabled: false`, listed
-on the page, not followed.
+on the page, not followed. The page's own tests
+(`test/agent-terminals-client.test.js`) draw its parts as plain element
+trees: among them, every card on the reading glass, the cards under
+`enabled: false`, the row's mark and hover card, and the terminal tabs.

@@ -412,6 +412,11 @@ test('the page: reads the agents, shows each, and says what an action did, in wo
     assert.match(text, /Closing an agent's terminal tab ends the agent; Start again brings it back\./);
     assert.ok(withAttr(page.tree, 'data-agent-terminals-start').length === 1, 'the start form');
     assert.match(text, /Nothing yet/, 'an empty history says what will show');
+    // Every card on the page carries text people read, small secondary text among it: each sits on the stronger glass
+    // (tint + .2), never on the plain tint, where small text falls under 4.5:1 at a low tint (DESIGN.md, text on glass).
+    const cards = elementsOf(page.tree).filter((e) => e.type === 'section' && /(^|\s)dshat-card(\s|$)/.test(e.props?.className ?? ''));
+    assert.equal(cards.length, 4, 'the header, the agents, the start form and what happened');
+    assert.deepEqual(cards.filter((e) => !/(^|\s)dshat-main(\s|$)/.test(e.props.className)).map((e) => e.props['aria-label']), [], 'no card on the plain tint');
 
     // Send from a card: queued in words on the list's status line, and the page reads the agents again.
     const box = elementsOf(withAttr(page.tree, 'data-agent-terminals-agent')[1]).find((e) => e.type === 'textarea');
