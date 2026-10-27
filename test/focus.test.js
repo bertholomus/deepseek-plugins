@@ -17,7 +17,7 @@ import { tempDir } from './helpers/temp.mjs';
 import { elementsOf, loadClient, OTHER_NAMES, statefulReact, textIn } from './helpers/client.mjs';
 import {
     apply, checkConfig, createFocus, DUE_SLACK_MS, DURATION_MAX_MS, DURATION_MIN_MS, KINDS, LOG_MAX_BYTES,
-    MINUTES_MAX, MINUTES_MIN, normalizeState, OPS,
+    MINUTES_MAX, MINUTES_MIN, normalizeState, OPS, UNDO_MS,
 } from '../plugins/focus/lib/impl.js';
 
 const pluginRoot = fileURLToPath(new URL('../plugins/focus/', import.meta.url));
@@ -66,18 +66,21 @@ const count = (s, re) => (s.match(re) ?? []).length;
 
 // ── the setting ─────────────────────────────────────────────────────────────
 
-test('checkConfig: the default folder follows DSH_HOME; a full path is taken; a wrong value is said in words and the default kept', () => {
+test('checkConfig: the default folder follows DSH_HOME; a full path is taken; a wrong value is said in words, with no path, and the default kept', () => {
     const env = { DSH_HOME: '/srv/dsh-test' };
+    const fallback = '/srv/dsh-test/focus';
     for (const raw of [undefined, null, {}, { dataDir: '' }, { dataDir: null }]) {
-        assert.deepEqual(checkConfig(raw, env), { dataDir: '/srv/dsh-test/focus', problems: [] }, JSON.stringify(raw));
+        assert.deepEqual(checkConfig(raw, env), { dataDir: fallback, problems: [], fallback }, JSON.stringify(raw));
     }
     assert.equal(checkConfig({}, {}).dataDir, join(homedir(), '.dsh', 'focus'));
-    assert.deepEqual(checkConfig({ dataDir: '/var/tmp/focus/' }, env), { dataDir: '/var/tmp/focus', problems: [] });
-    assert.deepEqual(checkConfig({ dataDir: '~/Timers/focus' }, env), { dataDir: join(homedir(), 'Timers', 'focus'), problems: [] });
+    assert.deepEqual(checkConfig({ dataDir: '/var/tmp/focus/' }, env), { dataDir: '/var/tmp/focus', problems: [], fallback });
+    assert.deepEqual(checkConfig({ dataDir: '~/Timers/focus' }, env), { dataDir: join(homedir(), 'Timers', 'focus'), problems: [], fallback });
     const said = (raw) => checkConfig(raw, env);
-    assert.deepEqual(said({ dataDir: 42 }), { dataDir: '/srv/dsh-test/focus', problems: ['dataDir must be a folder path, not 42; Focus keeps its timer in /srv/dsh-test/focus.'] });
-    assert.deepEqual(said({ dataDir: '   ' }).problems, ['dataDir must be a folder path, not "   "; Focus keeps its timer in /srv/dsh-test/focus.']);
-    assert.deepEqual(said({ dataDir: 'relative/focus' }).problems, ['dataDir must be a full path (starting with / or ~/), not "relative/focus"; Focus keeps its timer in /srv/dsh-test/focus.']);
+    // The window shows these words (DESIGN.md: no raw paths where people read); the logs name the folder.
+    assert.deepEqual(said({ dataDir: 42 }), { dataDir: fallback, problems: ['dataDir must be a folder path, not 42; Focus keeps its timer in its default folder (focus in DSH\'s data folder).'], fallback });
+    assert.deepEqual(said({ dataDir: '   ' }).problems, ['dataDir must be a folder path, not "   "; Focus keeps its timer in its default folder (focus in DSH\'s data folder).']);
+    assert.deepEqual(said({ dataDir: 'relative/focus' }).problems, ['dataDir must be a full path (starting with / or ~/), not "relative/focus"; Focus keeps its timer in its default folder (focus in DSH\'s data folder).']);
+    for (const raw of [{ dataDir: 42 }, { dataDir: 'relative/focus' }, 'focus', { chime: false }]) assert.doesNotMatch(said(raw).problems.join(' '), /\/srv|\/Users|\.dsh/, 'no path in the words');
     assert.deepEqual(said('focus').problems, ['Focus\'s settings must be a map of keys, not "focus"; it uses its defaults.']);
     assert.deepEqual(said({ chime: false }).problems, ['chime is not a setting of Focus and is ignored (its one setting is dataDir).']);
     assert.equal(said({ dataDir: 'x'.repeat(200) }).problems[0].length < 260, true, 'a long value is cut in the words');
@@ -92,9 +95,12 @@ test('normalizeState: a saved state back in shape (whole minutes, 1 to 180, type
     }, day);
     assert.deepEqual(back, {
         settings: { focusMin: 16, shortMin: 1, longMin: 180, chime: true },
-        timer: { kind: 'focus', durationMs: DURATION_MIN_MS, remainingMs: DURATION_MIN_MS, endAt: null, running: false, doneAt: null },
+        timer: { kind: 'focus', durationMs: DURATION_MIN_MS, remainingMs: DURATION_MIN_MS, endAt: null, running: false, doneAt: null, doneSeen: false },
         sessions: { date: day, focus: 3 }, rev: 0,
     });
+    // An end saved by 0.2.0 (no doneSeen) counts as seen, so an upgrade marks nothing old; 0.2.1's own flag is kept.
+    const ended = (extra) => normalizeState({ timer: { kind: 'focus', durationMs: 60000, remainingMs: 60000, endAt: null, running: false, doneAt: 5, ...extra } }, day).timer.doneSeen;
+    assert.deepEqual([ended({}), ended({ doneSeen: false }), ended({ doneSeen: true }), ended({ doneSeen: 'no' })], [true, false, true, true]);
     assert.deepEqual(normalizeState({ sessions: { date: '2026-10-25', focus: 4 } }, day).sessions, { date: day, focus: 0 }, 'another day starts at 0');
     assert.deepEqual(normalizeState('junk', day).timer.durationMs, 1500000);
 });
@@ -303,8 +309,9 @@ test('a folder that cannot be made: the timer works in memory, and the problem i
     const focus = host(join(base, 'file', 'focus'), time, { say: (level, words) => said.push([level, words]) });
     const read = await call(focus);
     assert.equal(read.status, 200);
-    assert.match(read.body.problems[0], /^Focus could not make its folder .*file\/focus \(ENOTDIR\): the timer works, but is not kept across a restart\.$/);
+    assert.equal(read.body.problems[0], 'Focus could not make its folder (a file is in the way): the timer works, but is not kept across a restart. DSH\'s log names the folder.', 'in words, with no path');
     assert.equal(said[0][0], 'warn');
+    assert.match(said[0][1], /could not make its folder .*file\/focus \(ENOTDIR\)/, 'DSH\'s log has the folder and the code');
     const started = await op(focus, { op: 'start', kind: 'focus', durationMs: 10000 });
     assert.equal(started.body.timer.running, true);
     time.advance(10100);
@@ -322,7 +329,8 @@ test('a save that fails is said (once) and the timer keeps counting; when a save
         await op(focus, { op: 'start', kind: 'focus', durationMs: 60000 });
         const read = await call(focus);
         assert.equal(read.body.timer.running, true);
-        assert.match(read.body.problems.at(-1), /^Focus could not save its timer to .*state\.json \(EACCES\); it keeps counting, but a restart would lose the change\.$/);
+        assert.equal(read.body.problems.at(-1), 'Focus could not save its timer (no permission to write there); it keeps counting, but a restart would lose the change. DSH\'s log names the file.', 'in words, with no path');
+        assert.match(said.find((w) => /could not save/.test(w)), /state\.json \(EACCES\)/, 'DSH\'s log has the file and the code');
         await op(focus, { op: 'pause' });
         assert.equal(said.filter((w) => /could not save/.test(w)).length, 1, 'said once, not on every change');
     } finally {
@@ -427,8 +435,11 @@ const STATE = (over = {}) => ({
 const opened = [];
 after(() => { for (const w of opened.splice(0)) w.close(); });
 
-/** The bundle with stand-ins: a document, fetch answering from `answers` (a function of the request), and DSH's slots. */
-async function window(answer, { stateful = false } = {}) {
+/**
+ * The bundle with stand-ins: a document, fetch answering from `answers` (a function of the request), DSH's slots,
+ * and (with `shortcuts`) DSH's shortcuts service, handed over through ctx.inject as DSH does.
+ */
+async function window(answer, { stateful = false, shortcuts, globals = {} } = {}) {
     const appended = [];
     const listeners = new Map();
     const document = {
@@ -445,18 +456,22 @@ async function window(answer, { stateful = false } = {}) {
         return { ok: status >= 200 && status < 300, status, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) };
     };
     const held = stateful ? statefulReact() : null;
-    const { client, id } = loadClient(clientUrl, { document, globals: { fetch }, ...(held ? { react: held.react } : {}) });
+    const { client, id, window: win } = loadClient(clientUrl, { document, globals: { fetch, ...globals }, ...(held ? { react: held.react } : {}) });
     const regs = [];
     const disposers = [];
+    const effect = (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); };
     client.apply({
-        effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); },
+        effect,
         slots: { inject: (slot, fn) => fn(), register: (opts, comp) => { regs.push({ opts, comp }); return () => {}; } },
+        ...(shortcuts ? { inject: (names, fn) => { assert.deepEqual(names, ['shortcuts']); fn({ effect, shortcuts }); } } : {}),
     });
     const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r)); };
     await settle();
     const slot = (name) => regs.find((r) => r.opts.name === name);
     const w = {
-        id, client, calls, appended, regs, settle, listeners, mount: held?.mount,
+        id, client, calls, appended, regs, settle, listeners, mount: held?.mount, win, document,
+        /** The window hidden or shown again, as the browser says it (visibilitychange). */
+        async show(state) { document.visibilityState = state; listeners.get('visibilitychange')?.(); await settle(); },
         button: () => slot('sidebar.footer.action').comp({}),
         overlay: () => slot('shell.overlay').comp({}),
         close: () => disposers.splice(0).reverse().forEach((d) => d()),
@@ -588,7 +603,8 @@ test('the end, said once: a toast in DSH\'s words when a new doneAt comes, never
     state = STATE({ rev: 5, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: null, running: false, doneAt: Date.now() - 400 }, sessions: { date: '2026-10-26', focus: 1 } });
     footerButton(w.button()).props.onClick({ currentTarget: null }); // opening reads the state
     await w.settle();
-    assert.deepEqual([toast()?.props.text, toast()?.props.tone], ['Focus session done. Time for a break.', 'success']);
+    assert.deepEqual([toast()?.props.text, toast()?.props.tone, toast()?.props.holdMs], ['Focus session done. Time for a break.', 'success', 12000]);
+    assert.deepEqual(Array.from(toast().props.actions, (a) => a.label), ['Start short break'], 'the next step, in the toast');
     toast().props.onDone();
     assert.equal(toast(), undefined);
     footerButton(w.button()).props.onClick({ currentTarget: null });
@@ -597,7 +613,8 @@ test('the end, said once: a toast in DSH\'s words when a new doneAt comes, never
     state = STATE({ rev: 7, timer: { kind: 'short', durationMs: 300000, remainingMs: 300000, endAt: null, running: false, doneAt: Date.now() - 5 * 60000 } });
     footerButton(w.button()).props.onClick({ currentTarget: null });
     await w.settle();
-    assert.match(toast()?.props.text, /^Short break timer ended at \d{1,2}:\d{2}\s?[AP]M\.$/, 'seen late: said with its time');
+    assert.match(toast()?.props.text, /^Break over at \d{1,2}:\d{2}\s?[AP]M\. Ready to focus\?$/, 'seen late: said with its time');
+    assert.deepEqual(Array.from(toast().props.actions, (a) => a.label), ['Start focus']);
     assert.equal(textIn(find(w.overlay(), (e) => 'data-focus-state' in e.props)).startsWith('Short break · done at '), true);
     w.close();
 });
@@ -618,7 +635,7 @@ test('after a timer ends the main button offers the next step: a short break, a 
         [done('focus', 4), 'Start long break', { op: 'start', kind: 'long', durationMs: 1200000 }],
         [done('short', 2, 360000), 'Start focus', { op: 'start', kind: 'focus', durationMs: 1800000 }],
         [done('long', 4, 1200000), 'Start focus', { op: 'start', kind: 'focus', durationMs: 1800000 }],
-        [done('custom', 4, 120000), 'Start', { op: 'start', kind: 'custom', durationMs: 120000 }],
+        [done('custom', 4, 120000), 'Start again', { op: 'start', kind: 'custom', durationMs: 120000 }],
     ]) {
         state = s;
         footerButton(w.button()).props.onClick({ currentTarget: null });
@@ -715,7 +732,7 @@ test('the client\'s style sheet and source follow DESIGN.md', async () => {
 test('the plugin\'s files: package, patch, locale, icon; no other assistant\'s or maker\'s name anywhere', () => {
     const pkg = JSON.parse(text('package.json'));
     assert.equal(pkg.name, 'dsh-plugin-focus');
-    assert.equal(pkg.version, '0.2.0');
+    assert.equal(pkg.version, '0.2.1');
     assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'));
     for (const f of pkg.files) assert.ok(existsSync(at(f)), f);
     assert.match(text('cordis.patch.yml'), /- insert:\n\s+- id: focus\n\s+name: dsh-plugin-focus/);
@@ -750,5 +767,18 @@ test('the README is the code\'s: its setting, ops, kinds, limits, status codes, 
     assert.ok(words.includes('A timer is already running. Pause or reset it first.'));
     assert.ok(text('lib/impl.js').includes('A timer is already running. Pause or reset it first.'));
     assert.ok(src.includes('const POLL_MS = 5000;') && words.includes('every 5 seconds'), 'the poll the README names');
-    assert.ok(src.includes('const LATE_MS = 60000;') && words.includes('A window that was hidden at the end says it later, with the time it ended ("Focus timer ended at 10:25 AM."), without the chime.'));
+    // The end: its toast and hold, the mark, a hidden window, the shortcut, Undo.
+    assert.ok(src.includes('const END_HOLD_MS = 12000;') && words.includes('shows DSH\'s toast for 12 seconds'), 'the end\'s hold');
+    assert.ok(src.includes('const LATE_MS = 60000;') && words.includes('more than a minute late'), 'a late end');
+    assert.ok(words.includes('chimes at the end and says it when it is shown again, with the time it ended ("Focus session done at 10:25 AM. Time for a break."), unless the end was seen in another window meanwhile.'));
+    assert.ok(src.includes('focus: (at) => `Focus session done at ${at}. Time for a break.`'), 'the late words');
+    assert.ok(words.includes('"Focus timer: Focus session done at 10:25 AM"') && src.includes('ended: (kind, at) => `${ENDED[kind] || ENDED.custom} done at ${at}`') && src.includes('`${TEXT.button}: ${endWords}`'), 'the footer\'s mark');
+    assert.ok(src.includes('const SHORTCUT_KEYS = { code: "KeyF", modifiers: ["primary", "alt", "shift"] };') && words.includes('⇧⌥⌘F (Ctrl+Shift+Alt+F on Windows and Linux)'), 'the shortcut\'s keys');
+    assert.ok(src.includes('shortcut: "Open the Focus timer"') && words.includes('The shortcut is "Open the Focus timer" in DSH\'s Keyboard shortcuts'), 'the shortcut\'s name');
+    assert.equal(UNDO_MS, 60000);
+    assert.ok(words.includes('Only within 60 s of that Reset') && words.includes('has an Undo button for 10 seconds') && src.includes('holdMs: 10000, actions: [action(TEXT.undo'), 'Undo');
+    for (const said of ['There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.']) assert.ok(words.includes(said) && text('lib/impl.js').includes(said), said);
+    for (const said of ['Start again', 'Focus session reset.', 'Short break next']) assert.ok(words.includes(said), `README: ${said}`);
+    assert.ok(src.includes('"Start again"') && src.includes('resetSaid: (kind) => `${ENDED[kind] || ENDED.custom} reset.`') && src.includes('nextCaption: (kind) => `${KIND[kind] || KIND.custom} next`'));
+    assert.ok(words.includes('git archive 3859b8d plugins/focus | tar -x -C <folder>') && words.includes('git archive 5c0d8da plugins/focus | tar -x -C <folder>'), 'where the older versions are');
 });

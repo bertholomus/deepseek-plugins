@@ -72,7 +72,7 @@ test('first run: defaults served, state.json + focus.log written', async () => {
   assert.equal(cacheControl, 'no-store');
   assert.deepEqual(body, {
     settings: { focusMin: 25, shortMin: 5, longMin: 15, chime: true },
-    timer: { kind: 'focus', durationMs: 1_500_000, remainingMs: 1_500_000, endAt: null, running: false, doneAt: null },
+    timer: { kind: 'focus', durationMs: 1_500_000, remainingMs: 1_500_000, endAt: null, running: false, doneAt: null, doneSeen: false },
     sessions: { date: today(), focus: 0 },
     rev: 0,
     problems: [],
@@ -118,7 +118,7 @@ test('pause → resume preserves the remaining time; same-state ops are no-ops',
   const idle = await setup();
   const p2 = await call(idle.fetch, POST({ op: { op: 'pause' } }));
   assert.equal(p2.status, 200);
-  assert.deepEqual(p2.body.timer, { kind: 'focus', durationMs: 1_500_000, remainingMs: 1_500_000, endAt: null, running: false, doneAt: null });
+  assert.deepEqual(p2.body.timer, { kind: 'focus', durationMs: 1_500_000, remainingMs: 1_500_000, endAt: null, running: false, doneAt: null, doneSeen: false });
 });
 
 test('reset: full duration back, doneAt cleared', async () => {
@@ -126,13 +126,13 @@ test('reset: full duration back, doneAt cleared', async () => {
   await call(fetch, POST({ op: { op: 'start', kind: 'short', durationMs: 30_000 } }));
   await call(fetch, POST({ op: { op: 'pause' } }));
   const reset = await call(fetch, POST({ op: { op: 'reset' } }));
-  assert.deepEqual(reset.body.timer, { kind: 'short', durationMs: 30_000, remainingMs: 30_000, endAt: null, running: false, doneAt: null });
+  assert.deepEqual(reset.body.timer, { kind: 'short', durationMs: 30_000, remainingMs: 30_000, endAt: null, running: false, doneAt: null, doneSeen: false });
 });
 
 test('set: new kind/duration while idle', async () => {
   const { fetch } = await setup();
   const set = await call(fetch, POST({ op: { op: 'set', kind: 'long', durationMs: 15 * 60_000 } }));
-  assert.deepEqual(set.body.timer, { kind: 'long', durationMs: 900_000, remainingMs: 900_000, endAt: null, running: false, doneAt: null });
+  assert.deepEqual(set.body.timer, { kind: 'long', durationMs: 900_000, remainingMs: 900_000, endAt: null, running: false, doneAt: null, doneSeen: false });
 });
 
 test('complete: before the end it changes nothing; a timer that ended while DSH was closed ends at the next start, counted once, focus only', async () => {

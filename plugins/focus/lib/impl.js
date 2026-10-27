@@ -16,7 +16,9 @@ export const inject = [];
 export const SETTINGS_DEFAULTS = Object.freeze({ focusMin: 25, shortMin: 5, longMin: 15, chime: true });
 const MINUTE_KEYS = ['focusMin', 'shortMin', 'longMin'];
 export const KINDS = Object.freeze(['focus', 'short', 'long', 'custom']);
-export const OPS = Object.freeze(['start', 'pause', 'resume', 'reset', 'set', 'complete']);
+export const OPS = Object.freeze(['start', 'pause', 'resume', 'reset', 'set', 'complete', 'seen', 'undo']);
+/** How long a Reset of a started timer can be undone (and only while nothing else changed). */
+export const UNDO_MS = 60_000;
 const FOCUS_DEFAULT_MS = 25 * 60_000;
 export const DURATION_MIN_MS = 10_000;
 export const DURATION_MAX_MS = 10_800_000; // 3 h
@@ -38,6 +40,20 @@ function shown(v) {
 }
 /** One short line for an error: its message, never a stack. */
 export const errorText = (e) => String((e instanceof Error ? e.message || e.name : e) ?? 'unknown error').replace(/\s+/g, ' ').trim().slice(0, 300);
+
+/** A file error in words people read (the code and the path go to the logs, not the window). */
+export function whyInWords(e) {
+  switch (e?.code) {
+    case 'ENOTDIR': case 'EEXIST': return 'a file is in the way';
+    case 'EACCES': case 'EPERM': return 'no permission to write there';
+    case 'EROFS': return 'the disk is read-only';
+    case 'ENOSPC': return 'the disk is full';
+    case 'ENOENT': return 'a folder on the way is missing';
+    default: return e?.code ? `error ${e.code}` : errorText(e);
+  }
+}
+/** How the window names Focus's folder: never a raw path (DESIGN.md section 9). */
+const DEFAULT_FOLDER = 'its default folder (focus in DSH\'s data folder)';
 
 /** The server's local day of a time, as YYYY-MM-DD. */
 export const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -62,8 +78,9 @@ const dshHome = (env = process.env) => env.DSH_HOME || join(homedir(), '.dsh');
 
 /**
  * The row's config, checked in words. A wrong value never stops Focus: it keeps its timer in the
- * default folder and says why (in DSH's log, focus.log and GET /api/focus/state `problems`).
- * @returns {{ dataDir: string, problems: string[] }}
+ * default folder and says why (in DSH's log, focus.log and GET /api/focus/state `problems`). The
+ * words name no path, since the window shows them; the logs add the folder (`fallback`).
+ * @returns {{ dataDir: string, problems: string[], fallback: string }}
  */
 export function checkConfig(raw, env = process.env) {
   const fallback = join(dshHome(env), 'focus');
@@ -73,18 +90,18 @@ export function checkConfig(raw, env = process.env) {
   const given = isRecord(raw) ? raw : {};
   const v = given.dataDir;
   if (v !== undefined && v !== null && v !== '') {
-    if (typeof v !== 'string' || v.trim() === '') problems.push(`dataDir must be a folder path, not ${shown(v)}; Focus keeps its timer in ${fallback}.`);
-    else if (!isAbsolute(expand(v.trim()))) problems.push(`dataDir must be a full path (starting with / or ~/), not ${shown(v)}; Focus keeps its timer in ${fallback}.`);
+    if (typeof v !== 'string' || v.trim() === '') problems.push(`dataDir must be a folder path, not ${shown(v)}; Focus keeps its timer in ${DEFAULT_FOLDER}.`);
+    else if (!isAbsolute(expand(v.trim()))) problems.push(`dataDir must be a full path (starting with / or ~/), not ${shown(v)}; Focus keeps its timer in ${DEFAULT_FOLDER}.`);
     else dataDir = resolve(expand(v.trim()));
   }
   for (const key of Object.keys(given)) if (key !== 'dataDir') problems.push(`${key} is not a setting of Focus and is ignored (its one setting is dataDir).`);
-  return { dataDir, problems };
+  return { dataDir, problems, fallback };
 }
 
 /** A first run's state. */
 export const defaultState = (day = localDay()) => ({
   settings: { ...SETTINGS_DEFAULTS },
-  timer: { kind: 'focus', durationMs: FOCUS_DEFAULT_MS, remainingMs: FOCUS_DEFAULT_MS, endAt: null, running: false, doneAt: null },
+  timer: { kind: 'focus', durationMs: FOCUS_DEFAULT_MS, remainingMs: FOCUS_DEFAULT_MS, endAt: null, running: false, doneAt: null, doneSeen: false },
   sessions: { date: day, focus: 0 },
   rev: 0,
 });
@@ -104,6 +121,8 @@ export function normalizeState(saved, day = localDay()) {
     endAt: isNum(t.endAt) ? t.endAt : null,
     running: t.running === true,
     doneAt: isNum(t.doneAt) ? t.doneAt : null,
+    // An end saved before 0.2.1 (no doneSeen) counts as seen, so an upgrade marks nothing old.
+    doneSeen: isNum(t.doneAt) ? (typeof t.doneSeen === 'boolean' ? t.doneSeen : true) : false,
   };
   if (state.timer.running && state.timer.endAt === null) state.timer.running = false; // without its endAt a running timer is unusable
   if (!state.timer.running) state.timer.endAt = null; // idle → remainingMs is the authority
@@ -126,6 +145,7 @@ const RUNNING = {
   start: 'A timer is already running. Pause or reset it first.',
   set: 'A timer is running. Pause or reset it first, then choose another length.',
 };
+const NO_UNDO = 'There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.';
 
 function validateSettings(patch) {
   if (!isRecord(patch)) throw new Refusal(400, 'settings must be a JSON object, such as {"chime": false}.');
@@ -159,7 +179,7 @@ function validateOp(op) {
  *
  * @param {object} options
  * @param {string} options.dataDir - state.json and focus.log live here.
- * @param {string[]} [options.problems] - what was wrong with the config, in words.
+ * @param {string[]} [options.problems] - what was wrong with the config, in words (no paths: the window shows them).
  * @param {(level: 'info'|'warn', text: string) => void} [options.say] - DSH's logger.
  */
 export function createFocus({
@@ -172,8 +192,9 @@ export function createFocus({
     mkdirSync(dataDir, { recursive: true });
   } catch (e) {
     folderOk = false;
-    storeProblem = `Focus could not make its folder ${dataDir} (${e?.code ?? errorText(e)}): the timer works, but is not kept across a restart.`;
-    say('warn', storeProblem);
+    // The window's words name no path; DSH's log has the folder and the code.
+    storeProblem = `Focus could not make its folder (${whyInWords(e)}): the timer works, but is not kept across a restart. DSH's log names the folder.`;
+    say('warn', `could not make its folder ${dataDir} (${e?.code ?? errorText(e)}): the timer works, but is not kept across a restart`);
   }
   const logFile = join(dataDir, 'focus.log');
   const statePath = join(dataDir, 'state.json');
@@ -218,8 +239,13 @@ export function createFocus({
       renameSync(tmp, statePath);
       if (storeProblem) { log('state.json written again'); storeProblem = null; }
     } catch (e) {
-      const why = `Focus could not save its timer to ${statePath} (${e?.code ?? errorText(e)}); it keeps counting, but a restart would lose the change.`;
-      if (storeProblem !== why) { log(why); say('warn', why); }
+      // The window's words name no path; focus.log and DSH's log have it, with the code.
+      const why = `Focus could not save its timer (${whyInWords(e)}); it keeps counting, but a restart would lose the change. DSH's log names the file.`;
+      if (storeProblem !== why) {
+        const logged = `could not save its timer to ${statePath} (${e?.code ?? errorText(e)}); it keeps counting, but a restart would lose the change`;
+        log(logged);
+        say('warn', logged);
+      }
       storeProblem = why;
     }
   }
@@ -227,6 +253,10 @@ export function createFocus({
   // ── the host's own end of a timer ──
   let timer = null;
   let stopped = false;
+  // The timer as it was before the last Reset of a started timer, for Undo: kept in memory only,
+  // and good only while nothing else changed (the revision is the same) and for UNDO_MS.
+  let undo = null;
+  const canUndo = (at) => undo !== null && undo.rev === state.rev && at - undo.at <= UNDO_MS;
   function arm() {
     if (timer) { clearTimer(timer); timer = null; }
     if (stopped || !state.timer.running) return;
@@ -244,7 +274,8 @@ export function createFocus({
     const t = state.timer;
     if (stopped || !t.running || t.endAt === null || t.endAt > at + slack) return false;
     const endedAt = t.endAt;
-    state.timer = { ...t, running: false, endAt: null, remainingMs: t.durationMs, doneAt: endedAt };
+    // doneSeen: false until a window shows the end in its panel (op seen) or the next timer starts.
+    state.timer = { ...t, running: false, endAt: null, remainingMs: t.durationMs, doneAt: endedAt, doneSeen: false };
     rollSessions(state, today());
     const endDay = day(endedAt);
     const late = at - endedAt > 5000 ? `, noted ${fmtS(at - endedAt)} after its end` : '';
@@ -260,12 +291,14 @@ export function createFocus({
     return true;
   }
 
+  const iso = (ms) => new Date(ms).toISOString();
+  /** One op on the timer; returns whether it changed anything, and leaves `undo` set after a Reset of a started timer. */
   function runOp(op, at) {
     const t = state.timer;
     switch (op.op) {
       case 'start':
-        state.timer = { kind: op.kind, durationMs: op.durationMs, remainingMs: op.durationMs, endAt: at + op.durationMs, running: true, doneAt: null };
-        log(`start ${op.kind} ${fmtS(op.durationMs)}, ends ${new Date(at + op.durationMs).toISOString()}`);
+        state.timer = { kind: op.kind, durationMs: op.durationMs, remainingMs: op.durationMs, endAt: at + op.durationMs, running: true, doneAt: null, doneSeen: false };
+        log(`start ${op.kind} ${fmtS(op.durationMs)}, ends ${iso(at + op.durationMs)}`);
         return true;
       case 'pause':
         if (!t.running) return false;
@@ -274,19 +307,35 @@ export function createFocus({
         return true;
       case 'resume':
         if (t.running) return false;
-        state.timer = { ...t, endAt: at + Math.max(0, t.remainingMs), running: true, doneAt: null };
-        log(`resume ${t.kind} at ${fmtS(t.remainingMs)} left`);
+        state.timer = { ...t, endAt: at + Math.max(0, t.remainingMs), running: true, doneAt: null, doneSeen: false };
+        log(`resume ${t.kind} at ${fmtS(t.remainingMs)} left, ends ${iso(state.timer.endAt)}`);
         return true;
-      case 'reset':
-        state.timer = { ...t, running: false, remainingMs: t.durationMs, endAt: null, doneAt: null };
-        log(`reset ${t.kind} to ${fmtS(t.durationMs)}`);
+      case 'reset': {
+        const started = t.running || t.remainingMs < t.durationMs;
+        const left = t.running ? Math.max(0, t.endAt - at) : t.remainingMs;
+        state.timer = { ...t, running: false, remainingMs: t.durationMs, endAt: null, doneAt: null, doneSeen: false };
+        log(`reset ${t.kind} to ${fmtS(t.durationMs)}${started ? ` (it was ${t.running ? 'running' : 'paused'} with ${fmtS(left)} left; Undo can bring it back for ${fmtS(UNDO_MS)})` : ''}`);
+        undo = started ? { timer: { ...t }, at } : null;
         return true;
+      }
       case 'set':
-        state.timer = { kind: op.kind, durationMs: op.durationMs, remainingMs: op.durationMs, endAt: null, running: false, doneAt: null };
+        state.timer = { kind: op.kind, durationMs: op.durationMs, remainingMs: op.durationMs, endAt: null, running: false, doneAt: null, doneSeen: false };
         log(`set ${op.kind} to ${fmtS(op.durationMs)}`);
         return true;
       case 'complete':
         return completeDue(at, DUE_SLACK_MS);
+      case 'seen':
+        if (t.running || t.doneAt === null || t.doneSeen) return false;
+        state.timer = { ...t, doneSeen: true };
+        log(`seen: the end of ${t.kind} at ${iso(t.doneAt)}`);
+        return true;
+      case 'undo': {
+        const back = undo.timer; // canUndo was checked before anything changed
+        undo = null;
+        state.timer = { ...back };
+        log(back.running ? `undo reset: ${back.kind} running again, ends ${iso(back.endAt)}` : `undo reset: ${back.kind} paused again at ${fmtS(back.remainingMs)} left`);
+        return true;
+      }
       default:
         return false;
     }
@@ -316,6 +365,7 @@ export function createFocus({
     const op = body.op != null ? validateOp(body.op) : null;
     completeDue(now());
     if (op && RUNNING[op.op] && state.timer.running) throw new Refusal(409, RUNNING[op.op]);
+    if (op?.op === 'undo' && !canUndo(now())) throw new Refusal(409, NO_UNDO);
     let did = false;
     if (patch) {
       const entries = Object.entries(patch).filter(([k, v]) => state.settings[k] !== v);
@@ -328,6 +378,8 @@ export function createFocus({
     const ran = op ? runOp(op, now()) : false;
     // complete ends the timer itself (completeDue saves); everything else is saved here, once.
     if (did || (ran && op.op !== 'complete')) changed();
+    // An Undo is good for the revision this Reset made, and no other.
+    if (undo && op?.op === 'reset') undo.rev = state.rev;
     return json({ ok: true, changed: did || ran, ...view() });
   }
 
@@ -365,6 +417,8 @@ export async function apply(ctx, rawConfig) {
   const { dataDir, problems } = checkConfig(rawConfig);
   const say = (level, text) => { try { ctx.logger?.[level]?.('focus: %s', text); } catch {} };
   for (const p of problems) say('warn', p);
+  // The window's words name no folder; the logs do.
+  if (problems.length) say('info', `its folder: ${dataDir}`);
   const focus = createFocus({ dataDir, problems, say });
   if (typeof ctx.effect === 'function') ctx.effect(() => () => focus.stop(), 'focus: timer');
   ctx.inject(['connection'], (c) => {
@@ -383,7 +437,7 @@ export async function apply(ctx, rawConfig) {
         requestBody: 'buffered',
         fetch: (req) => focus.handle(req),
       }), 'focus: state');
-      focus.log('started; serving /api/focus/state (GET, POST)');
+      focus.log(`started; serving /api/focus/state (GET, POST) from ${dataDir}`);
     } catch (e) {
       focus.log(`route registration failed: ${errorText(e)}`);
       say('warn', `route registration failed: ${errorText(e)}`);
