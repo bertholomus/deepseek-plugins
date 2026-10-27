@@ -66,7 +66,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { basename, dirname, join } from 'node:path';
-import { DshRun, checks, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
+import { DshRun, checks, dismissNotices, dshBin, findPlaywright, modeOf, openWindow, pluginsDir, repoRoot, setDark, shot, sleep, waitFor } from '../../../../test/e2e/harness.mjs';
 import { startFakeModel } from '../../../../test/e2e/fake-model.mjs';
 
 const bin = dshBin();
@@ -342,13 +342,15 @@ try {
             const row = page.getByText(TITLE, { exact: true }).first();
             await row.waitFor({ state: 'visible', timeout: 60000 });
             check('the session made through the bridge is in DSH\'s session list, by its title', await row.isVisible());
-            await row.click();
+            // DSH's first-run notices (its Preview Notice) can come late, over the window: closed before a click or a picture.
+            for (let i = 0; i < 4 && !(await row.click({ timeout: 5000 }).then(() => true, () => false)); i++) await dismissNotices(page);
             const first = await page.getByText(`First reply ${MARK}`, { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 }).then(() => true, () => false);
             check('opened, it shows the reply the bridge\'s prompt got', first);
             const live = `Live reply ${randomUUID().slice(0, 6)}`;
             await run.bridge('POST', `/sessions/${ids.first}/prompt`, { text: `E2E:say ${live}` });
             const shown = await page.getByText(live, { exact: true }).first().waitFor({ state: 'visible', timeout: 30000 }).then(() => true, () => false);
             check('a prompt sent through the bridge shows in the open chat as it is answered, with no reload', shown);
+            await dismissNotices(page);
             await page.mouse.move(700, 300);
             await shot(page, shots, 'bridged-session-light');
             await setDark(page, true);
@@ -446,6 +448,14 @@ try {
         model.release();
         await waitFor(() => answers(), 'the bridge to answer', 30000, 300);
         await waitFor(() => run.savedEvents(ids.torn).some((e) => e.type === 'turn/end'), 'the turn\'s end on disk', 10000, 100).catch(() => {});
+        // DSH loads its agent loop again after the teardown; a prompt that comes before it is back fails inside DSH
+        // ("cannot create effect on inactive context": dropped, end error). A throwaway session answering shows it is back.
+        await waitFor(async () => {
+            const probe = await call('POST', '/sessions', { workspacePath: run.ws, title: 'Agent loop back', text: 'E2E:say back', requestId: `e2e-probe-${randomUUID().slice(0, 8)}` });
+            if (probe.status !== 200) return false;
+            const r = (await call('GET', `/sessions/${probe.body.sessionId}/requests/${probe.body.prompt.requestId}?wait=10`)).body;
+            return r.state === 'answered' && r.reply?.text === 'back';
+        }, 'DSH\'s agent loop to take turns again', 60000, 500);
         const ends = run.savedEvents(ids.torn).filter((e) => e.type === 'turn/end').map((e) => e.data?.reason);
         check('on disk, DSH ended the turn aborted, reason disposed: torn down, not stopped by anyone', ends.length === 1 && ends[0]?.kind === 'aborted' && ends[0]?.reason?.kind === 'disposed', json(ends));
         const cut = (await call('GET', `/sessions/${ids.torn}/requests/${rid}?wait=30`)).body;

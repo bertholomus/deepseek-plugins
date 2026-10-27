@@ -120,7 +120,7 @@ test('log: a prompt is waiting until a turn reads it, read while that turn runs,
     assert.equal(requestState([ev(1, 'turn/start', { turn: 1 }), ev(2, 'user/message', asked('x', 'c')), ev(3, 'turn/end', { turn: 1, reason: { kind: 'error' } })], 'c').reply, null, 'a turn that ended without a reply says so');
 });
 
-test('log: a prompt not yet saved as a message: queued in DSH\'s inbox, taken by a running turn, or dropped when that turn was cut off', () => {
+test('log: a prompt not yet saved as a message: queued in DSH\'s inbox, taken by a running turn, or dropped when that turn was cut off or failed first', () => {
     const msg = (rpcId, id = rpcId) => ({ id, role: 'user', content: [{ type: 'text', text: 'x' }], source: { kind: 'user', rpcId } });
     const splice = (seq, target, start, removedCount, inserted = []) => ev(seq, 'agent/inbox/spliced', { target, start, removedCount, inserted });
     const queued = [splice(4, 'next-turn', 0, 0, [msg('other'), msg('r1')])];
@@ -132,6 +132,9 @@ test('log: a prompt not yet saved as a message: queued in DSH\'s inbox, taken by
     assert.deepEqual(requestState(taken, 'r1'), { requestId: 'r1', state: 'read', seq: 9, turn: 4 });
     // DSH stopped mid-step: the turn closed as interrupted on the next start, and the message never reached the log.
     assert.deepEqual(requestState([...taken, ev(10, 'turn/end', { turn: 4, reason: { kind: 'interrupted' } })], 'r1'), { requestId: 'r1', state: 'dropped', seq: 9, turn: 4, end: { seq: 10, kind: 'interrupted' } });
+    // The turn that took it failed before DSH saved it (seen when a prompt came while DSH loaded its agent loop again).
+    const failed = { kind: 'error', error: { message: 'cannot create effect on inactive context', code: 'UNKNOWN' } };
+    assert.deepEqual(requestState([...taken, ev(10, 'turn/end', { turn: 4, reason: failed })], 'r1'), { requestId: 'r1', state: 'dropped', seq: 9, turn: 4, end: { seq: 10, ...failed } });
     // A steer waits in the next-step list until the running turn's next step takes it.
     const steer = [ev(1, 'turn/start', { turn: 1 }), splice(2, 'next-step', 0, 0, [msg('s1')])];
     assert.equal(requestState(steer, 's1').state, 'queued');
