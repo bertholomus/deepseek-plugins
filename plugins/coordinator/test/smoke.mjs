@@ -5114,3 +5114,29 @@ test('config: a live text setting of the wrong type (YAML\'s bare 5 or yes) neve
     await coord.ctx.call('thread_start', { ask: 'Add CI that runs our tests.', title: 'Add CI', brief: 'Add a workflow.' });
     assert.equal([...host.live.values()].filter((a) => a.id !== coord.id).length, 1, 'and a thread starts');
 });
+
+test('the log says a live setting went wrong and was put right, and what a pause or resume set (round-1 nit 10)', async () => {
+    const { host, config, dir } = setup({}, undefined, { gateway: true, presets: true });
+    await tick();
+    const log = () => readFileSync(join(dir, 'coordinator.log'), 'utf8');
+    assert.doesNotMatch(log(), / config-problem /);
+    // Before, only the page named a live setting saved wrong; the log never did.
+    saveDefaults(host, config, { threadPermission: 'nonsense' });
+    await tick();
+    assert.equal(log().match(/ config-problem threadPermission\n/g)?.length, 1);
+    await host.provided.get('dshPluginCoordinatorRemote').list();
+    assert.equal(log().match(/ config-problem threadPermission\n/g)?.length, 1, 'once, not at each read of the page');
+    saveDefaults(host, config, { threadPermission: 'default' });
+    await tick();
+    assert.match(log(), / config-fixed threadPermission\n/);
+    // A wrong setting at start is logged there too.
+    const again = setup({ threadModel: 5 }, undefined, { gateway: true, presets: true });
+    await tick();
+    assert.equal(readFileSync(join(again.dir, 'coordinator.log'), 'utf8').match(/ config-problem threadModel\n/g)?.length, 1, 'once, though it is both a start and a live problem');
+    // Pause and resume read apart: the log says the value each set (before, both read "settings <chat> paused").
+    const remote = host.provided.get('dshPluginCoordinatorRemote');
+    await remote.update(CHAT, { paused: true });
+    await remote.update(CHAT, { paused: false });
+    await remote.update(CHAT, { paused: null });
+    assert.match(log(), new RegExp(` settings ${CHAT} paused=true\n[^]* settings ${CHAT} paused=false\n[^]* settings ${CHAT} paused=default\n`));
+});

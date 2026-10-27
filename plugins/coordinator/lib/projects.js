@@ -815,7 +815,22 @@ export class ProjectManager {
             const names = this.permissionCatalog().options.map((o) => `"${o.value}"`).join(', ');
             out.push({ key: 'threadPermission', message: `threadPermission must be a permission DSH offers (${names}) or "default" (it is ${JSON.stringify(permission.trim()).slice(0, 80)}), so chats that use this default start no new threads until you fix it.` });
         }
+        this.logLiveProblems(out.slice(this.fixedProblems.length));
         return out;
+    }
+
+    /**
+     * A live setting that is wrong, in the log as the fixed ones are
+     * (index.js): `config-problem <key>` once when it goes wrong, and
+     * `config-fixed <key>` once when it is put right (round-1 nit 10: only
+     * the page said so). Read at start and at each read of the problems.
+     */
+    logLiveProblems(live) {
+        const keys = new Set(live.map((p) => p.key));
+        const was = this.loggedProblems ?? new Set(this.fixedProblems.map((p) => p.key));
+        for (const key of keys) if (!was.has(key)) this.log(`config-problem ${key}`);
+        for (const key of was) if (!keys.has(key) && !this.fixedProblems.some((p) => p.key === key)) this.log(`config-fixed ${key}`);
+        this.loggedProblems = new Set([...keys, ...this.fixedProblems.map((p) => p.key)]);
     }
 
     /**
@@ -1492,6 +1507,8 @@ export class ProjectManager {
         this.log('defaults saved');
         // Your tools, or the list of them, may have changed.
         try { this.rewall(); } catch (error) { this.log(`error wall ${String(error?.message ?? error).slice(0, 200)}`); }
+        // A setting saved wrong (or put right) says so in the log, as the page does.
+        try { this.configProblems(); } catch (error) { this.log(`error config-check ${String(error?.message ?? error).slice(0, 200)}`); }
     }
 
     /** Whether the user paused a coordinating chat's threads: no new ones start, and their reports wait. */
@@ -1551,6 +1568,7 @@ export class ProjectManager {
         this.netTimer = setInterval(() => void this.sweepNet(), NET_SWEEP_MS);
         this.netTimer.unref?.();
         for (const agent of this.ctx.agents.list?.() ?? []) this.maybeInstall(agent);
+        try { this.configProblems(); } catch (error) { this.log(`error config-check ${String(error?.message ?? error).slice(0, 200)}`); }
         await this.refreshRecords();
         if (this.disposed) return;
         // A coordinating chat archived or unarchived in DSH while the plugin was off: its threads follow it now.
@@ -3830,7 +3848,8 @@ export class ProjectManager {
         this.store.putSettings(projectId, next);
         let flushed = 0;
         if (wasPaused && !this.paused(projectId)) flushed = await this.flushPending(projectId);
-        this.log(`settings ${projectId} ${Object.keys(next).join(',')}`);
+        // With the values, so a pause and a resume read apart in the log (round-1 nit 10).
+        this.log(`settings ${projectId} ${Object.entries(next).map(([key, value]) => `${key}=${value === undefined ? 'default' : String(value).slice(0, 80)}`).join(',')}`);
         return { notes, flushed };
     }
 
