@@ -99,7 +99,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `.${P}-set-hint{margin-top:2px;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}`,
         `.${P}-set-control{flex:0 0 auto;display:flex;align-items:center;gap:10px}`,
         `.${P}-choice{display:inline-flex}.${P}-seg-none>[aria-hidden="true"]{visibility:hidden}`,
-        `.${P}-set-reset{padding:0;border:0;background:none;font:var(--dsw-font-xs-13);color:var(--dsw-alias-link,var(--dsw-alias-state-business-primary));text-decoration:underline;text-underline-offset:2px;cursor:pointer}`,
+        // "Changed" and "Use the default" as DSH's own field draws them beside a typed value: one look for every row.
+        `.${P}-set-badges{display:inline-flex;align-items:center;gap:8px}`,
+        `.${P}-set-reset{padding:0;border:0;background:none;font:inherit;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-secondary);cursor:pointer}`,
+        `.${P}-set-reset:hover:not(:disabled){color:var(--dsw-alias-label-primary)}.${P}-set-reset:disabled{cursor:default}`,
         `.${P}-set-reset:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px;border-radius:var(--dsw-radius-xs)}`,
         `.${P}-set-note{margin:10px 0 0;font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary);max-width:72ch}`,
         `.${P}-set-group{margin:14px 0 2px;font:var(--dsw-font-xs-strong-13);color:var(--dsw-alias-label-secondary)}`,
@@ -113,6 +116,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag[data-tone="info"]{color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 65%,var(--dsw-alias-label-primary))}`,
         // Quiet and neutral words ("idle", "stopped") would be drawn in DSH's glyph colour, which is for glyphs, not small text.
         `:is(.${P}-page,.${P}-pane,.${P}-pop) .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:var(--${P}-text-2)}`,
+        // The settings form sits on DSH's Plugins page, outside the page's colours: the same secondary text, said here.
+        `.${P}-settings .${P}-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}`,
         `.${P}-choice{display:inline-flex;flex-direction:column;align-items:inherit;gap:4px;min-width:0}`,
         `.${P}-choice-hint{font:var(--dsw-font-xxs-12);color:var(--${P}-text-2)}`,
         `.${P}-choice[aria-busy="true"]{cursor:progress}`,
@@ -727,9 +732,11 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     /**
      * A setting is wrong, so the plugin does no work: which setting, what it
      * must be, and where to change it (its settings in Plugins when the
-     * person can change it there, else DSH's profile).
+     * person can change it there, else DSH's profile). `profileApplies`: the
+     * plugin restarts with its new settings when DSH's profile is saved, so
+     * no restart of DSH is needed (else the line says to restart DSH).
      */
-    function SettingsProblem({ name, packageName, problem }) {
+    function SettingsProblem({ name, packageName, problem, profileApplies = false }) {
         const live = problem?.live === true;
         const its = whose(name);
         return h('div', { className: `${P}-trouble`, role: 'alert', 'data-suite-trouble': 'setting' },
@@ -737,7 +744,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             h('p', { className: `${P}-trouble-text` }, `${String(problem?.text ?? 'A setting is wrong').replace(/\.$/, '')}.`),
             h('p', { className: `${P}-trouble-text` }, live
                 ? `Change it in ${its} settings in Plugins. ${name} starts working again as soon as you save.`
-                : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
+                : profileApplies
+                    ? `Change it in ${its} entry in DSH's profile (cordis.patch.yml). DSH applies the file when you save it.`
+                    : `Change it in ${its} entry in DSH's profile (cordis.patch.yml), then restart DSH.`),
             live && typeof nav.current?.openBundle === 'function'
                 ? h('div', { className: `${P}-actions` }, h(ui.Button, { variant: 'primary', size: 'sm', onClick: () => openPlugin(packageName, { focus: problem?.key }) }, `Open ${its} settings`)) : null);
     }
@@ -903,8 +912,12 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
     function SettingRow({ f, state, disabled, actions }) {
         const id = `${P}-set-${f.name}`;
         const edit = (text) => actions.edit(f.name, text);
+        // As DSH's own field marks a typed value: "Changed", then "Use the default".
         const reset = state.overridden
-            ? h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default') : null;
+            ? h('span', { className: `${P}-set-badges` },
+                h(ui.Tag, { tone: 'neutral', className: `${P}-tag` }, 'Changed'),
+                h('button', { type: 'button', className: `${P}-set-reset`, disabled, onClick: () => actions.resetField(f.name), 'aria-label': `Use the default for ${f.title}` }, 'Use the default'))
+            : null;
         if (f.kind === 'switch' || f.kind === 'choice') {
             return h('div', { className: `${P}-set-row`, 'data-suite-setting': f.name, ...(state.invalid ? { 'data-suite-invalid': '' } : {}) },
                 h('div', { className: `${P}-set-text` },
@@ -1116,7 +1129,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             entry: 'Coding agents',
             title: 'Coding agents',
             summary: 'Command-line coding agents, each in a terminal tab beside its own DSH session. They start again after DSH restarts, your messages are typed in and proven read, and what each one is doing shows here, on its session\'s row and in Decisions.',
-            disabled: 'Agent Terminals is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it starts, reads and types nothing. To use it, set enabled to true there and restart DSH. To remove it instead, switch it off in Plugins.',
+            disabled: 'Agent Terminals is switched off in DSH\'s profile (enabled: false in its entry in cordis.patch.yml), so it starts, reads and types nothing. To use it, set enabled to true there; DSH applies it when you save the file. To remove it instead, switch it off in Plugins.',
             noTerminals: 'DSH\'s terminals are not running, so no agent can start or be reached. Restart DSH: agents that were running start again by themselves.',
             agents: 'Agents',
             none: 'No coding agents yet',
@@ -1195,7 +1208,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             `.${P}-textarea::placeholder,.${P}-input::placeholder{color:var(--${P}-text-2)}`,
             `.${P}-hint{font:var(--dsw-font-xs-13);color:var(--${P}-text-2)}`,
             `.${P}-details{margin-top:8px}`,
-            `.${P}-details>summary{cursor:pointer;font:var(--dsw-font-xs-13);color:var(--${P}-link);width:max-content;max-width:100%;border-radius:var(--dsw-radius-xs)}`,
+            // A disclosure in small type: the page's secondary text colour, which keeps 4.5:1 on Wallpaper's reading glass
+            // where the link colour does not (about 3.2:1 at a low tint over a mid picture in light).
+            `.${P}-details>summary{cursor:pointer;font:var(--dsw-font-xs-13);color:var(--${P}-text-2);width:max-content;max-width:100%;border-radius:var(--dsw-radius-xs)}`,
             `.${P}-details>summary:focus-visible{outline:2px solid var(--${P}-ring);outline-offset:1px}`,
             `.${P}-msgs{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}`,
             `.${P}-msg{display:flex;align-items:flex-start;gap:8px;min-width:0}`,
@@ -1260,7 +1275,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const preset = makeStore(undefined);
         /** An agent to bring into view on the page: `{ key, n }`. */
         const spotlight = makeStore(undefined);
-        /** An agent's terminal tab to show once its session is on screen: `{ sessionId, terminalId, at }`. */
+        /** An agent's terminal tab to show once its session is on screen: `{ key, sessionId, terminalId, at }`. */
         const reveal = makeStore(undefined);
 
         const agentOfSession = (sessionId) => marks.get().agents.find((agent) => agent.sessionId === sessionId);
@@ -1377,11 +1392,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const want = reveal.get();
                 if (want && now - want.at > 10000) reveal.set(undefined);
                 const m = marks.get();
-                if (m.off) return;
+                // While nobody follows the agents (switched off, a wrong setting), no tab opens by itself; Open its terminal still brings the agent's.
+                if (m.off && !want) return;
                 let sessionId;
                 try { sessionId = sidebar.mounted?.getSnapshot?.(); } catch { sessionId = undefined; }
                 if (typeof sessionId !== 'string') return;
-                const agent = agentOfSession(sessionId);
+                const agent = m.off
+                    ? (want?.sessionId === sessionId ? { key: want.key, sessionId, terminalId: want.terminalId, running: true } : undefined)
+                    : agentOfSession(sessionId);
                 if (!agent) return;
                 const asked = want?.sessionId === sessionId && want.terminalId === agent.terminalId;
                 const tabs = terminalTabs(sessionId).map((tab) => ({ tab, id: boundTerminal(sidebar, sessionId, tab) }));
@@ -1431,7 +1449,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             try { offs.push(sidebar.openTabs?.subscribe?.(soon)); } catch { /* an older DSH */ }
             // A terminal DSH lists later than its tab looked, or a session whose surface was not ready: looked at again.
             const every = setInterval(() => {
-                if (doc?.visibilityState !== 'hidden' && marks.get().agents.length) soon();
+                if (doc?.visibilityState !== 'hidden' && (marks.get().agents.length || reveal.get())) soon();
             }, 2000);
             soon();
             return () => {
@@ -1466,7 +1484,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         const folderName = (folder) => String(folder ?? '').replace(/\/+$/, '').split('/').pop() || String(folder ?? '');
 
         /** How a stopped agent comes back, in words. */
-        const againText = (agent) => (agent.canResume ? 'Start again resumes its conversation.' : 'Start again runs it anew: this program cannot resume a conversation.');
+        const againText = (agent) => (typeof agent.again === 'string' && agent.again ? agent.again
+            : agent.canResume ? 'Start again resumes its conversation.' : 'Start again runs it anew: this program cannot resume a conversation.');
 
         /**
          * The line under the list, kept true: a message you sent says where
@@ -1494,15 +1513,16 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         }
 
         /** What an action did, in a line (shown where the person is looking, and read out). */
-        function saidText(method, agent, value) {
+        function saidText(method, agent, value, args) {
             const name = agent?.name ? `“${agent.name}”` : 'The agent';
             switch (method) {
                 case 'send':
-                    if (value?.delivery?.state === 'waiting' && value.delivery.why) return `Queued for ${name}: ${String(value.delivery.why).replace(/\.$/, '')}.`;
-                    return agent?.keepsTranscript === false ? `Queued for ${name}. It is typed in when the agent is ready.` : `Queued for ${name}. It is typed in when the agent is ready, and marked delivered once its transcript shows it.`;
+                case 'resend':
+                    if (value?.delivery?.state === 'waiting' && value.delivery.why) return `Queued for ${name}${method === 'resend' ? ' again' : ''}: ${String(value.delivery.why).replace(/\.$/, '')}.`;
+                    return agent?.keepsTranscript === false ? `Queued for ${name}${method === 'resend' ? ' again' : ''}. It is typed in when the agent is ready.` : `Queued for ${name}${method === 'resend' ? ' again' : ''}. It is typed in when the agent is ready, and marked delivered once its transcript shows it.`;
                 case 'cancel': return 'Taken back before it was typed in.';
                 case 'stop': return `Stopped ${name}. ${againText(value?.agent ?? agent ?? {})}`;
-                case 'startAgain': return value?.problem ? '' : `Started ${name} again.`;
+                case 'startAgain': return value?.problem ? '' : args?.fresh ? `Started ${name} anew, with a new conversation.` : `Started ${name} again.`;
                 case 'forget': return `Forgot ${name}. Its session stays in DSH.`;
                 default: return '';
             }
@@ -1538,10 +1558,14 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 h('path', { d: 'M9 12H13' }));
         }
 
-        /** DSH's state dot for an agent's state, where it has one. */
+        /**
+         * DSH's state dot for an agent's state, where it has one. A program
+         * that keeps no transcript is only "running": nobody knows whether it
+         * works, so it gets the steady terminal glyph, never the working spinner.
+         */
         function dotOf(agent) {
             if (agent.status === 'waiting on you') return 'warning';
-            if (agent.status === 'working' || agent.status === 'starting' || agent.status === 'running') return 'ongoing';
+            if (agent.status === 'working' || agent.status === 'starting') return 'ongoing';
             return undefined;
         }
 
@@ -1591,8 +1615,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             return null;
         }
 
-        function MessageRow({ item, busy, onCancel }) {
+        function MessageRow({ item, busy, onCancel, onResend }) {
             const word = deliveryWord(item);
+            // A message that did not go in, or was not proven: sent again as it was (its whole text, from the host).
+            const again = onResend && !item.resent && (item.state === 'failed' || item.state === 'not proven');
             return h('li', { className: `${P}-msg`, 'data-agent-terminals-message': item.state },
                 h('div', { className: `${P}-msg-main` },
                     h('div', { className: `${P}-msg-text` }, item.text),
@@ -1603,7 +1629,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                     item.why && item.state !== 'delivered' ? h('div', { className: `${P}-why` }, item.why) : null),
                 h('div', { className: `${P}-item-side` },
                     h(kit.StateTag, { word }),
-                    OPEN.has(item.state) ? h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void onCancel(item) }, 'Take back') : null));
+                    OPEN.has(item.state) ? h(ui.Button, { variant: 'ghost', size: 'sm', disabled: busy, onClick: () => void onCancel(item) }, 'Take back') : null,
+                    again ? h(ui.Button, {
+                        variant: 'ghost',
+                        size: 'sm',
+                        disabled: busy,
+                        'data-agent-terminals-resend': '',
+                        title: item.state === 'not proven' ? 'Look at its terminal first: the message may still be in its input box.' : undefined,
+                        onClick: () => void onResend(item),
+                    }, 'Send again') : null));
         }
 
         function SendBox({ agent, busy, send }) {
@@ -1765,7 +1799,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 agent.lastReply?.text ? h(LastReply, { agent }) : null,
                 messages.length ? h('div', { className: `${P}-details` },
                     h('div', { className: `${P}-label` }, `Messages (${messages.length})`),
-                    h('ul', { className: `${P}-msgs` }, ...shown.map((item) => h(MessageRow, { key: item.id, item, busy, onCancel: (m) => doing('cancel', { id: m.id }) }))),
+                    h('ul', { className: `${P}-msgs` }, ...shown.map((item) => h(MessageRow, { key: item.id, item, busy, onCancel: (m) => doing('cancel', { id: m.id }), onResend: followed ? (m) => doing('resend', { id: m.id }) : undefined }))),
                     messages.length > shown.length ? h('div', { style: { marginTop: '6px' } }, h(ui.Button, { variant: 'ghost', size: 'sm', onClick: () => setAll(true) }, `Show all ${messages.length}`)) : null) : null,
                 followed ? h(SendBox, { agent, busy, send }) : null,
                 failure ? h('p', { className: `${P}-alert`, role: 'alert', tabIndex: -1, ref: alertRef, 'data-agent-terminals-error': '' }, /^Not /.test(failure) ? failure : `Not done: ${failure}`) : null,
@@ -1851,7 +1885,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 onStarted(value?.agent, value?.problem);
             };
             const ids = { program: `${P}-program`, args: `${P}-args`, data: `${P}-data`, folder: `${P}-folder`, name: `${P}-name`, task: `${P}-task`, folders: `${P}-folders` };
-            return h(kit.Card, { title: TEXT.start, sub: TEXT.startSub, attrs: { 'data-agent-terminals-start': '' } },
+            return h(kit.Card, { title: TEXT.start, main: true, sub: TEXT.startSub, attrs: { 'data-agent-terminals-start': '' } },
                 h('form', { className: `${P}-form`, onSubmit: submit, noValidate: true },
                     found.length || recent.length ? h('div', { className: `${P}-field` },
                         found.length ? h('div', { className: `${P}-label`, id: `${P}-found` }, 'Found on this computer') : null,
@@ -1863,13 +1897,20 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             onClick: () => pick(d),
                         }, h('span', { className: `${P}-code` }, d.program), h('span', { className: `${P}-chip-sub` }, [plural(d.conversations, 'conversation'), d.latest ? `last ${kit.agoText(d.latest)}` : '', d.path ? '' : 'not found where DSH looks for programs'].filter(Boolean).join(' · '))))) : null,
                         recent.length ? h('div', { className: `${P}-label`, id: `${P}-recent` }, 'Used here before') : null,
-                        recent.length ? h('div', { className: `${P}-chips`, role: 'group', 'aria-labelledby': `${P}-recent` }, ...recent.map((r, i) => h('button', {
-                            key: `r-${i}`,
-                            type: 'button',
-                            className: `${P}-chip`,
-                            'data-agent-terminals-recent': String(i),
-                            onClick: () => pick(r),
-                        }, h('span', { className: `${P}-code` }, [r.program, ...(r.args ?? [])].join(' ')), h('span', { className: `${P}-chip-sub` }, data.styles.find((s) => s.id === r.style)?.label ?? '')))) : null) : null,
+                        recent.length ? h('div', { className: `${P}-chips`, role: 'group', 'aria-labelledby': `${P}-recent` }, ...recent.map((r, i) => {
+                            // Paths as people read them (~/…), the whole of each on hover.
+                            const shown = kit.isRecord(r.shown) ? r.shown : {};
+                            const program = typeof shown.program === 'string' && shown.program ? shown.program : r.program;
+                            const folder = typeof shown.folder === 'string' && shown.folder ? shown.folder : typeof r.folder === 'string' ? r.folder : '';
+                            return h('button', {
+                                key: `r-${i}`,
+                                type: 'button',
+                                className: `${P}-chip`,
+                                'data-agent-terminals-recent': String(i),
+                                title: [[r.program, ...(r.args ?? [])].join(' '), typeof r.folder === 'string' && r.folder ? `conversations in ${r.folder}` : ''].filter(Boolean).join('\n'),
+                                onClick: () => pick(r),
+                            }, h('span', { className: `${P}-code` }, [program, ...(r.args ?? [])].join(' ')), h('span', { className: `${P}-chip-sub` }, [data.styles.find((s) => s.id === r.style)?.label ?? '', folder ? `conversations in ${folder}` : ''].filter(Boolean).join(' · ')));
+                        })) : null) : null,
                     h('div', { className: `${P}-row2` },
                         h('div', { className: `${P}-field` },
                             h('label', { className: `${P}-label`, htmlFor: ids.program }, 'Program'),
@@ -1937,7 +1978,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const [all, setAll] = React.useState(false);
             const names = React.useMemo(() => new Map(data.agents.map((a) => [a.key, a.name])), [data.agents]);
             const shown = all ? data.history : data.history.slice(0, 30);
-            return h(kit.Card, { title: TEXT.history, sub: TEXT.historySub, attrs: { 'data-agent-terminals-history': '' } },
+            return h(kit.Card, { title: TEXT.history, main: true, sub: TEXT.historySub, attrs: { 'data-agent-terminals-history': '' } },
                 data.history.length === 0 ? h(kit.Empty, { title: TEXT.noHistory, text: TEXT.noHistoryText })
                     : [
                         h('ul', { key: 'l', className: `${P}-list` }, ...shown.map((entry) => h(HistoryRow, { key: entry.id, entry, names, onOpen }))),
@@ -1959,9 +2000,9 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const { problem, value } = await run(method, args);
                 setBusyKey(undefined);
                 if (!problem) {
-                    const text = method === 'startAgain' && value?.problem ? '' : saidText(method, agent, value);
+                    const text = method === 'startAgain' && value?.problem ? '' : saidText(method, agent, value, args);
                     // A message you sent: the line follows it (typed in, delivered, not proven).
-                    const follow = method === 'send' && value?.delivery?.id ? { delivery: value.delivery.id, key: agent?.key } : {};
+                    const follow = (method === 'send' || method === 'resend') && value?.delivery?.id ? { delivery: value.delivery.id, key: agent?.key } : {};
                     if (text) setSaid((was) => ({ text, n: was.n + 1, at: Date.now(), ...follow }));
                     if (method === 'startAgain' && value?.problem) return `It could not start: ${value.problem}`;
                 }
@@ -1984,14 +2025,15 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                         : data.problem
                             ? [
                                 h(kit.Card, { key: 'head', title: TEXT.title, headingLevel: 1, main: true, sub: TEXT.summary, attrs: { 'data-agent-terminals-header': 'problem' } },
-                                    h(kit.SettingsProblem, { name: 'Agent Terminals', packageName: BUNDLE, problem: data.problem })),
+                                    h(kit.SettingsProblem, { name: 'Agent Terminals', packageName: BUNDLE, problem: data.problem, profileApplies: true })),
                                 data.agents.length ? h(AgentsCard, { key: 'agents', data, act, busyKey, said, onOpen, openTerminal, onStart }) : null,
                                 h(HistoryCard, { key: 'history', data, onOpen }),
                             ]
                             : [
                                 h(HeaderCard, { key: 'head', data, onStart }),
                                 live.error ? h(kit.ErrorLine, { key: 'refresh', text: live.error, onRetry: live.refresh }) : null,
-                                data.enabled ? h(AgentsCard, { key: 'agents', data, act, busyKey, said, onOpen, openTerminal, onStart }) : null,
+                                // Switched off, its agents still show: one that runs in its terminal says so, not followed, with only Open its terminal.
+                                data.enabled || data.agents.length ? h(AgentsCard, { key: 'agents', data, act, busyKey, said, onOpen, openTerminal, onStart }) : null,
                                 data.enabled ? h(StartCard, { key: 'start', data, onStarted, formRef }) : null,
                                 h(HistoryCard, { key: 'history', data, onOpen }),
                             ]);
@@ -2025,10 +2067,10 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
             const m = useStore(marks);
             const agent = m.off ? undefined : m.agents.find((a) => a.sessionId === sessionId);
             if (!agent) return null;
-            const dot = dotOf(agent) ?? 'idle';
+            const dot = dotOf(agent) ?? (agent.status === 'idle' ? 'idle' : undefined);
             return h('div', { className: `${P}-hover`, 'data-agent-terminals-hover': agent.status },
                 h('div', { className: `${P}-hover-head` },
-                    ui.StateDot ? h(ui.StateDot, { state: dot }) : null,
+                    dot && ui.StateDot ? h(ui.StateDot, { state: dot }) : h(TerminalGlyph, { size: 12, stopped: agent.status === 'stopped' }),
                     h('span', null, `Coding agent in its terminal: ${statusWord(agent)}`)),
                 agent.detail ? h('div', { className: `${P}-hover-line` }, String(agent.detail).length > 160 ? `${String(agent.detail).slice(0, 159)}…` : agent.detail) : null);
         }
@@ -2106,7 +2148,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 /** Open the agent's session with its terminal tab in front (opened if it is not there). */
                 openTerminal(agent) {
                     if (!agent?.sessionId || !agent.terminalId) return;
-                    reveal.set({ sessionId: agent.sessionId, terminalId: agent.terminalId, at: Date.now() });
+                    reveal.set({ key: agent.key, sessionId: agent.sessionId, terminalId: agent.terminalId, at: Date.now() });
                     views.openSession(agent.sessionId);
                 },
                 startHere(sessionId, title) {

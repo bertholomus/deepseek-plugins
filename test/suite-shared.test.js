@@ -791,6 +791,56 @@ test('kit: the settings form flags a saved value that does not fit, with what fi
     assert.equal(control.props.value, '');
     assert.equal(control.props.className, 'dshx-seg-none');
     assert.ok(kit.css.some((rule) => rule.includes('.dshx-seg-none>[aria-hidden="true"]{visibility:hidden}')), 'its pill is hidden');
+    // A changed switch or choice is marked as DSH's own field marks a typed value: "Changed", then "Use the default", one look.
+    for (const name of ['resume', 'mode']) {
+        const badges = elementsOf(row(name)).find((e) => e.props?.className === 'dshx-set-badges');
+        assert.ok(badges, name);
+        const tag = elementsOf(badges).find((e) => e.type === 'Tag');
+        assert.equal(tag?.props.tone, 'neutral', name);
+        assert.equal(textIn(tag), 'Changed', name);
+        const reset = elementsOf(badges).find((e) => e.type === 'button');
+        assert.equal(textIn(reset), 'Use the default', name);
+        assert.equal(reset.props['aria-label'], `Use the default for ${fields.find((f) => f.name === name).title}`);
+    }
+    const resetRule = kit.css.find((rule) => rule.startsWith('.dshx-set-reset{'));
+    assert.match(resetRule, /font-size:12px;line-height:1\.5;color:var\(--dsw-alias-label-secondary\)/, 'as DSH draws its own');
+    assert.doesNotMatch(resetRule, /underline|--dsw-alias-link/);
+    assert.ok(kit.css.includes('.dshx-settings .dshx-tag:is([data-tone="quiet"],[data-tone="neutral"]){color:color-mix(in srgb,var(--dsw-alias-label-secondary) 80%,var(--dsw-alias-label-primary))}'), '"Changed" in the suite\'s secondary text, as on its pages');
+});
+
+test('kit: a number saved in quotes (#32) is flagged as the form opens, says the quotes are what is wrong, and the number typed without them saves', () => {
+    const kit = kitWith();
+    const fields = [
+        { name: 'wait', kind: 'number', title: 'Wait', hint: '', default: 600, min: 10, max: 86400 },
+        { name: 'waits', kind: 'numbers', title: 'Waits', hint: '', default: [120, 600], min: 0, max: 86400 },
+        { name: 'resume', kind: 'switch', title: 'Resume', hint: '', default: true },
+    ];
+    const spec = kit.fieldSpec(fields[0]);
+    // The stored "600" shows as "600" with its quotes: it does not parse, so the form flags it at once.
+    const shown = spec.format('600');
+    assert.equal(spec.parse(shown), undefined);
+    // Typed back without the quotes, it is a change (the text differs from what is stored) and it parses to the number.
+    assert.notEqual('600', shown);
+    assert.deepEqual(spec.parse('600'), { kind: 'set', value: 600 });
+    assert.deepEqual(kit.fieldSpec(fields[1]).parse('120, 600'), { kind: 'set', value: [120, 600] });
+    const snap = {
+        writable: true, saving: false,
+        wait: { text: shown, overridden: true, invalid: false },
+        waits: { text: kit.fieldSpec(fields[1]).format('120, 600'), overridden: true, invalid: false },
+        resume: { text: kit.fieldSpec(fields[2]).format('yes'), overridden: true, invalid: false },
+    };
+    const form = { subscribe: () => () => {}, getSnapshot: () => snap, actions: { edit() {}, resetField() {}, save() {}, discard() {} } };
+    const body = kit.SettingsBody({ form, name: 'X', fields });
+    const row = (name) => elementsOf(body).find((e) => e.props?.['data-suite-setting'] === name);
+    const field = (name) => elementsOf(row(name)).find((e) => e.type === 'SettingsValueField');
+    assert.equal(field('wait').props.invalid, true);
+    assert.equal(field('wait').props.text, '"600"');
+    assert.equal(field('wait').props.invalidLabel, 'It is saved as text, in quotes. Type a whole number from 10 to 86400, without the quotes, then save.');
+    assert.equal(row('wait').props['data-suite-invalid'], '');
+    assert.equal(field('waits').props.invalidLabel, 'It is saved as text, in quotes. Type up to 10 whole numbers from 0 to 86400, with commas between them, without the quotes, then save.');
+    assert.match(textIn(row('resume')), /The saved value is neither on nor off\. Switch it to the one you want, then save\./);
+    // A number out of range keeps its own words.
+    assert.equal(kit.invalidWords(fields[0], '3'), 'A whole number from 10 to 86400, or empty for the default (600).');
 });
 
 test('kit: a number saved in quotes (#32) is flagged as the form opens, says the quotes are what is wrong, and the number typed without them saves', () => {
