@@ -5382,7 +5382,35 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 scope.slots.inject('sidebar.right.pane.tab.title', () => scope.slots.register({
                     name: 'sidebar.right.pane.tab.title', key: IDS.changes,
                 }, ThreadChangesTitle));
+                // Switched off: its tabs in the chat on screen close first, while their kinds are still registered, so
+                // none is left saying "Nothing here can view this kind of content yet" (round-1 finding 8). DSH keeps
+                // other chats' layouts out of reach; their tabs read that until the plugin is on again.
+                scope.effect(() => {
+                    const sidebar = ctx.sidebarRight;
+                    return () => closeOwnTabs(sidebar);
+                }, 'coordinator: close its tabs when switched off');
             });
+        }
+
+        /** Close the plugin's own right-sidebar tabs (a thread's chat, the Threads pane, a thread link, Changes) in the chat on screen. */
+        function closeOwnTabs(sidebar) {
+            const ours = new Set(Object.values(KINDS));
+            let onScreen;
+            try { onScreen = sidebar?.mounted?.getSnapshot?.(); } catch { onScreen = undefined; }
+            if (typeof onScreen !== 'string' || onScreen === '') return 0;
+            let tabs;
+            try { tabs = sidebar.tabsIn?.(onScreen); } catch { tabs = undefined; }
+            let closed = 0;
+            for (const tab of Array.isArray(tabs) ? [...tabs] : EMPTY) {
+                if (!ours.has(tab?.kind) || typeof tab.id !== 'string') continue;
+                try {
+                    sidebar.close(tab.id);
+                    closed += 1;
+                } catch (error) {
+                    console.warn(`[coordinator] could not close its tab: ${error?.message ?? error}`);
+                }
+            }
+            return closed;
         }
 
         // ── DSH's session list ─────────────────────────────────────────────
@@ -6406,7 +6434,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.internals = {
             withHit, valueIn, takeKnown, projectContext, threadRow, rowsOf, countsOf, summaryText, cardsOf, cardView, resolveLink, linkTarget, chatAddress, chatSessionOf, isThreadRow, ago, rowPlace, sectionGroups, nestingCss, nestedPlaces, nestedOrder, markNesting, readInOrder, describeRows, markUnread, undoRows, rowWords,
             catalogView, catalogSource, picksIn, followDefault, ThreadRow, resolveRoute, effortNote, liveNote, settingsDialog, hostLink, errorText, noteText,
-            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, holdOf, threadNames,
+            selectionIn, selectionText, summaryModels, sourceLine, toldText, projectFacts, pausedText, withHeld, holdOf, threadNames, closeOwnTabs,
             changesOf, changesText, lastChange, REVIEW_PREFIX,
             CardChanges, changesOpener, ThreadChangesTab, ThreadChangesTitle, ChangedFile, shownCounts, editsText, fileAddress, readFailure, changesAddress, changesSessionOf, DIFF_LABELS,
             threadMenuItems, rowMenuItems, runThreadItem, ThreadMore, ThreadList, inMoreList, newestRoster, arrowKeys, ThreadFind, findRows, FIND_FROM, ThreadsMenu,

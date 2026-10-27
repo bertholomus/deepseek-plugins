@@ -2416,6 +2416,28 @@ test('browser half: one store of what the plugin says about each coordinating ch
     assert.equal(withHeld(rows, [{ thread: 't1', status: 'done' }], holdOf(false, false)), rows);
 });
 
+test('browser half: switched off, its own tabs in the chat on screen close, and only those (round-1 finding 8)', () => {
+    const { client } = loadClient();
+    const { closeOwnTabs } = client.internals;
+    const closed = [];
+    const tabs = [{ id: 'a', kind: 'projectthread' }, { id: 'b', kind: 'file' }, { id: 'c', kind: 'projectthreads' }, { id: 'd', kind: 'projectthreadlink' }, { id: 'e', kind: 'guide' }];
+    const sidebar = { mounted: { getSnapshot: () => 'chat-1' }, tabsIn: (session) => (session === 'chat-1' ? tabs : []), close: (id) => closed.push(id) };
+    assert.equal(closeOwnTabs(sidebar), 3);
+    assert.deepEqual(closed, ['a', 'c', 'd'], 'its thread chat, Threads pane and thread link; not DSH\'s file or guide tabs');
+    // Nothing on screen, no sidebar, or a close that throws: it carries on.
+    assert.equal(closeOwnTabs({ ...sidebar, mounted: { getSnapshot: () => undefined } }), 0);
+    assert.equal(closeOwnTabs(undefined), 0);
+    const warned = [];
+    const warn = console.warn;
+    console.warn = (line) => warned.push(line);
+    try {
+        assert.equal(closeOwnTabs({ ...sidebar, close: (id) => { if (id === 'a') throw new Error('gone'); } }), 2);
+    } finally {
+        console.warn = warn;
+    }
+    assert.deepEqual(warned, ['[coordinator] could not close its tab: gone']);
+});
+
 test('browser half: Thread settings names each thread by its title, never by the plugin\'s id (round-1 nit 9)', () => {
     const { client } = loadClient();
     const { threadNames } = client.internals;

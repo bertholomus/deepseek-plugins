@@ -500,6 +500,12 @@ try {
         const { page } = window;
         await openChat(page, ids.chat);
         await trigger(page).waitFor({ state: 'visible', timeout: 30000 });
+        // A thread open beside the chat, so switching off has one of its tabs to close.
+        await rowOf(page, ids.done).click();
+        const besideOpen = await page.locator(`[data-projects-thread-chat="${ids.done}"]`).filter({ visible: true }).first()
+            .waitFor({ state: 'visible', timeout: 20000 }).then(() => true, () => false);
+        await openChat(page, ids.chat);
+        await page.waitForTimeout(500);
         const on = await leftovers(page);
         check('while on: its views, its marks on the session list and its one style sheet', on.views > 0 && on.marks > 0 && on.sheets === 1, json(on));
         const off = await run.api('pluginManager/setBundleEnabled', { name: BUNDLE, enabled: false });
@@ -509,6 +515,9 @@ try {
             return left.views === 0 && left.marks === 0 && left.styles === 0 ? left : null;
         }, 'the plugin\'s views, marks and styles to go', 30000, 300).catch(async () => leftovers(page));
         check('switched off, no view, mark or style of it is left in the window', gone.views === 0 && gone.marks === 0 && gone.styles === 0, json(gone));
+        // Round-1 finding 8: its thread tab beside the chat closed, so no tab is left that nothing can show.
+        const dead = await page.getByText('Nothing here can view this kind of content yet').filter({ visible: true }).count();
+        check('switched off, the thread tab beside the chat closes instead of reading "Nothing here can view this kind of content yet"', besideOpen && dead === 0, `beside open before: ${besideOpen}; dead tabs: ${dead}`);
         await snap(page, 'off-light');
         await setDark(page, true);
         await snap(page, 'off-dark');
