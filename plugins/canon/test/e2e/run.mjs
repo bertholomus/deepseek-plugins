@@ -32,9 +32,12 @@
  * - Its settings in Plugins (DSH's own form): a value out of range refused;
  *   Drafts saved. Then the agent's `canon_capture` writes a draft (status:
  *   draft, kind, where it came from) in the copy's Drafts folder, and the
- *   draft is never added to a turn. Promote with promoting off changes
- *   nothing and says why; allowed in the form, Promote makes it an active
- *   note that the next turn gets, and the focus goes to the line saying so.
+ *   draft is never added to a turn. Its whole text opens on its row.
+ *   Promote with promoting off changes nothing and says why; allowed in the
+ *   form, Promote makes it an active note that the next turn gets, and the
+ *   focus goes to the line saying so. Discard moves another draft, as
+ *   written, to the copy's .trash; the card named the note on its subject
+ *   first, says where the draft went, and takes the focus there.
  * - Canon switched off and on in Plugins: no failure; its entry, card and
  *   style go (a turn gets nothing) and come back.
  * - After a restart: a session switched off stays off. Without Session
@@ -948,7 +951,8 @@ try {
         const added = Object.keys(now).filter((f) => !(f in fixtureBefore));
         const removed = Object.keys(fixtureBefore).filter((f) => !(f in now));
         const changed = Object.keys(fixtureBefore).filter((f) => f in now && now[f] !== fixtureBefore[f]);
-        check('in the copy: one new note (the promoted draft), nothing else changed or removed', json(added) === json([promotedPath]) && removed.length === 0 && changed.length === 0, json({ added, removed, changed }));
+        check('in the copy: one new note (the promoted draft) and the discarded draft moved to .trash, nothing else changed or removed',
+            json([...added].sort()) === json([promotedPath, '.trash/Port notes.md'].sort()) && json(removed) === json(['Drafts/Port notes.md']) && changed.length === 0, json({ added, removed, changed }));
         check('the fixture vault in the repo is exactly as it was', json(hashesOf(FIXTURE)) === json(fixtureBefore));
     });
 } catch (error) {
