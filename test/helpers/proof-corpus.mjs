@@ -51,6 +51,18 @@ export const SEEN9 = join(DEV, 'seen9');
 export const HOLDOUT10 = join(DEV, 'holdout10');
 export const SEEN10 = join(DEV, 'seen10');
 export const HOLDOUT11 = join(DEV, 'holdout11');
+/** Real GLM-5.3 Flash turns from DSH Test sessions, labelled by the builder, tuned on. */
+export const LIVE = join(DEV, 'live');
+/** Probes written apart from the code: a fresh writer's and the round-3 judge's, tuned on. */
+export const PROBES = join(DEV, 'probes');
+/** The round-4 judge's own turns (its everyday set, its probes and its look-only real-model replies): measured once at 7cc66ef, then tuned on. */
+export const JUDGE4 = join(DEV, 'judge4');
+/**
+ * The twelfth hold-out (pass 2): 40 look-only and explanation turns by a fresh writer who never saw the code, measured
+ * once whole at 2252a96, then split by label into two halves of 20: `seen12/` was tuned on, `holdout12/` never was.
+ */
+export const SEEN12 = join(DEV, 'seen12');
+export const HOLDOUT12 = join(DEV, 'holdout12');
 /** The labels of a claim in a case's `claims` list. */
 export const CLAIM_LABELS = ['shown', 'unshown', 'wrong'];
 export const TOOL_NAMES = new Set(['bash', 'read', 'edit', 'write', 'grep', 'glob', 'todo_write']);
@@ -154,8 +166,9 @@ const wordsOf = (text) => normal(text).match(/[a-z0-9]+/g) ?? [];
  * text contains the clause, or at least 60% of the labelled text's words of two letters or more are in the clause.
  */
 export function fallsOn(clause, labelled) {
-    const a = normal(clause);
-    const b = normal(labelled);
+    // A clause's closing stop is not a word: "all 212 examples pass, 0 failures." falls on "… all 212 examples pass, 0 failures".
+    const a = normal(clause).replace(/[\s.,;:!?]+$/, '');
+    const b = normal(labelled).replace(/[\s.,;:!?]+$/, '');
     if (a === '' || b === '') return false;
     if (a.includes(b) || b.includes(a)) return true;
     const words = wordsOf(labelled).filter((w) => w.length >= 2);

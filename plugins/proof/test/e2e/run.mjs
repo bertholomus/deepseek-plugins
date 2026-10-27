@@ -68,6 +68,11 @@
  *   turn first, a reply's claims in its order; the sessions list with the
  *   one flagged last first, each timed by its latest flag (not by when it
  *   last changed).
+ * - The real model's reply shapes, in real turns: an accurate failure report
+ *   with "Passing tests:" and "Failing tests:" headings and "No files were
+ *   changed.", then a bold "Fixed" label, a pass list and a README typo fixed
+ *   with the code, all quiet; a flake fix after a loop in which one round
+ *   failed is contradicted, in the window too.
  *
  *   DSH_BIN=/path/to/@deepseek-ai/dsh/lib/bin.js node plugins/proof/test/e2e/run.mjs
  *
@@ -205,6 +210,8 @@ const say = (text) => `E2E:say ${text}`;
 const turn = (calls, reply) => `E2E:turn ${json({ calls, reply })}`;
 const bash = (command, description) => ({ tool: 'bash', args: { command, description } });
 const write = (file, content) => ({ tool: 'write', args: { file_path: join(run.ws, file), content } });
+/** DSH changes a file the session has read: a read before a write over one that is there. */
+const readFile = (file) => ({ tool: 'read', args: { file_path: join(run.ws, file) } });
 /** A claim's check, as Proof keeps it. */
 const checkOf = async (sessionId, claimId) => (await sessionOf(sessionId)).checks.find((c) => c.claimId === claimId);
 const ACTIVE = new Set(['queued', 'running']);
@@ -495,6 +502,12 @@ try {
         }
         const refusal = 'Refused: git commit changes the repository, and a check only reads and runs. Check without changing anything.';
         check('Proof\'s guard refused the commit, saying why, and the thread heard it', JSON.stringify(saved).includes(refusal), saved.filter((e) => /tool/.test(e.type)).map((e) => JSON.stringify(e.data).slice(0, 300)).join('\n'));
+        // The write was tried: the check thread's log has the `touch` call, and its result is DSH's refusal, not a success.
+        const touch = saved.find((e) => e.type === 'tool/call' && JSON.stringify(e.data?.arguments ?? {}).includes('touch proof-was-here.txt'));
+        const touched = touch ? saved.find((e) => e.type === 'tool/result' && (e.data?.source?.callId ?? e.data?.message?.toolCallId) === touch.data?.callId) : undefined;
+        const touchText = touched ? JSON.stringify(touched.data?.message?.content ?? '') : '';
+        check('the check thread tried the write: its log has the touch call, and its result is a failure (DSH refused it)',
+            Boolean(touch) && Boolean(touched) && (touched.data?.message?.isError === true || /exit code: [1-9]|not permitted|denied|read-only|refused|EPERM|EROFS|sandbox/i.test(touchText)), json({ call: touch?.data, result: touchText.slice(0, 300) }));
         check('DSH\'s read-only file policy stopped the write: no file was made', !existsSync(join(run.ws, 'proof-was-here.txt')));
         check('the checked session got nothing from the check', (await run.events(ids.deploy)).filter((e) => e.type === 'user/message').length === deployMessages);
         check('DSH\'s default model is unchanged', defaultModel() === before && before.includes('model: fake-model'), defaultModel());
@@ -1196,6 +1209,104 @@ test('adds three numbers', () => assert.equal(add(1, 2, 3), 6));
         check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
     }, async () => {
         if (window?.page) await shot(window.page, shots, 'failed-round3');
+    });
+
+    // ── The real model's reply shapes ──────────────────────────────────
+    // Shapes GLM-5.3 Flash writes in DSH (headings over lists, ✅/❌, "No files were changed.", a bold "Fixed" label, a
+    // doc typo fixed with the code, "I did not touch any other file"), and a flake fix after a loop with a failed round.
+    writeFileSync(join(run.ws, 'README.md'), '# calc\n\nInstall: npm intall\n');
+    writeFileSync(join(run.ws, 'coupon.test.mjs'), `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+// Fails on the second round only: a flake.
+const round = existsSync('.round') ? Number(readFileSync('.round', 'utf8')) + 1 : 1;
+writeFileSync('.round', String(round));
+test('applies the coupon once', () => assert.ok(round !== 2));
+`);
+    const shapesReport = [
+        'No — `node --test` fails: 1 of 3 tests pass.',
+        '',
+        '**Passing tests:**',
+        '- ✅ adds two numbers',
+        '',
+        '**Failing tests:**',
+        '- ❌ adds numbers given as words',
+        '- ❌ adds three numbers',
+        '',
+        'No files were changed. That is also why the other two fail: `add` ignores a third argument and does not read strings as numbers.',
+    ].join('\n');
+    ids.shapes = await run.newSession(`Do the report tests pass? Don't change anything.\n${turn([bash(`${NODE} --test report.test.mjs`, 'Run the report tests')], shapesReport)}`, 'Reply shapes');
+    await turnsEnded(ids.shapes, 1);
+    const fixAll = write('calc.mjs', 'export const add = (...xs) => xs.reduce((s, x) => s + Number(x), 0);\n');
+    const typo = write('README.md', '# calc\n\nInstall: npm install\n');
+    const shapesFixed = [
+        '**Fixed** — `add` now sums every argument and reads numbers given as words.',
+        '',
+        '**Passing tests (3):**',
+        '- ✅ adds two numbers',
+        '- ✅ adds numbers given as words',
+        '- ✅ adds three numbers',
+        '',
+        'Also fixed the typo in the README (`intall` → `install`). I did not touch any other file.',
+    ].join('\n');
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `Fix it, and the README typo too.\n${turn([readFile('calc.mjs'), readFile('README.md'), fixAll, typo, bash(`${NODE} --test report.test.mjs`, 'Run the report tests again')], shapesFixed)}` });
+    await turnsEnded(ids.shapes, 2);
+    const coupon = write('coupon.test.mjs', readFileSync(join(run.ws, 'coupon.test.mjs'), 'utf8').replace('// Fails on the second round only: a flake.', '// Waits for the clock (it still fails on the second round).'));
+    const loop = bash(`rm -f .round; for i in 1 2 3; do ${NODE} --test coupon.test.mjs 2>&1 | grep -E '^(ℹ|#) (tests|pass|fail)'; done`, 'Run the coupon test three times');
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `The coupon test is flaky. Fix it and run it a few times.\n${turn([readFile('coupon.test.mjs'), coupon, loop], 'Fixed the flaky coupon test; it passes reliably now.')}` });
+    await turnsEnded(ids.shapes, 3);
+    // A look-only question: the reply describes how things are set up and what the code does ("is documented as",
+    // "returns `100 - 100*10`"), and claims nothing. Then a change claim with " - " in its code and no edit behind it.
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `How is the discount documented? Just look, do not change anything.\n${turn([readFile('calc.mjs')], 'In `calc.mjs`, `pct` is documented as a percentage (10 meaning 10%). With a literal "10", it returns `100 - 100*10 = -900`.')}` });
+    await turnsEnded(ids.shapes, 4);
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `Make it subtract one.\n${turn([readFile('calc.mjs')], 'Changed `x - 1` to `x + 1` in calc.mjs.')}` });
+    await turnsEnded(ids.shapes, 5);
+    await step('the real model\'s reply shapes: list headings, "No files were changed", a bold "Fixed" label and a doc typo stay quiet; a flake fix after a failed round is contradicted', async () => {
+        const claims = (await ledgerOf(ids.shapes)).claims;
+        const first = claims.filter((c) => c.turn === 1);
+        const second = claims.filter((c) => c.turn === 2);
+        const third = claims.filter((c) => c.turn === 3);
+        check('the accurate failure report with "Passing tests:" and "Failing tests:" headings and "No files were changed." is not flagged',
+            first.every((c) => c.verdict === 'backed'), json(first));
+        check('the bold "Fixed" label, the pass list and the README typo after the fix and a passing run: every claim shown, none flagged',
+            second.length >= 2 && second.every((c) => c.verdict === 'backed') && second.some((c) => c.kind === 'fixed' && /^Fixed — add now sums every argument/.test(c.part ?? ''))
+            && second.some((c) => c.kind === 'fixed' && /typo in the README/.test(c.part ?? '')), json(second));
+        const flake = third.find((c) => c.kind === 'fixed');
+        check('"Fixed the flaky coupon test" after a loop in which one round failed is contradicted, saying a round failed',
+            flake?.verdict === 'contradicted' && /still failed a test in one of its rounds/.test(flake.why ?? ''), json(third));
+        const fourth = claims.filter((c) => c.turn === 4);
+        const fifth = claims.filter((c) => c.turn === 5);
+        check('a look-only answer that describes how a thing is documented and what the code returns claims nothing', fourth.length === 0, json(fourth));
+        check('a change claim with " - " in its code is quoted as written in the ledger, flagged with no edit behind it',
+            fifth.length === 1 && fifth[0].verdict === 'unbacked' && fifth[0].part === 'Changed x - 1 to x + 1 in calc.mjs.' && !/undefined/.test(JSON.stringify(fifth)), json(fifth));
+        if (!pw) return;
+        if (!window) window = await openWindow(run, pw, { entry: 'Proof' });
+        const { page } = window;
+        // Proof's page stayed open since the step before: it lists the new session once its claims come, by itself.
+        if (await page.locator('[data-proof-page]').isVisible()) {
+            const listed = await page.locator(`[data-proof-session="${ids.shapes}"]`).waitFor({ state: 'attached', timeout: 20000 }).then(() => true, () => false);
+            check('the page, open all along, lists the new session once its claims come, without being opened again', listed);
+            if (!listed) await openChat(page, ids.rounding);
+        }
+        await openChat(page, ids.shapes);
+        await page.getByText('Fixed the flaky coupon test', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 });
+        const cards = flagsShown(page);
+        await cards.first().waitFor({ state: 'visible', timeout: 20000 });
+        await page.waitForTimeout(800);
+        await page.getByText('Changed x - 1 to x + 1', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        const texts = await cards.evaluateAll((els) => els.map((el) => ({ flag: el.getAttribute('data-proof-flag'), claims: [...el.querySelectorAll('[data-proof-claim]')].map((c) => c.getAttribute('data-proof-claim')), text: el.innerText.replace(/\n+/g, ' ') })));
+        check('in the window: two cards, under the flake fix (contradicted) and the unbacked change, none under the look-only answer',
+            texts.length === 2 && texts[0].flag === 'contradicted' && texts[0].claims.every((id) => id.startsWith('3:')) && texts[1].claims.every((id) => id.startsWith('5:')), json(texts));
+        check('the card names the program the loop ran by its own name, not by its full path', /do node --test coupon\.test\.mjs/.test(texts[0]?.text ?? ''), json(texts));
+        check('the card quotes the claim with its " - " as written, never "undefined"', /Changed x - 1 to x \+ 1 in calc\.mjs/.test(texts[1]?.text ?? '') && !/undefined/.test(texts.map((t) => t.text).join(' ')), json(texts));
+        await shot(page, shots, 'shapes-light');
+        await setDark(page, true);
+        await shot(page, shots, 'shapes-dark');
+        await setDark(page, false);
+        check('no errors from the suite in the window', ours(window.errors).length === 0, ours(window.errors).join('\n'));
+    }, async () => {
+        if (window?.page) await shot(window.page, shots, 'failed-shapes');
     });
 } catch (error) {
     check('the run finished', false, error?.stack ?? error);

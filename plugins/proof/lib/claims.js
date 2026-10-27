@@ -46,8 +46,8 @@ const CLOSE = '⟩';
 /** Markdown's marks around words, so "**All tests pass**" reads as the words; inline code is marked. */
 function plain(line) {
     return line
-        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        .replace(/!\[[^\][\n]*\]\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)/g, '')
+        .replace(/\[([^\][\n]+)\]\([^()\n]*(?:\([^()\n]*\)[^()\n]*)*\)/g, '$1')
         .replace(/`([^`]*)`/g, `${OPEN}$1${CLOSE}`)
         .replace(/(\*\*|__)(.*?)\1/g, '$2')
         .replace(/(^|[\s(])[*_]([^*_\n]+)[*_](?=[\s).,;:!?]|$)/g, '$1$2')
@@ -133,7 +133,8 @@ function markedWithPlans(text) {
     let fenced = false;
     let header;
     let planned = false;
-    const lines = text.split(/\r?\n/);
+    // One character over and over says nothing past 64 ("====…", "[[[[…"), and keeps each reading quick.
+    const lines = text.replace(/([^\n])\1{63,}/g, (m, c) => c.repeat(64)).split(/\r?\n/);
     for (let at = 0; at < lines.length; at += 1) {
         let raw = lines[at];
         if (/^\s{0,3}(```|~~~)/.test(raw)) {
@@ -185,7 +186,9 @@ export function sentencesOf(text) {
 const HELD = new RegExp(String.raw`${OPEN}[^${CLOSE}\n]{1,200}${CLOSE}|"[^"\n]{1,200}"|“[^”\n]{1,200}”|\([^()\n]{1,200}\)`, 'g');
 const HOLD = { ':': '\u0001', ';': '\u0002', ',': '\u0003', '—': '\u0004', '–': '\u0005', ' - ': ' \u0006 ' };
 const hold = (s) => s.replace(HELD, (m) => m.replace(/ - |[:;,—–]/g, (c) => HOLD[c]));
-const unhold = (s) => s.replace(/[\u0001-\u0006]/g, (c) => Object.keys(HOLD).find((k) => HOLD[k] === c));
+// Each held mark back as it was: " - " was held as " \u0006 ", so "\u0006" alone gives back "-" ("`x - 1`", not "x undefined 1").
+const UNHOLD = Object.fromEntries(Object.entries(HOLD).map(([k, v]) => [v.trim(), k.trim()]));
+const unhold = (s) => s.replace(/[\u0001-\u0006]/g, (c) => UNHOLD[c] ?? c);
 
 function clausesOf(sentence) {
     return hold(sentence)
@@ -200,7 +203,7 @@ function clausesOf(sentence) {
 /** A "when …" part, up to a comma or the clause's end: when something happens, not what this turn did ("423 when the order is shipped"). */
 const WHEN_PART = /\bwhen\b[^,;]*(?:,\s*|$)/gi;
 /** A plan, a condition or a hope: success not yet had. */
-const NOT_YET = /\b(if|whether|once|until|unless|whenever|should|shall|will|would|could|might|may|must|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
+const NOT_YET = /\b(if|whether|once|until|unless|whenever|should|shall|will|would|could|might|may|must|can(?!\s+(?:now|again|confirm|verify|see|report)\b)|need(s)? to|needed to|has to|have to|going to|gonna|want(s)? to|try(ing)? to|plan(ned|s)? to|hope(fully)?|expect(ed)? to|supposed to|let me|let['’]s|i['’]ll|we['’]ll|you'?ll|it['’]ll|that['’]ll|they'?ll|i['’]d|we['’]d|next,? i|to be (done|fixed|deployed|tested)|can then|in order to|so that|ready to|safe to|good to|able to|in case|(?:you|we|they) can|suggests?|suggesting|seems?|seemingly|appears?|apparently|probably|likely|presumably|perhaps|maybe|i think|i suspect|i believe|i guess|looks like)\b/i;
 /** A sentence that says the opposite of success, or reports a failure. */
 const NEGATED = /\b(not|n't|never|neither|nor|nothing|yet|without (?:running|testing|checking|verifying)|yet to|still (?:fail|failing|broken|red|erroring|crash)|fail(s|ed|ing|ure|ures)?|broken|break(s|ing)?|red\b|error(s|ed)?\b|regress(ed|ion)?|flak(y|iness)|skipped|cannot|unable|couldn'?t|didn'?t|doesn'?t|isn'?t|aren'?t|wasn'?t|weren'?t|haven'?t|hasn'?t|won'?t|\w+n't|instead of|rejected|denied|timed out|stalled|crashloop\w*|pending|in progress|queued)\b/i;
 /** "No failures", "zero errors", "nothing left to fix": words that back a claim up, not negations. */
@@ -224,15 +227,15 @@ const POSITIVE = [
 ];
 /** A changelog section by name, as Keep a Changelog spells it: "under **Unreleased → Fixed**", "in the Fixed section". */
 const CHANGELOG_SECTION = /\b(?:[Uu]nder|[Ii]n|[Tt]o)\s+(?:the\s+)?(?:[\w.-]+\s*(?:→|->|>|\/|›)\s*)?(?:Added|Changed|Deprecated|Removed|Fixed|Security)\b(?:\s+(?:section|heading))?/g;
-/** "Fixed" as an adjective: "a fixed window", "fixed-size buffers", "a fixed seed". */
-const FIXED_ADJ = /\b(?:a|an)\s+fixed\s+(?=[a-z0-9])|\bfixed-(?=[a-z])|\b[a-z0-9]+-(?:guarded|patched|fixed|sorted|corrected|resolved)\b|\bfixed\s+(?=(?:window|size|width|height|point|rate|price|cost|delay|interval|timeout|length|number|seed|order|format|position|schedule|budget|fee|amount|set|string|header|offset|port|address|value|key|salt|term|layout|pitch|capacity|duration|frame|step|cadence|cap|ratio|limit|quota|pool|count|mtime|timestamp|date|time|clock|epoch|locale|timezone|tz|umask|mode|margin|padding|font|dimension|shape|temperature|tar|zip|gzip|build id|ordering)s?\b)/gi;
+/** "Fixed" as an adjective or as "set": "a fixed window", "fixed-size buffers", "a fixed seed", "the port is fixed at 8080". */
+const FIXED_ADJ = /\b(?:a|an)\s+fixed\s+(?=[a-z0-9])|\b(?:is|are|was|were|stays?|remains?|be|been|being|kept|gets?)\s+fixed\s+(?=(?:at|to)\s+(?!(?:work|use|handle|return|accept|skip|ignore|run|show|read|write|allow|reject|pass|stop|avoid|prevent|keep|make|support|match|include|exclude|load|save|send|call|wait|retry|check|catch|treat|respect|parse|emit|log|close|open|flush|drop|retain|clear)\b))|\b(?:the|this|these|those|its|their|our|your|my|each|every)\s+fixed\s+(?!(?:it|them|this|that|these|those|the|a|an|everything|all|both|in|on|by|with|for|to|and|but|so|now|again|properly|correctly|already)\b)(?=[a-z])|\bfixed-(?=[a-z])|\b[a-z0-9]+-(?:guarded|patched|fixed|sorted|corrected|resolved)\b|\bfixed\s+(?=(?:window|size|width|height|point|rate|price|cost|delay|interval|timeout|length|number|seed|order|format|position|schedule|budget|fee|amount|set|string|header|offset|port|address|value|key|salt|term|layout|pitch|capacity|duration|frame|step|cadence|cap|ratio|limit|quota|pool|count|mtime|timestamp|date|time|clock|epoch|locale|timezone|tz|umask|mode|margin|padding|font|dimension|shape|temperature|tar|zip|gzip|build id|ordering)s?\b)/gi;
 /** A quoted phrase that holds a claim's words: what someone or something said, not this turn's claim ('the bot posts "all checks passed"'). */
 const QUOTED_CLAIM = /"[^"\n]{1,120}"|“[^”\n]{1,120}”/g;
 const CLAIM_WORDS = /\b(pass(es|ed|ing)?|green|deployed|released|published|shipped|fixed|done|succeeded|successful(ly)?|merged|live|clean|healthy|ok)\b/i;
 /** "no longer fails", "doesn't crash any more": a negation that claims a fix. */
 const FIX_BY_NEGATION = /\bno longer\s+(fails?|failing|crash(es)?|errors?|throws?|breaks?|hangs?|panics?|leaks?|times? out|overruns?|drops?|loses?|happens?|reproduces?|deadlocks?|races?|blocks?|flaky|flakes?|flaking)\b|\b(doesn'?t|does not|won'?t|will not|can'?t|cannot)\s+(fail|crash|error|throw|break|hang|panic|leak|time out|happen|reproduce|deadlock|race)\s+(any ?more|now|again)\b|\bno (more|longer any) (errors|failures|crashes|warnings|panics|races)\b|\b(the )?(bug|issue|error|problem|crash|regression|failure|leak|warning|panic|race|npe|exception)s? (is|are) (now )?(gone|fixed|resolved)\b/i;
 /** A deploy's state read back: "rollout `COMPLETED`", "4/4 tasks running". */
-const ROLLED = /\b(?:rollouts?|deployments?|deploys?)\b[^.;]{0,40}?\b(?:complete[d]?|finished|succeeded|successful|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully|for\s+(?:the\s+)?(?:whole|full|entire|all)|across)\b))|\b\d+\s*\/\s*\d+\s+(?:tasks?|pods?|replicas?|instances?|containers?)\b(?:\s+on\s+[^.;,]{0,40}?)?\s+(?:are\s+)?(?:running|ready|available|healthy|up|live)\b/i;
+const ROLLED = /\b(?:rollouts?|deployments?|deploys?)\b[^.;]{0,40}?\b(?:complete[d]?|done|finished|succeeded|successful|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully|for\s+(?:the\s+)?(?:whole|full|entire|all)|across)\b))|\b\d+\s*\/\s*\d+\s+(?:tasks?|pods?|replicas?|instances?|containers?)\b(?:\s+on\s+[^.;,]{0,40}?)?\s+(?:are\s+)?(?:running|ready|available|healthy|up|live)\b/i;
 /** "Tested it by pointing DEST at a dead host": something was run to try it. */
 const TRIED = /\b(?:tested|tried|exercised|smoke[- ]tested|re-?tested)\s+(?:it|this|that|them|the\s+(?:fix|change|script|endpoint|flow|patch|command|binary|cli|tool|function|migration|hook|job))\b/i;
 /** A question. */
@@ -249,6 +252,8 @@ const REPORTED = /\b(the|this|that|its|their|your|his|her|our|[a-z]+'s)\s+(?:(?:
  */
 const ONLY_PASSED = /(?<!\bnot\s)\b(?:only|just(?=\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a few|a couple|a handful|half)\b))(?:\s+(?!(?:and|but|so|then|while|because)\b)[^\s,;:]+){0,5}?\s+(?:pass(?:es|ed|ing)?|succeed(?:s|ed)?|green|ok)\b/i;
 /** Counts as words, for "two of the three". */
+/** A pass that the reply explains away: "pass only by accident", "pass by coincidence", "passes vacuously". */
+const ACCIDENTAL = /\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|works?|worked)\s+(?:only\s+|merely\s+|just\s+|purely\s+)?(?:by\s+(?:accident|coincidence|luck|chance)|accidentally|coincidentally|vacuously|trivially|for\s+the\s+wrong\s+reasons?)\b|\b(?:accidentally|coincidentally|vacuously|trivially)\s+(?:pass(?:es|ed|ing)?|green)\b/i;
 const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
 const COUNTED = String.raw`(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)`;
 /**
@@ -298,6 +303,8 @@ const CODE_ACT = [
     /^(?:released|pushed|published|merged|shipped|promoted)\s+(?:the|a|an|its|their|that|this|each|every|any|both|all|two|three)?\s*(?:[\w-]+\s+){0,2}?(?:mutex(?:es)?|locks?|semaphores?|latch(?:es)?|connections?|handles?|memory|resources?|buffers?|pointers?|references?|refs?|gil|leases?|slots?|events?|messages?|frames?|items?|elements?|entries|entry|nodes?|maps?|dicts?|dictionaries|hashmaps?|keys?|values?|objects?|structs?|records?|rows?|arrays?|lists?|sets?)\b/i,
     /^pushed\s+(?:[\w-]+\s+){0,3}?(?:onto|on to|into|to)\s+(?:the|a|an|its|their)\s+(?:[\w-]+\s+)?(?:stack|queue|heap|list|array|buffer|channel|deque|ring|slice)\b/i,
 ];
+/** A resource as the subject of a release or a push ("Locks are released", "the connection gets released"): code at work. */
+const RESOURCE_PASSIVE = /\b(?:mutex(?:es)?|locks?|semaphores?|latch(?:es)?|connections?|handles?|memory|resources?|buffers?|pointers?|references?|refs?|gil|leases?|slots?|file\s+descriptors?|fds?|sockets?|permits?)\s+(?:is|are|was|were|gets?|got|get|being|been|will\s+be|must\s+be)\s+(?:(?:then|also|always|only|never|now|still|properly|correctly|automatically|immediately|eventually)\s+)?$/i;
 /** A clause whose subject is a function or method in inline code ("`LRU.Get` released …"): it describes the code. */
 function codeSubject(before) {
     const m = new RegExp(`${OPEN}([^${CLOSE}]+)${CLOSE}\\s+(?:now\\s+|also\\s+|still\\s+|then\\s+|always\\s+|only\\s+|never\\s+)?$`).exec(before);
@@ -323,9 +330,12 @@ const TRANSITIVE = new RegExp(String.raw`\bpass(?:es|ed|ing)?\s+(?:${OPEN}?(?:tr
 
 const SUBJECT = String.raw`(?:(?:the\s+)?pr(?:\s*#?\d+)?|pull request(?:\s*#?\d+)?|checksums?|sha-?\d*sums?|md5sums?|digests?|signatures?|tests?|pytest|jest|vitest|mocha|rspec|phpunit|ctest|specs?|test ?suites?|suites?|e2e|checks?|assertions?|examples?|cases?|builds?|bundle|lint(?:ing|er|ers)?|ci|pipelines?|workflows?|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|runs?|type ?checks?|typecheck(?:s|ing)?|types|tsc|clippy|eslint|ruff|mypy|flake8|rubocop|pylint|golangci-lint|prettier|vet|go vet|webpack|vite|esbuild|rollup|everything|${OPEN}[^${CLOSE}]{1,80}${CLOSE})`;
 const PASS_VERB = String.raw`(?:(?<!-)pass(?:es|ed|ing)?|green|(?<!\b(?:stops?|stopped|exits?|exited|shuts?\s+down|shut\s+down|terminates?|terminated|closes?|closed|cancels?|cancell?ed|unmounts?|unmounted|disconnects?|disconnected|tears?\s+down|tore\s+down|recovers?|recovered|restarts?|restarted|handles?|handled|separates?|separated|splits?|applies|applied|merges?|merged|rebases?|rebased|reverts?|reverted|drains?|drained|unwinds?|unwound|rolls?\s+back|rolled\s+back)\s)clean(?:ly)?|ok|okay|successful(?:ly)?|succeed(?:s|ed)?|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully|for\s+(?:the\s+)?(?:whole|full|entire|all)|across)\b)|(?:finished|completed|ran|went|exited|exits)\s+(?:successfully|green|clean(?:ly)?|fine|ok|with 0|0|with (?:an? )?exit(?: code| status)? (?:of )?0)|complete[sd]?(?:\s+successfully)?|compiles?(?:\s+(?:cleanly|fine|successfully))?)`;
-const PASS_WORD = /\b(0 (?:failures?|failed|errors?)|pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|assembles|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully|for\s+(?:the\s+)?(?:whole|full|entire|all)|across)\b)|complete[sd]?|verified|verif(y|ies)|match(es|ed)?|exit(?: code| status)? (?:of )?0)\b/i;
+const PASS_WORD = /\b(0 (?:failures?|failed|errors?)|pass(es|ed|ing)?|green|succeed(s|ed)?|success(ful(ly)?)?|clean(ly)?|ok|okay|good|compiles?|builds|assembles|went through|goes through(?=\s*$|\s*[.,;:!)]|\s+(?:now|again|fine|cleanly|clean|ok|okay|without|green|successfully|for\s+(?:the\s+)?(?:whole|full|entire|all)|across)\b)|complete[sd]?|verified|verif(y|ies)|match(es|ed)?|exit(?: code| status)? (?:of )?0|(?:exits?|exited|returns?|returned)\s+(?:with\s+)?(?:(?:an?\s+)?(?:exit\s+)?(?:code|status)\s+(?:of\s+)?)?0|exit\s+(?:code|status)\s+(?:is|was)\s+(?:now\s+)?0)\b/i;
 
 const PASSED = [
+    // "The script now exits 0 on an empty file", "It exits with code 0 now", "Exit code is 0 now", "the job exited 0":
+    // an exit code, with "now" or in the past; "exits 0 on success" alone says how a program behaves.
+    /\b(?:now\s+)?(?:exits?|returns?)\s+(?:with\s+)?(?:(?:an?\s+)?(?:exit\s+)?(?:code|status)\s+(?:of\s+)?)?0\b(?=[^.;]*\bnow\b)|\bnow\s+(?:exits?|returns?)\s+(?:with\s+)?(?:(?:an?\s+)?(?:exit\s+)?(?:code|status)\s+(?:of\s+)?)?0\b|\b(?:exited|returned)\s+(?:with\s+)?(?:(?:an?\s+)?(?:exit\s+)?(?:code|status)\s+(?:of\s+)?)?0\b|\bexit\s+(?:code|status)\s+(?:is|was)\s+(?:now\s+)?0\b(?=[^.;]*\bnow\b|\s*now\b)|\bexit\s+(?:code|status)\s+(?:is|was)\s+now\s+0\b/i,
     // "Still green: `./mvnw test` → 67 tests", "All passing."
     /^(?:still|all|everything(?:\s+(?:is|still))?|now)\s+(?:green|passing|clean)\b/i,
     // "67 tests, 0 failures", "Tests run: 12, 0 failures"
@@ -364,11 +374,13 @@ const PASSED = [
     /\b(all\s+)?\d+\s+(green|passing)\s+(unit\s+|e2e\s+|integration\s+)?(tests?|specs?|checks?|cases?|examples?)\b/i,
 ];
 
+/** An exit code said to be 0: "exits with code 0", "exit code is 0", "exited 0". */
+const EXIT_ZERO = /\b(?:exits?|exited|returns?|returned)\s+(?:with\s+)?(?:(?:an?\s+)?(?:exit\s+)?(?:code|status)\s+(?:of\s+)?)?0\b|\bexit\s+(?:code|status)\s+(?:is|was)\s+(?:now\s+)?0\b/i;
 /** "The suite is still 34/34", "tests are 12/12": all of a count, said without a pass word. */
 const ALL_PASS = new RegExp(String.raw`(?:^|\b)${SUBJECT}(?!\w)\s+(?:is|are|was|were|stays?|stayed|remains?|remained)\s+(?:still\s+|now\s+|back\s+(?:to|at)\s+|at\s+)?(\d+)\s*\/\s*\1(?![\d/])`, 'i');
 
 // "Uploaded build 213 to App Store Connect": an upload to a place ships it.
-const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled\s+(?:it|them|this|that|these|those|everything)\s+out|rolled\s+(?:the|a|an|our|your|its|their|both|all)\s+(?:\S+\s+){0,3}?out(?=\s+(?:to|on|onto|across|everywhere)\b)|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
+const DEPLOY_WORD = /\b(deployed|redeployed|released|shipped|rolled out|rolled\s+(?:it|them|this|that|these|those|everything)\s+out|rolled\s+(?:(?:the|a|an|our|your|its|their|both|all)\s+)?(?:\S+\s+){0,3}?out(?=\s+(?:to|on|onto|across|everywhere)\b)|rolled back|promoted|published|pushed|merged|tagged|provisioned|uploaded(?=[^.;]{0,80}?\bto\s))\b/gi;
 const DEPLOYED_OTHER = [
     // "staging is stable on the new version", "prod is healthy on 3.1.0": where the new version runs
     /\b(?:is|are)\s+(?:now\s+)?(?:stable|healthy|up|serving|running)\s+(?:on|with)\s+(?:the\s+)?(?:new\s+(?:version|release|build|image)|v?\d+\.\d+(?:\.\d+)?)\b/i,
@@ -389,7 +401,10 @@ const HEALTH = [
     /\b(is|are)\s+(now\s+)?(healthy|up and running|serving)\b|\bserving (traffic|requests|the new (build|version|release))\b/i,
     // "the service is stable (2/2 tasks)", "the new deployment is up": not "is up to date", "up next", "up for review" or "up on a preview" (a place)
     /\b(?:services?|deployments?|deploys?|rollouts?|apps?|clusters?|pods?|tasks?|nodes?|sites?|servers?|instances?|containers?)\s+(?:is|are)\s+(?:now\s+)?(?:stable|steady|up(?![\s-]+(?:on|at|in|with|and)\b))\b(?!\s+(?:to|for|next|against|front|in the air)\b)/i,
-    /\b(returns?|answers?|responds?|responded|came back|comes back)\s+(with\s+)?(an?\s+)?(http\s+)?(\d{3}|ok)\b/i,
+    // An HTTP status, not arithmetic or a value: "returns 200", not "returns `100 - 100*10`" or "returns 100" (code at work).
+    /\b(returns?|answers?|responds?|responded|came back|comes back)\s+(with\s+)?(an?\s+)?(http\s+)?([2-5]\d{2}(?!\d|\.\d|\s*[-+*\/×÷=^%])|ok)\b/i,
+    // "the health endpoint is returning 200", "it's answering with a 200"
+    /\b(?:is|are|'s|’s)\s+(?:now\s+|still\s+|back\s+)?(?:returning|answering|responding)\s+(?:with\s+)?(?:an?\s+)?(?:http\s+)?(?:[2-5]\d{2}s?(?!\d|\.\d|\s*[-+*\/×÷=^%])|ok)\b/i,
     /\bhealth\s*(checks?|endpoint|probe)?\s+(pass(es|ed)?|is ok|ok|is green|returns? ok|came back ok)\b|\bhealth checks? (are )?(passing|green)\b/i,
     // "/healthz is ok and reports 2.7.0", "`/ready` came back healthy"
     /(?:^|[\s(⟨])\/(?:healthz?|readyz?|livez|_health|health-?check|status)\b[^.;]{0,30}?\b(?:is|are|was|were|reports?|returns?|says?|shows?|answers?|came back|comes back)\s+(?:still\s+|now\s+|back\s+)?(?:ok|okay|up|green|healthy|good|fine|passing|200)\b/i,
@@ -398,7 +413,8 @@ const HEALTH = [
 const HEALTH_PATH = /(?:^|[\s(⟨])\/(?:healthz?|readyz?|livez|_health|health-?check)\b/i;
 
 const FIXED = [
-    /\b(fixed|resolved|repaired|patched|corrected|addressed|sorted|stabili[sz]ed|guarded)\b/i,
+    // "Sorted" fixes only as "sorted it out", "all sorted" or "got it sorted": "the slice is left sorted" describes the data.
+    /\b(fixed|resolved(?!\s+(?:to|inside|into|as|against|relative|via|from|correctly\s+to)\b)|repaired|patched|corrected|addressed|stabili[sz]ed|guarded)\b|\bsorted\s+(?:(?:it|that|this|them|everything|things)\s+)?out\b|\b(?:all|got\s+(?:it|that|this|them|everything))\s+sorted\b/i,
     /\b(now|it|this|that|everything)\s+works\b/i,
     /\bworks\s+(now|again|correctly|as expected|fine)\b/i,
     /\b(is|are)\s+(now\s+)?working( again| correctly| as expected)?\b/i,
@@ -447,6 +463,18 @@ const MOVED_FROM_TO = {
         return false;
     },
 };
+/**
+ * "92%, up from 78%", "p95 is down from 310": a figure it moved from, with a unit or a measure's name; not a line that
+ * "shifted up from 5".
+ */
+const UP_DOWN_FROM = {
+    test(text) {
+        const t = String(text);
+        const m = /\b(?:down|up)\s+from\s+~?\d[\d.,]*\s*([a-zµ%/]*)/i.exec(t);
+        if (!m) return false;
+        return ARROW_UNIT.test(m[1]) || /^(?:ns|b|allocs)\/op$/i.test(m[1]) || MEASURE.test(t);
+    },
+};
 /** A number that got better: "p50 310 ms -> 120 ms", "2.5x faster", "cut the bundle to 182 KiB". */
 const IMPROVED = [
     MEASURED_ARROW,
@@ -457,7 +485,8 @@ const IMPROVED = [
     /\b(faster|quicker|smaller|lighter|leaner|speed(ed)? up|sped up|halved|reduced|shaved|lowered|improved)\b[^.;]{0,60}\d/i,
     // "dropped to 120 ms", "cut the bundle by 40%": a figure it went to, by or from, not "cut off" or "cut the release"
     /\b(dropped|cut|fell|went down|came down|shrank|shrunk)\b(?!\s+(?:it\s+|them\s+)?off\b)\s+(?:\w+\s+){0,3}?(?:by|to|from|down to|under|below)\s+~?\d/i,
-    new RegExp(String.raw`\d(?:\.\d+)?\s?(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)(?![\w/])[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b|\b(down|up) from\s+~?\d`, 'i'),
+    new RegExp(String.raw`\d(?:\.\d+)?\s?(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|bytes|req\/s|rps|qps|ops\/s|tok\/s|fps)(?![\w/])[^.;]{0,40}\b(faster|quicker|smaller|lower|down from|up from|halved|reduced|dropped)\b`, 'i'),
+    UP_DOWN_FROM,
     /\b(much|far|a lot|way|significantly)\s+(faster|quicker|smaller|lighter)\b/i,
     // "Roughly 2.6x on ASCII and 2x on UTF-8": a factor given as the result
     /^(?:that'?s\s+|it'?s\s+|so\s+|overall\s+)?(?:roughly|about|around|approximately|nearly|almost|~)\s*(?:an?\s+)?\d+(?:\.\d+)?\s*(?:x|×)(?!\w)/i,
@@ -494,7 +523,7 @@ function searchTermOf(clause) {
 
 /** "is in" claims at the end of a clause ("the fix is in", "is in on main"), not "is in play". */
 const IS_IN = String.raw`in(?=\s*(?:$|[.,;:!)]|now\b|on\s+(?:main|master|the branch)))`;
-const CHANGE_VERBS = 'edited|modified|tweaked|adjusted|amended|altered|revised|reworked|rewired|restructured|reorgani[sz]ed|reformatted|reworded|cleaned|reverted|restored|simplified|trimmed|reordered|inlined|deduplicated|consolidated|normali[sz]ed|parameteri[sz]ed|vendored|scaffolded|stubbed|added|created|updated|wrote|written|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|cleaned up|set up|configured|installed|migrated|converted|extracted|split|merged|rewrote|rewritten|built|rebuilt|generated|completed|finished|registered|wired|hooked up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|gated|ported|switched|swapped|applied|committed|regenerated|recorded|backfilled|pruned|tightened|raised|lowered|made';
+const CHANGE_VERBS = 'cherry-picked|cherry picked|backported|rebased|squashed|edited|modified|tweaked|adjusted|amended|altered|revised|reworked|rewired|restructured|reorgani[sz]ed|reformatted|reworded|cleaned|reverted|restored|simplified|trimmed|reordered|inlined|deduplicated|consolidated|normali[sz]ed|parameteri[sz]ed|vendored|scaffolded|stubbed|added|created|updated|wrote|written|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|cleaned up|set up|configured|installed|migrated|converted|extracted|split|merged|rewrote|rewritten|built|rebuilt|generated|completed|finished|registered|wired|hooked up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|gated|ported|switched|swapped|applied|committed|regenerated|recorded|backfilled|pruned|tightened|raised|lowered|made';
 /** The change verbs after a subject ("Report regenerated", "handlers.go split into three files"): "split" alone is a noun ("that split", "Test split"). */
 const SUBJECT_VERBS = CHANGE_VERBS.replace('|split|', String.raw`|split(?=\s+(?:into|in\s+(?:two|three|four|five|half|halves|\d+)|up|out|off|across|by|between|apart|along)\b)|`);
 /** A clause led by a change: "I edited …", "Changed …". */
@@ -526,6 +555,8 @@ const DONE = [
 ];
 /** A commit's own history, not this turn's work: "`b2f1c88` renamed the param". */
 const HISTORY = new RegExp(String.raw`^(?:commit\s+)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\s+(?:also\s+|first\s+|originally\s+)?(?:${CHANGE_VERBS}|broke|introduced|landed|touched)\b`, 'i');
+/** "The lock file was made with Node 22", "these were generated by protoc 3.21": where a thing came from, by a tool and its version. */
+const PROVENANCE = /\b(?:was|were|is|are|has\s+been|have\s+been)\s+(?:originally\s+|first\s+|last\s+)?(?:made|created|generated|written|authored|locked|resolved)\s+(?:with|by|using|under|on)\s+(?:an?\s+|the\s+)?(?:older\s+|newer\s+|different\s+|later\s+|earlier\s+)?[A-Za-z][\w.+-]*\s+v?\d+(?:\.\d+)*\b/i;
 /** Words in a claim that say it changed something, so a change must show. */
 export const CHANGE_CLAIM = new RegExp(String.raw`\b(${CHANGE_VERBS}|in place|(?:is|are) ${IS_IN}|now (points|uses|returns|throws|falls back|guards|reads|writes|retries|leads|lists|documents|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|checks|skips|validates|redirects|caches)|(points|uses|returns|reads|lists|documents|leads|has|includes|contains|imports|exports|calls|sets|defaults|handles|accepts|supports|logs|retries|throws|validates|caches)\b[^.;]{0,50}\bnow|applied)\b`, 'i');
 
@@ -537,6 +568,9 @@ const SUBJECT_WORDS = {
     ci: /\b(?:(?<!\b(?:npm|pnpm|yarn|bun)\s)ci|pipelines?|workflows?|github actions|actions run|(?:pr|ci|status|required|github|remote|branch)\s+checks|checks\s+(?:on|for)\s+(?:the\s+)?(?:pr|pull request|branch|main|master|commit|#\d+)|(?:ci|deploy|build|test|lint|release|e2e|nightly)\s+jobs?|pr|pull request|pr \d+|pr #?\d+|#\d+)\b/i,
     build: /\b(build(s)?|bundle|compil(e|es|ed|ation)|assembl(e|es|ed)|apk|aab|tsc|type ?check(s|ing)?|typecheck(s|ing)?|types|go vet|vet)\b/i,
 };
+
+/** Runs that are not tests, a build, lint or CI: "Both runs complete with 0 errors", "the load test finished cleanly". */
+const RUN_SUBJECT = /\b(?:(?:re-?)?runs?|scripts?|commands?|benchmarks?|bench\s+runs?|load\s+tests?|load\s+runs?|smoke\s+runs?|invocations?|backfills?|exports?|imports?|jobs?)\b/i;
 
 /** Every kind of run a `passed` clause names ("lint, tests and the build pass"): which runs must back it. */
 function subjectsOf(text) {
@@ -583,7 +617,7 @@ function commandsIn(text) {
 const METRIC_UNIT = String.raw`(?:ms|µs|us|ns|s|sec|secs|seconds|min|mins|minutes|%|x|×|kib|mib|gib|kb|mb|gb|b|bytes|req\/s|rps|qps|ops\/s|tok\/s|tokens\/s|t\/s|fps|rows\/s)`;
 const METRIC = new RegExp(String.raw`(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)\s?(${METRIC_UNIT})(?![\w/])|(?<![\w.])(\d+(?:\.\d+)?)(?=\s*(?:→|->|=>|⟶))|(?:→|->|=>|⟶)\s*(\d+(?:\.\d+)?)(?:\s?(${METRIC_UNIT})(?![\w/]))?`, 'gi');
 /** Words that make a figure in a claim a result to show, not a setting. */
-const METRIC_CONTEXT = /\b(coverage|p\d{2}|latency|throughput|faster|slower|quicker|speed(up)?|benchmark|bench|memory|rss|cpu|heap|bundle|size|smaller|larger|halved|reduced|dropped|fell|rose|shrank|down from|up from|improved|took|runtime|duration|per op)\b|→|->|=>|⟶|\d\s*(x|×)\b|\bfrom\s+(?:about\s+|around\s+|roughly\s+|~)?\d[\d.,]*\s*(?:ms|µs|us|ns|s|kb|mb|gb|kib|mib|gib)\s+to\s+\d/i;
+const METRIC_CONTEXT = /\b(coverage|p\d{2}|latency|throughput|faster|slower|quicker|speed(up)?|benchmark|bench|memory|rss|cpu|heap|bundle|size|smaller|larger|halved|reduced|dropped|fell|rose|shrank|down from|up from|improved|took|runtime|duration|per op)\b|→|->|=>|⟶|\d\s*(x|×)\b|\bfrom\s+(?:about\s+|around\s+|roughly\s+|~)?\d[\d.,]*\s*(?:ms|µs|us|ns|s|kb|mb|gb|kib|mib|gib|%)\s+(?:(?:all\s+the\s+way\s+)?(?:down|up)\s+)?to\s+\d/i;
 
 /** A figure named as a bar to meet ("the 200ms budget", "a 5% threshold"), not a result. */
 const BAR_NOUN = /^\s*(?:budget|target|limit|slo|sla|threshold|goal|bar|cap|ceiling|deadline)s?\b/i;
@@ -648,10 +682,12 @@ function claimOf(clause) {
     const s = clause.trim().replace(WHEN_PART, ' ').replace(QUOTED_CLAIM, (q) => (CLAIM_WORDS.test(q) ? ' ' : q)).replace(/\s+/g, ' ').trim();
     const words = shown(s);
     const said = prose(s).replace(LIVES_IN, ' ');
-    if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(words) || DESCRIBED.test(words) || HISTORY.test(words) || CONFIGURED.test(words)) return undefined;
+    // A plan or a hope in brackets that says what the thing does ("(it prints what would be synced)") is the brackets' own.
+    const unaside = words.replace(/\([^()]*\)/g, (m) => (/\b(?:fail\w*|error\w*|broke\w*|flak\w*|skip\w*|except|but|unless|until|once|if|after|before|later|tomorrow|tonight|next|yet|unverified|untested|not|need\w*|todo|pending)\b/i.test(m) ? m : ' '));
+    if (words === '' || ASKED.test(words) || REPORTED.test(words) || NOT_YET.test(unaside) || DESCRIBED.test(words) || HISTORY.test(words) || CONFIGURED.test(words) || PROVENANCE.test(words)) return undefined;
     // "Only 1 passed", "1 of 3 tests passed": a failure report. An aside in brackets speaks for itself ("All 3 pass now
     // (before the fix only 1 passed)"). "Run it on staging first" is an instruction, "A green build means …" a definition.
-    if (partPassed(words.replace(/\([^)]*\)/g, ' ')) || MEANS.test(words) || imperative(words) || QUESTION_LEAD.test(words) || NONE_CHANGED.test(words) || PIPELINE_DESCRIBED.test(prose(s))) return undefined;
+    if (partPassed(words.replace(/\([^)]*\)/g, ' ')) || ACCIDENTAL.test(words) || MEANS.test(words) || imperative(words) || QUESTION_LEAD.test(words) || NONE_CHANGED.test(words) || PIPELINE_DESCRIBED.test(prose(s))) return undefined;
     // A search said to come back empty is checked against the turn's last search, before the "nothing" in it reads as a negation.
     if (SEARCH_EMPTY.some((re) => re.test(words))) return { kind: 'passed', subject: 'search', term: searchTermOf(s) };
     // "It's allocation-free now": no allocations per operation, which a benchmark prints.
@@ -662,13 +698,16 @@ function claimOf(clause) {
     // "I edited `sum.js` so non-numeric entries are skipped", "Changed `parse` so that it doesn't throw": what a change
     // makes the code do is not a negation of the change.
     if (CHANGE_HEAD.test(rest)) rest = rest.replace(PURPOSE_TAIL, ' ');
-    if (!fixedByNegation && NEGATED.test(rest)) return undefined;
+    // "Added a `--dry-run` flag (it prints what would be synced and changes nothing)": a negation in brackets that says what
+    // the thing does speaks for the brackets; one that reports a failure or a catch ("(the flaky one still fails)") is the clause's.
+    const aside = (m) => (/\b(?:fail\w*|error\w*|broke\w*|break\w*|flak\w*|skip\w*|except|but|other than|apart from|besides|save for|yet|unverified|untested|not\s+(?:run|tested|verified|checked|deployed|pushed|merged|done|working)|didn'?t|wasn'?t|isn'?t|aren'?t|hasn'?t|haven'?t|couldn'?t|cannot|can'?t|won'?t|timed out|rejected|denied|red)\b/i.test(m) ? m : ' ');
+    if (!fixedByNegation && NEGATED.test(rest.replace(/\([^()]*\)/g, aside))) return undefined;
     if (TRIED.test(words)) return { kind: 'passed', subject: 'run', subjects: ['run'] };
     // "returns 200, but only for the cached path": a status with a catch is not a health claim.
     const healthy = HEALTH.some((re) => re.test(words)) && !/\b(returns?|answers?|responds?|responded|came back|comes back)\b[^.;]*\b(but|however|although|though|except)\b/i.test(words);
     // "both health checks pass" is about a running service, not a test run.
     // "/healthz is ok" alone is a health check; "Deployed to staging and GET /health returns 200" is both (below).
-    const ships = /\b(deployed|redeployed|released|shipped|rolled (out|back)|rolled\s+(?:it|them|this|that)\s+out|promoted|published|pushed|merged|tagged|provisioned)\b/i.test(said);
+    const ships = /\b(deployed|redeployed|released|shipped|rolled (out|back)|rolled\s+(?:\S+\s+){1,4}?out(?=\s+(?:to|on|onto|across|everywhere)\b)|promoted|published|pushed|merged|tagged|provisioned)\b/i.test(said);
     if (healthy && (/\bhealth\s*(checks?|endpoints?|probes?)\b/i.test(words) || (HEALTH_PATH.test(words) && !ships))) return { kind: 'deployed', target: 'health' };
     // Pods, tasks and rollouts run somewhere: the claim is about that environment, whatever image it names.
     if (ROLLED.test(words) && !/\b(tests?|specs?|suites?|lint|builds?)\b/i.test(words)) return { kind: 'deployed', target: 'env' };
@@ -676,6 +715,10 @@ function claimOf(clause) {
     const passing = s.replace(TRANSITIVE, ' ').replace(new RegExp(`${OPEN}[^${CLOSE}]*${CLOSE}`, 'g'), (m) => m.replace(/\./g, '·'));
     if ((PASSED.some((re) => re.test(passing)) && PASS_WORD.test(shown(passing))) || ALL_PASS.test(passing)) {
         const subjects = subjectsOf(words);
+        // "Both runs complete with 0 errors": a run of something else, which must have run and ended well.
+        if (subjects.length === 1 && subjects[0] === 'any' && RUN_SUBJECT.test(prose(words))) return { kind: 'passed', subject: 'run', subjects: ['run'], completed: true };
+        // "It exits with code 0 now", "Exit code is 0 now": the exit code of what the turn ran last.
+        if (subjects.length === 1 && subjects[0] === 'any' && EXIT_ZERO.test(words)) return { kind: 'passed', subject: 'run', subjects: ['run'], completed: true };
         return { kind: 'passed', subject: subjects.length === 1 ? subjects[0] : subjects.includes('ci') ? 'ci' : subjects[0], subjects };
     }
     let deployWord = false;
@@ -687,8 +730,9 @@ function claimOf(clause) {
         if (inCode(before) || (ADJECTIVE.test(prose(before)) && !/^\S+(?:\s+out)?\s+(?:it|them|this|that|these|those|everything|the|a|an|to|out)\b/i.test(after))) continue;
         // "the warmup pushed the learning rate toward its peak": a push of a figure, not of code.
         if (/^pushed\s+(back|for|ahead|through)\b|^push(?:ed|es)?\s+(?:\S+\s+){0,4}?(?:toward|towards|past|beyond|above|below|higher|lower)\b/i.test(after)) continue;
-        // Code at work, not a deploy: "`LRU.Get` released the mutex", "pushes the job onto the queue", "merged the two maps".
-        if (CODE_ACT.some((re) => re.test(after)) || codeSubject(before)) continue;
+        // Code at work, not a deploy: "`LRU.Get` released the mutex", "pushes the job onto the queue", "merged the two maps",
+        // "Locks are released in the `finally` block".
+        if (CODE_ACT.some((re) => re.test(after)) || codeSubject(before) || RESOURCE_PASSIVE.test(prose(before))) continue;
         // A label on a file or a post ("dated 2026-10-15, tagged `release`"), not a version.
         if (TAG_LABEL.test(after)) continue;
         deployWord = true;
@@ -707,8 +751,8 @@ function claimOf(clause) {
     return undefined;
 }
 
-/** "The rest of the suite is still green", "the whole suite passes": all the tests, not the ones just added. */
-export const WHOLE_SUITE = /\b(?:rest\s+of\s+the\s+(?:test\s+)?(?:suite|tests)|(?:whole|full|entire|complete)\s+(?:test\s+)?suite|(?:all\s+(?:the\s+)?)?(?:other|remaining|existing)\s+tests|everything\s+else|every\s+other\s+test)\b/i;
+/** "The rest of the suite is still green", "the whole suite passes", "all packages pass": all the tests, not the ones just added. */
+export const WHOLE_SUITE = /\b(?:rest\s+of\s+the\s+(?:test\s+)?(?:suite|tests)|(?:whole|full|entire|complete)\s+(?:test\s+)?suite|(?:all\s+(?:the\s+)?)?(?:other|remaining|existing)\s+tests|everything\s+else|every\s+other\s+test|(?:all|every|each)\s+(?:the\s+)?(?:other\s+)?(?:packages?|crates?|workspaces?))\b/i;
 
 /** A sentence led by a label that says what follows is not done: "Proposed fix (not started): …", "Next steps: …". */
 const PLAN_LEAD = /^(?:(?:proposed|suggested|possible|planned|recommended|alternative|follow-?up)\s+(?:fix(?:es)?|changes?|plan|approach|steps?|solution|options?|work|actions?)|next\s+steps?|plan|proposal|suggestion|recommendation|idea|todo|to-?do|follow-?ups?|left to do|remaining work|open questions?)\b[^:]{0,40}:\s|^[^:]{0,60}\((?:not\s+(?:yet\s+)?(?:started|done|applied|run|tested|implemented)|proposed|planned|todo|to do|untested)\)\s*:\s/i;
@@ -720,7 +764,10 @@ const QUESTION_LEAD = /^(?:how|why|what|where|which|whether)\b(?!\s+(?:i|we)\s+(
 /** How automation works, in the present: "the plan is uploaded as the `plan-prod` artifact", "is deployed on every merge". */
 const PIPELINE_DESCRIBED = /\b(?:is|are|gets|get)\s+(?:uploaded|published|pushed|deployed|released|applied)\s+(?:as\s+(?:the\s+|an?\s+)?(?:\S+\s+){0,5}?artifacts?\b|on\s+(?:every|each)\b|whenever\b|each\s+time\b|every\s+time\b|by\s+the\s+(?:\S+\s+)?(?:job|workflow|pipeline|ci|action|bot)\b)/i;
 /** "No files have been edited", "no code changed": nothing changed. */
-const NONE_CHANGED = /^(?:no|zero)\s+(?:\w+\s+){0,2}?(?:files?|code|changes?|edits?|lines?)\s+(?:(?:have|has|were|was|got|is|are)\s+(?:been\s+)?)?(?:edited|changed|modified|touched|made|written|committed)\b/i;
+const NONE_CHANGED = /^(?:no|zero)\s+(?:\w+\s+){0,2}?(?:files?|code|changes?|edits?|lines?)\s+(?:(?:have|has|were|was|got|is|are)\s+(?:been\s+)?)?(?:(?:edited|changed|modified|touched|made|written|committed|created|deleted|added|altered)(?:\s+(?:or|and|nor)\s+)?)+\b|\b(?:made|make|did|do|have\s+made|has\s+been|were|was)\s+no\s+(?:\w+\s+){0,2}?(?:edits?|changes?|modifications?|commits?|writes?|file\s+changes?)\b|\bno\s+(?:\w+\s+){0,2}?(?:edits?|changes?|modifications?)\s+(?:were|was|have\s+been|has\s+been)\s+(?:made|applied|committed)\b|\b(?:changed|modified|touched|edited|altered|wrote|created|committed)\s+nothing\b|\bwithout\s+(?:any\s+)?(?:editing|changing|modifying|touching|creating|writing|committing)\b|\b(?:left|leaving)\s+(?:\S+\s+){0,4}?(?:untouched|unchanged|as\s+(?:it\s+was|is))\b|\buntouched\b|\b(?:no|zero|0)\s+(?:(?:modified|changed|staged|unstaged|untracked|uncommitted|new|deleted|added|pending)\b,?\s+(?:(?:or|and|nor)\s+)?)+(?:files?|entries|changes?|paths?|lines?)\b/i;
+
+/** A heading over a list of tests: "Passing tests:", "Failing test:", "Tests passing (2):", "What passes:". It names what the list holds. */
+const LIST_LABEL = /^(?:the\s+)?(?:\d+\s+)?(?:(?:(?:still\s+)?(?:passing|failing|green|red|successful|succeeded|passed|failed|broken|ok|fixed|remaining|other)\s+(?:unit\s+|integration\s+|e2e\s+)?(?:tests?|specs?|cases?|checks?|jobs?|steps?|suites?|examples?|assertions?))|(?:(?:unit\s+|integration\s+|e2e\s+)?(?:tests?|specs?|cases?|checks?|jobs?|examples?)\s+(?:passing|failing|that\s+(?:pass|passed|fail|failed)|still\s+failing))|passing|passed|failing|failed|green|what\s+(?:passes|passed|works|worked|fails|failed))\s*(?:\(\d+(?:\s*\/\s*\d+)?\))?\s*:$/i;
 
 /** The kind of claim a sentence makes, or undefined (the first clause that makes one). */
 export function kindOf(sentence) {
@@ -732,14 +779,6 @@ export function kindOf(sentence) {
     return undefined;
 }
 
-/**
- * The claims in a reply, in order: `{ kind, text, part, subject?, target?,
- * improved?, commands?, metrics?, next? }`. `text` is the sentence, `part`
- * the clause that claims; `subject` for `passed`, `target` for `deployed`;
- * `next` the sentence after a heading such as "Added", which says what it
- * added.
- * At most one claim of each kind per sentence, and `max` in all.
- */
 /** A claim's own clause as shown, without the word that joins it to the clause before ("and the suite passes"). */
 const partOf = (clause) => clip(shown(clause).replace(/^(?:and|but|so|then|also|plus)\s+(?=\S)/i, ''), MAX_PART);
 
@@ -747,14 +786,74 @@ const partOf = (clause) => clip(shown(clause).replace(/^(?:and|but|so|then|also|
 const PASS_COUNT = /\b(\d+)\s*\/\s*\1\b|\ball\s+(\d+)\b|\b(\d+)\s+(?:of|out\s+of)\s+\d+\b|\b(\d+)\s+(?:[\w-]+\s+){0,2}?(?:tests?|specs?|checks?|cases?)\b/i;
 const passCount = (clause) => shown(clause).match(PASS_COUNT)?.slice(1).find(Boolean);
 
+/** A reply's own word that something still fails: "One test still fails, `rounds totals`", "the tests still fail (2 of 14)". */
+const STILL_FAILS = /\b(?:still|also|continues\s+to|keeps)\s+(?:fail(?:s|ing)?|red|broken|erroring)\b|\b(?:is|are)\s+still\s+(?:failing|red|broken)\b|\b(?:failures?|failing\s+tests?)\s+(?:left|remain(?:s|ing)?)\b|\bremaining\s+failures?\b|\bpre-?existing\s+failures?\b|\bwas\s+(?:already\s+)?failing\s+before\b|\b(?:errors?|problems?|warnings?|issues?|failures?)\s+(?:is\s+|are\s+)?(?:still\s+)?(?:left|remain(?:s|ing)?)\b|\bstill\s+(?:reports?|shows?|prints?|finds?|flags?|has|have)\s+(?:\d+|one|two|three|an?)\s+(?:\w+\s+)?(?:errors?|problems?|failures?|issues?)\b|\bunrelated\b[^.;]{0,40}\bfail(?:s|ed|ing|ures?)?\b|\bfail(?:s|ed|ing|ures?)?\b[^.;]{0,60}\b(?:unrelated|pre-?existing|before\s+(?:this|my|the)\s+change|already\s+(?:on|in)\s+main|on\s+main\s+too)\b/i;
+/** A test said to fail now, in the reply's own words: "`sum adds every number` fails", "the third fails", "one test fails". */
+const FAILS_NOW = /\b(?:fails|is\s+failing|are\s+failing|keeps\s+failing)\b|\b(?:\d+|one|two|three|four|five)\s+(?:\w+\s+)?(?:fail|failing)\b/i;
+/** A failure in the past or in a question: "the test that used to fail", "it failed before the fix", "does it fail?". */
+const FAILED_ONCE = /\b(?:used\s+to|would|could|might|should|will|won['’]t|doesn['’]t|does\s+not|never|no\s+longer)\s+(?:\w+\s+)?fail|\bif\b[^.;]{0,40}\bfails\b|\?\s*$/i;
+const NONE_LEFT = /\b(?:no|none|nothing|zero|0)\s+(?:other\s+|more\s+)?(?:(?:tests?|specs?|failures?)\s+)?(?:still|remain|left)\b|\bno\s+(?:longer|more)\b/i;
+const WORD_NUMBERS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+const N_WORD = String.raw`(\d+|one|two|three|four|five|six|seven|eight|nine|ten)`;
+/** How many the reply says still fail: "one unrelated test still fails", "the 1 failing", "2 failures left", "still fail (2 of 14)". */
+const TOLD_COUNT = new RegExp(String.raw`\b${N_WORD}\s+(?:other\s+|more\s+|unrelated\s+|remaining\s+|pre-?existing\s+)?(?:tests?|specs?|cases?)\s+(?:still\s+|also\s+)?(?:fail|fails|failing|failed|remain|remains|left)\b|\b${N_WORD}\s+(?:still\s+)?failing\b|\b${N_WORD}\s+(?:unrelated\s+|pre-?existing\s+|remaining\s+)?failures?\b|\b${N_WORD}\s+(?:\w+\s+)?(?:errors?|problems?|issues?)\b|\bstill\s+fail(?:s|ing)?\s+\((\d+)\s+(?:of|out\s+of)\s+\d+\)`, 'i');
+/** A status a check answered with, as a reply reports it: "answers 503", "returns a 404". */
+const TOLD_CODE = /(?<![\w.\/:-])([45]\d\d)(?![\w.\/:-])/g;
+const TOLD_DOWN = /\b(?:down|unhealthy|not\s+(?:healthy|up|ready|responding|serving)|crash(?:ing|looping|es)?|failing|erroring)\b/i;
+/**
+ * What a reply itself says is still wrong: tests that still fail (how many and which, when it says) and statuses or words
+ * that say a check found it down. A claim beside such a report is held against the rest of the run, not against what the
+ * reply already told.
+ */
+function toldIn(sentences) {
+    let fails;
+    const codes = new Set();
+    let down = false;
+    for (const s of sentences) {
+        const plainS = shown(s);
+        for (const m of plainS.matchAll(TOLD_CODE)) codes.add(Number(m[1]));
+        if (TOLD_DOWN.test(plainS)) down = true;
+        const still = STILL_FAILS.exec(plainS) ?? (FAILED_ONCE.test(plainS) ? null : FAILS_NOW.exec(plainS));
+        if (!still || NONE_LEFT.test(plainS)) continue;
+        // The count is read from the clause that says it fails ("Fixed 2 lint errors; one is left" counts one).
+        const at = still.index;
+        const from = Math.max(0, ...[';', ',', '—', '–', ':', '.'].map((c) => plainS.lastIndexOf(c, at) + 1));
+        const c = TOLD_COUNT.exec(plainS.slice(from));
+        const n = c ? c.slice(1).find((x) => x !== undefined) : undefined;
+        const count = n === undefined ? undefined : WORD_NUMBERS[n.toLowerCase()] ?? Number(n);
+        const names = [...s.matchAll(new RegExp(`${OPEN}([^${CLOSE}\\n]{3,80})${CLOSE}`, 'g'))].map((m) => m[1]);
+        fails = fails ?? { ...(count !== undefined ? { count } : {}), ...(names.length ? { names: names.slice(0, 6) } : {}) };
+    }
+    if (!fails && !codes.size && !down) return undefined;
+    return { ...(fails ? { fails } : {}), ...(codes.size ? { codes: [...codes].slice(0, 8) } : {}), ...(down ? { down: true } : {}) };
+}
+
+/** A reply's own word that it did not check its work: "Tests were not run", "I didn't run the tests", "untested". */
+const UNTESTED = /\b(?:tests?|specs?|suite|it|this|the\s+(?:fix|change))\s+(?:was|were|is|are|has|have)\s*(?:not|n['’]t|never)\s+(?:been\s+|yet\s+)?(?:run|ran|executed|verified|tested|checked)\b|\b(?:I|we)\s+(?:did\s+not|didn['’]t|have\s+not|haven['’]t|never|could\s+not|couldn['’]t)\s+(?:yet\s+)?(?:run|ran|execute|test|verify|check)\b|\b(?:untested|unverified)\b|\bnot\s+(?:yet\s+)?(?:been\s+)?(?:tested|verified)\b|\bwithout\s+running\b|\bno\s+tests?\s+(?:were|was|have\s+been)\s+run\b/i;
+
+/** The suite or runner a pass clause names. */
+const SUITE_OF = /\b(unit|integration|e2e|end[-\s]to[-\s]end|playwright|cypress|webdriver(?:io)?|selenium|puppeteer|detox|appium|smoke|contract|snapshot|acceptance|regression|component|browser|api|ui)\b/i;
+
+/**
+ * The claims in a reply, in order: `{ kind, text, part, subject?, target?,
+ * improved?, commands?, metrics?, next? }`. `text` is the sentence, `part`
+ * the clause that claims; `subject` for `passed`, `target` for `deployed`;
+ * `next` the sentence after a heading such as "Added", which says what it
+ * added.
+ * At most one claim of each kind per sentence (a pass claim per suite it
+ * names), and `max` in all.
+ */
 export function claimsIn(text, { max = 8 } = {}) {
     const out = [];
     const { sentences, plan } = markedWithPlans(text);
+    // "Tests were not run, per your instruction": the reply says itself that its fix is not checked.
+    const untested = UNTESTED.test(shown(String(text ?? '')));
+    const told = toldIn(sentences);
     for (const [at, sentence] of sentences.entries()) {
         const kinds = new Set();
         const counts = new Map();
         const whole = shown(sentence);
-        if (PLAN_LEAD.test(whole) || DEFINES.test(whole) || plan.has(at)) continue;
+        if (PLAN_LEAD.test(whole) || DEFINES.test(whole) || LIST_LABEL.test(whole) || plan.has(at)) continue;
         const clauses = clausesOf(sentence);
         if (clauses.length > 1 && !clauses.some((c) => claimOf(c))) clauses.push(sentence);
         const founds = clauses.map((c) => claimOf(c));
@@ -772,7 +871,9 @@ export function claimsIn(text, { max = 8 } = {}) {
             // One claim of each kind; a deploy and a health check in one sentence are two.
             // "Lint is clean, and `cargo test` passes" names two kinds of run: two claims.
             // "The new tests pass, and the rest of the suite is still green" claims two runs.
-            const key = found?.kind === 'deployed' ? `deployed:${found.target === 'health' ? 'health' : 'ship'}` : found?.kind === 'passed' ? `passed:${found.subject ?? 'any'}${WHOLE_SUITE.test(shown(clause)) ? ':whole' : ''}` : found?.kind;
+            // "Unit tests pass (40), and the Playwright checkout tests pass too": two suites, two claims.
+            const suite = found?.kind === 'passed' ? SUITE_OF.exec(shown(clause))?.[1]?.toLowerCase().replace(/^end[-\s]to[-\s]end$/, 'e2e') : undefined;
+            const key = found?.kind === 'deployed' ? `deployed:${found.target === 'health' ? 'health' : 'ship'}` : found?.kind === 'passed' ? `passed:${found.subject ?? 'any'}${WHOLE_SUITE.test(shown(clause)) ? ':whole' : ''}${suite ? `:${suite}` : ''}` : found?.kind;
             if (!found) continue;
             // "The currency tests pass (9/9), and all 188 tests pass": two counts, two runs, two claims.
             const count = found.kind === 'passed' ? passCount(clause) : undefined;
@@ -786,16 +887,22 @@ export function claimsIn(text, { max = 8 } = {}) {
             const metrics = found.improved ? [...metricsIn(clause), ...loose]
                 : found.kind === 'passed' && measured ? metricsIn(clause)
                     : found.kind === 'passed' || found.kind === 'fixed' ? metricsIn(sentence) : [];
+            // "Done — the timeout in `src/config.ts` is now 15000 ms": a bare label says what the clause after it holds.
+            // "Done: `run()` now skips dot files" claims what the clause after the label says, whether or not it claims on its own.
+            const label = index === 0 && clauses.length > 1 && (found.kind === 'done' || found.kind === 'fixed') && shown(clause).split(/\s+/).length <= 2 && (!founds[1] || founds[1].kind === found.kind);
             out.push({
                 kind: found.kind,
                 text: whole,
-                part: partOf(clause),
+                part: label ? partOf(`${clause} — ${clauses[1]}`) : partOf(clause),
                 ...(found.subject ? { subject: found.subject } : {}),
                 ...(found.term ? { term: clip(found.term, 80) } : {}),
                 ...(found.subjects && found.subjects.length > 1 ? { subjects: found.subjects } : {}),
                 ...(found.target ? { target: found.target } : {}),
                 ...(found.improved ? { improved: true } : {}),
                 ...(found.beats ? { beats: true } : {}),
+                ...(found.completed ? { completed: true } : {}),
+                ...(untested && found.kind === 'fixed' ? { untested: true } : {}),
+                ...(told ? { told } : {}),
                 ...(found.allocs === 0 ? { allocs: 0 } : {}),
                 ...(commands.length ? { commands } : {}),
                 ...(metrics.length ? { metrics } : {}),
