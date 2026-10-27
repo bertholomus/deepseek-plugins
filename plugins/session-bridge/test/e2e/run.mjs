@@ -43,10 +43,10 @@
  *   cannot be written (said in GET /health, gone once it can be written);
  *   enabled: false (the start fails with the reason: failed in Plugins,
  *   never running, nothing listens), then the row without it (and off and
- *   on, if DSH left it failed: running); a socket path another program answers on is refused and left
- *   alone, failed in Plugins, still failed with the row that last ran,
- *   running again once switched off and on, and at once with a row that
- *   differs from the one that last ran.
+ *   on, if DSH left it failed: running); a socket path another program
+ *   answers on is refused and left alone, failed in Plugins, still failed
+ *   with the row that last ran, running again once switched off and on,
+ *   and at once with a row that differs from the one that last ran.
  * - Plugins: its title, sentence and icon; switched off (no socket left)
  *   and on again.
  * - The window: the bridged session in DSH's sidebar, and a prompt sent
