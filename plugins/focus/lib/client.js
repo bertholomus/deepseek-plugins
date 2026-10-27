@@ -24,6 +24,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 		const POLL_MS = 5000;
 		const LATE_MS = 60000; // an end seen this long after it happened is said with its time, without the chime
 		const END_HOLD_MS = 12000; // an end's toast stays this long (DSH's toast default is 3 s)
+		const UNDO_MS = 60000; // the host keeps a Reset's timer this long for Undo; the panel offers it a little less
 		const MIN = 1;
 		const MAX = 180;
 		// DSH's keyboard shortcut that opens the panel (rebindable in DSH's Keyboard shortcuts): ⇧⌥⌘F, Ctrl+Shift+Alt+F.
@@ -92,7 +93,9 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 		const useStore = (s) => useSyncExternalStore(s.sub, s.get, s.get);
 		const stateS = createStore(null); // the host's { settings, timer, sessions, rev, problems }
 		const loadS = createStore({ error: null }); // why the last read failed, in words
-		const uiS = createStore({ panel: false, busy: false, toast: null });
+		// panel: open or not; toast: DSH's toast while the panel is closed; note: a refusal said in the open panel;
+		// undo: the Reset the panel can undo ({ rev, until, kind }).
+		const uiS = createStore({ panel: false, busy: false, toast: null, note: null, undo: null });
 		const nowS = createStore(Date.now()); // advanced by the local tick, so the countdown redraws without a fetch
 		const cx = (...a) => a.filter(Boolean).join(" ");
 		// The host keeps an absolute endAt while running and the remaining time while idle; same rule, client side.
@@ -147,8 +150,12 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 		const dropToast = (seq) => uiS.set((u) => (u.toast && u.toast.seq === seq ? { ...u, toast: null } : u));
 		/** A toast's action: it closes the toast, then runs. */
 		const action = (label, run) => { const seq = toastSeq + 1; return { label, onClick: () => { dropToast(seq); run(); } }; };
-		/** The end in DSH's toast, with the pomodoro's next step as its action; `late` says when it ended. */
+		/**
+		 * The end in DSH's toast, with the pomodoro's next step as its action; `late` says when it ended.
+		 * An open panel says it itself (its state, the next step's clock and button), so no toast covers the dialog.
+		 */
 		const sayEnd = (v, late) => {
+			if (uiS.get().panel) return;
 			const t = v.timer;
 			const kind = TEXT.done[t.kind] ? t.kind : "custom";
 			const next = nextOf(t, v.settings || {}, v.sessions?.focus ?? 0);
@@ -166,8 +173,9 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			if (seenDone !== undefined && done && done !== seenDone) {
 				const late = Date.now() - done > LATE_MS;
 				// An end found late that a panel has shown already (in another window) is not said again.
-				if (late && v.timer.doneSeen === true) { /* seen */ } else if (visible()) sayEnd(v, late);
-				else pending = { doneAt: done }; // hidden: said when the window is shown again, with its time
+				const say = !(late && v.timer.doneSeen === true);
+				if (say && visible()) sayEnd(v, late);
+				else if (say) pending = { doneAt: done }; // hidden: said when the window is shown again, with its time
 				// The chime sounds at the end even in a hidden window (it is heard); never for an end found late.
 				if (!late && v.settings && v.settings.chime) chime();
 			}
@@ -195,21 +203,30 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			else loadS.set({ error: r.error });
 			return r.ok;
 		};
-		/** One op (and maybe a settings patch); a refusal comes back as a toast, in the host's words. */
+		/**
+		 * One op (and maybe a settings patch). A refusal comes back in the host's words: in the open panel, where
+		 * the person is looking (never a toast over the dialog), or in DSH's toast when the panel is closed.
+		 */
 		const send = async (body) => {
-			uiS.set((u) => ({ ...u, busy: true }));
+			uiS.set((u) => ({ ...u, busy: true, note: null }));
 			const r = await api("state", body);
 			uiS.set((u) => ({ ...u, busy: false }));
-			if (!r.ok) { toast(TEXT.notChanged(r.error), "warning"); return false; }
+			if (!r.ok) {
+				if (uiS.get().panel) uiS.set((u) => ({ ...u, note: { text: TEXT.notChanged(r.error), seq: ++toastSeq } }));
+				else toast(TEXT.notChanged(r.error), "warning");
+				return false;
+			}
 			take(r.value);
 			return true;
 		};
 		const op = (o) => send({ op: o });
-		/** Reset; a timer that had started can be brought back from the toast for a minute (the host keeps it). */
+		/** Reset; a timer that had started can be brought back from the panel for a minute (the host keeps it). */
 		const resetTimer = (t, started) => send({ op: { op: "reset" } }).then((ok) => {
-			if (ok && started) toast(TEXT.resetSaid(t.kind), "success", { holdMs: 10000, actions: [action(TEXT.undo, () => op({ op: "undo" }))] });
+			const rev = stateS.get()?.rev;
+			uiS.set((u) => ({ ...u, undo: ok && started ? { rev, until: Date.now() + UNDO_MS - 2000, kind: t.kind } : null }));
 			return ok;
 		});
+		const undoReset = () => send({ op: { op: "undo" } }).then((ok) => { uiS.set((u) => ({ ...u, undo: null })); return ok; });
 
 		// ------------------------------------------------------------ the chime
 		let audioCtx = null; // created lazily on the first click in the window; never on page load
@@ -264,12 +281,13 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 		let opener = null; // what had the focus when the panel opened; it gets it back on close
 		const openPanel = (from) => {
 			opener = from || (typeof document !== "undefined" ? document.activeElement : null);
-			uiS.set((u) => ({ ...u, panel: true }));
+			// The panel says what a toast said (the end, the next step); a toast never covers the dialog.
+			uiS.set((u) => ({ ...u, panel: true, toast: null }));
 			markSeen();
 			refresh();
 		};
 		const closePanel = () => {
-			uiS.set((u) => ({ ...u, panel: false }));
+			uiS.set((u) => ({ ...u, panel: false, note: null }));
 			const back = opener;
 			opener = null;
 			if (back && typeof back.focus === "function") setTimeout(() => { try { if (back.isConnected !== false) back.focus(); } catch (e) {} }, 0);
@@ -408,6 +426,12 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 			return modal([
 				load.error ? h("div", { key: "stale", className: "fc-note fc-error", role: "status", "data-focus-stale": "" }, TEXT.stale(load.error)) : null,
 				h("p", { key: "state", className: "fc-state", "aria-live": "polite", "data-focus-state": phase }, stateLine),
+				// After a Reset of a started timer: Undo, here where the Reset was pressed, while the host keeps it.
+				u.undo && st.rev === u.undo.rev && now < u.undo.until
+					? h("div", { key: "undo", className: "fc-row fc-undo", role: "status", "data-focus-undo": "" },
+						h("span", { className: "fc-undo-text" }, TEXT.resetSaid(u.undo.kind)),
+						Btn({ variant: "outline", disabled: busy, onClick: undoReset, "data-focus-undo-button": "" }, TEXT.undo))
+					: null,
 				h("div", { key: "ring", className: "fc-ringwrap" },
 					h("svg", { className: "fc-ring", viewBox: "0 0 180 180", width: 180, height: 180, "aria-hidden": "true", focusable: "false" },
 						h("circle", { className: "fc-ring-track", cx: 90, cy: 90, r: 80 }),
@@ -440,6 +464,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 						h(MinutesField, { label: KIND.short, field: "shortMin", value: settings.shortMin || 5, disabled: busy, onCommit: savePreset("short", "shortMin") }),
 						h(MinutesField, { label: KIND.long, field: "longMin", value: settings.longMin || 15, disabled: busy, onCommit: savePreset("long", "longMin") }))),
 				problems.length ? h("div", { key: "problems", className: "fc-note fc-error", role: "status", "data-focus-problems": "" }, problems.join(" ")) : null,
+				u.note ? h("div", { key: `note:${u.note.seq}`, className: "fc-note fc-error", role: "alert", "data-focus-note": "" }, u.note.text) : null,
 			], h(Fragment, null,
 				Btn({ variant: "outline", disabled: busy || (phase === "ready" && rem === total), onClick: () => resetTimer(t, phase === "running" || phase === "paused"), "data-focus-reset": "" }, TEXT.reset),
 				Btn({ variant: "primary", disabled: busy, onClick: primary.run, "data-modal-autofocus": true, "data-focus-primary": "" }, primary.label)));
@@ -486,6 +511,8 @@ if (typeof window !== "undefined" && window.__ModuleLoader__) window.__ModuleLoa
 .fc-next{font:var(--dsw-font-xs-13);color:var(--dsw-alias-label-secondary)}
 .fc-row{display:flex;align-items:center;gap:8px;min-width:0}
 .fc-wrap{flex-wrap:wrap}
+.fc-undo{justify-content:space-between;padding:6px 6px 6px 12px;border-radius:var(--dsw-radius-md,12px);border:.5px solid var(--dsw-alias-border-l3)}
+.fc-undo-text{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary)}
 .fc-custom-field{flex:none;cursor:text}
 .fc-custom-name{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary)}
 .fc-custom .fc-num{width:96px}
@@ -560,7 +587,7 @@ body.wp-still :is(${ROOTS}),body.wp-still :is(${ROOTS})::before,body.wp-still :i
 
 		// ------------------------------------------------------------ apply
 		function apply(ctx) {
-			ctx.effect(() => { refresh(); return () => { stateS.set(null); seenDone = undefined; pending = null; seenSent = null; uiS.set({ panel: false, busy: false, toast: null }); }; }, "focus: state");
+			ctx.effect(() => { refresh(); return () => { stateS.set(null); seenDone = undefined; pending = null; seenSent = null; uiS.set({ panel: false, busy: false, toast: null, note: null, undo: null }); }; }, "focus: state");
 			ctx.effect(() => installStyles(), "focus: style");
 			ctx.effect(() => startClock(), "focus: tick");
 			ctx.effect(() => armAudio(), "focus: audio");

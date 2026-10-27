@@ -93,7 +93,9 @@ Hand-written React, no build step: `window.__ModuleLoader__.load({ id: "dsh-plug
   action **(v3)**, and chimed (two sine notes, 659.25 Hz and 987.77 Hz; the AudioContext is made on
   the first click in the window and closed on cleanup) if `settings.chime`. A `doneAt` more than
   60 s old is said with its time ("Focus session done at 10:25 AM. Time for a break."), without the
-  chime, and not at all if `doneSeen` is already true.
+  chime, and not at all if `doneSeen` is already true. **(v3)** A window whose panel is open says the
+  end in the panel (its state, the next step's clock and button) and gives no toast, and opening the
+  panel drops a toast, so no toast covers DSH's dialog (DESIGN.md section 7).
 - **(v3) A hidden window** (`document.visibilityState === "hidden"`) chimes at the end and keeps the
   end pending; on `visibilitychange` to visible it reads the host and says the end with its time,
   unless the end was seen (`doneSeen`) or replaced (another `doneAt`, or a running timer) meanwhile.
@@ -109,8 +111,9 @@ Hand-written React, no build step: `window.__ModuleLoader__.load({ id: "dsh-plug
   lengths; after `custom` the same timer again ("Start again"). **(v3)** The clock shows that next
   length under a caption naming it ("Short break next", "Custom again"); the end's toast has the same
   action.
-- **(v3) Reset and Undo.** A Reset of a running or paused timer is said in a toast ("Focus session
-  reset.", held 10 s) whose action POSTs `undo`; a refused undo is a "Not changed: …" toast.
+- **(v3) Reset and Undo.** After a Reset of a running or paused timer, the panel shows "Focus session
+  reset." with an Undo button under its state line (`data-focus-undo`, role status) while the state's
+  `rev` is the Reset's and for 58 s (the host keeps it 60 s); Undo POSTs `undo`.
 - **(v3) The rail.** DSH hands the footer entry `{ wide }`. When `wide === false` (the folded rail, one
   footer row 36 px wide), Focus measures DSH's footer outlet (`[data-slot="sidebar.footer.action"]`):
   if an entry before its own has a box (itself or a child, three levels down), Focus draws no button
@@ -125,7 +128,9 @@ Hand-written React, no build step: `window.__ModuleLoader__.load({ id: "dsh-plug
   runs with the plugin's scope.
 - Errors: no state at all → "Focus can't reach its timer: <why>. Check that the Focus plugin is on in
   Plugins, then try again." with Try again; a later failed read keeps the state with a note; a refused
-  op → a toast "Not changed: <the host's words>"; the host's `problems` at the bottom of the panel.
+  op → "Not changed: <the host's words>", **(v3)** in the open panel above its buttons
+  (`data-focus-note`, role alert; cleared by the next op or on close), or in DSH's toast when the
+  panel is closed (an end toast's action); the host's `problems` at the bottom of the panel.
 - Focus: opens on the main button; Escape (DSH's Modal) closes; the focus goes back to what had it
   when the panel opened (the footer button, when that opened it).
 - The custom length field has its visible name ("Custom") in the same label as the field.

@@ -358,14 +358,16 @@ try {
             await dialog.getByRole('button', { name: 'Reset', exact: true }).click();
             await waitFor(async () => (await stateLine.getAttribute('data-focus-state')) === 'ready', 'reset', 10000, 200);
             check('Reset: ready at the full length', (await panel.locator('[data-focus-time]').textContent()) === '25:00' && (await focus()).body.timer.running === false);
-            const undo = toastButton(page, 'Focus session reset.', 'Undo');
+            const undoRow = panel.locator('[data-focus-undo]');
+            const undo = undoRow.getByRole('button', { name: 'Undo', exact: true });
             const offered = await undo.waitFor({ state: 'visible', timeout: 5000 }).then(() => true, () => false);
-            check('a Reset of a started timer is said in DSH\'s toast, with Undo', offered, (await page.getByRole('alert').allTextContents()).join(' | '));
+            check('a Reset of a started timer: the panel says it, with Undo under its state line, and no toast covers the dialog',
+                offered && (await undoRow.textContent()).startsWith('Focus session reset.') && (await page.getByRole('alert').filter({ hasText: 'reset' }).count()) === 0, (await panel.textContent()).slice(0, 200));
             await shot(page, shots, 'reset-undo-light');
             if (offered) await undo.click();
             await waitFor(async () => (await stateLine.getAttribute('data-focus-state')) === 'running', 'undone', 10000, 200).catch(() => {});
             const undone = (await focus()).body.timer;
-            check('Undo (clicked in the toast over the open dialog): running again, to the same end', undone.running === true && undone.endAt === resumed.endAt && (await panel.isVisible()), json({ before: resumed.endAt, after: undone.endAt }));
+            check('Undo: running again, to the same end; the Undo row goes', undone.running === true && undone.endAt === resumed.endAt && (await undoRow.count()) === 0, json({ before: resumed.endAt, after: undone.endAt }));
             check('focus.log says the Reset and the Undo', /reset focus to 1500s \(it was running with \d+s left; Undo can bring it back for 60s\)/.test(read(logFile)) && /undo reset: focus running again, ends /.test(read(logFile)), read(logFile).slice(-500));
             await dialog.getByRole('button', { name: 'Reset', exact: true }).click();
             await waitFor(async () => (await stateLine.getAttribute('data-focus-state')) === 'ready', 'reset again', 10000, 200);
@@ -488,9 +490,18 @@ try {
             if (window?.page) await shot(window.page, shots, 'failed-end');
         });
 
-        await step('live data: a change made elsewhere shows within a poll; a read that fails is said, and Try again', async () => {
+        await step('live data: a change made elsewhere shows within a poll; an end with the panel open is said in the panel; a read that fails is said, and Try again', async () => {
             const { page } = window;
             const stateLine = page.locator('[data-focus-state]');
+            // An end while the panel is open: the panel says it and the chime sounds; no toast covers the dialog.
+            await page.evaluate(() => { window.__chimes = []; });
+            await op({ op: 'start', kind: 'custom', durationMs: 10000 });
+            await waitFor(async () => (await stateLine.getAttribute('data-focus-state')) === 'done', 'the end in the open panel', 25000, 200).catch(() => {});
+            await page.waitForTimeout(800);
+            const inPanel = [await stateLine.textContent(), await page.locator('[data-focus-primary]').textContent()];
+            check('an end with the panel open: the panel says it, with the next step, and chimes; no toast over the dialog',
+                /^Custom · done at \d{1,2}:\d{2}\s?[AP]M$/.test(inPanel[0]) && inPanel[1] === 'Start again' && json(await page.evaluate(() => window.__chimes)) === '[659.25,987.77]'
+                && (await page.getByRole('alert').filter({ hasText: 'Timer done' }).count()) === 0, json({ inPanel, chimes: await page.evaluate(() => window.__chimes), alerts: await page.getByRole('alert').allTextContents() }));
             await op({ op: 'set', kind: 'long', durationMs: 900000 });
             await waitFor(async () => (await page.locator('[data-focus-time]').textContent()) === '15:00', 'the change from elsewhere', 12000, 300);
             check('a length set elsewhere shows in the open panel within a poll', (await stateLine.textContent()) === 'Long break · ready, 15:00', await stateLine.textContent());
@@ -498,8 +509,10 @@ try {
             await page.locator('[data-focus-stale]').waitFor({ state: 'visible', timeout: 12000 });
             check('a read that fails: the panel says so, and that it tries again', /a stand-in failure.*tries again every few seconds/.test(await page.locator('[data-focus-stale]').textContent()), await page.locator('[data-focus-stale]').textContent());
             await page.locator('[data-focus-primary]').click();
-            await page.getByText('Not changed: a stand-in failure').first().waitFor({ state: 'visible', timeout: 10000 });
-            check('an op that fails: a toast says nothing changed, and why', true);
+            const note = page.locator('[data-focus-panel] [data-focus-note]');
+            const noted = await note.waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
+            check('an op that fails: the open panel says nothing changed, and why (no toast over the dialog)', noted && (await note.textContent()) === 'Not changed: a stand-in failure' && (await note.getAttribute('role')) === 'alert'
+                && (await page.getByRole('alert').filter({ hasText: 'Not changed' }).count()) === 1, noted ? await note.textContent() : (await page.getByRole('alert').allTextContents()).join(' | '));
             await page.keyboard.press('Escape');
             await page.reload({ waitUntil: 'domcontentloaded' });
             await page.locator('[data-focus-open]').waitFor({ state: 'visible', timeout: 60000 });

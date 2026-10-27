@@ -22,7 +22,9 @@ a mark on the footer button until you have seen it.
 - **Said when it ends.** Every open window shows DSH's toast for 12 seconds ("Focus session done. Time
   for a break." or "Break over. Ready to focus?") with the next step as its button (for example
   Start short break), and, if the chime is on, plays a short two-note chime. The sound is made only
-  after your first click in the window; nothing plays on page load.
+  after your first click in the window; nothing plays on page load. A window whose panel is open
+  says the end in the panel instead (its state, the next step's clock and button) and chimes, so no
+  toast covers the dialog; opening the panel also puts an end's toast away.
 - **A mark until you have seen it.** After the toast, the footer button keeps a green dot, and its
   name and tooltip say what ended ("Focus timer: Focus session done at 10:25 AM"), until the panel
   shows the end in any window, or the next timer starts. The host keeps the mark, so a reload or a
@@ -70,9 +72,9 @@ The panel says the state in words at the top:
   While a timer runs, the lengths are locked and the panel says "Pause or reset to choose another
   length." — a click never throws a running session away.
 - **Reset and Undo.** Reset puts the timer back to its full length. After a Reset of a timer that had
-  started (running or paused), the toast "Focus session reset." has an Undo button for 10 seconds:
-  it brings the timer back as it was, still running to the same end if it ran. The host keeps the
-  old timer for a minute, and only while nothing else changed.
+  started (running or paused), the panel says "Focus session reset." with an Undo button under its
+  state line, for as long as the host keeps the old timer: a minute, and only while nothing else
+  changed. Undo brings the timer back as it was, still running to the same end if it ran.
 - **Settings.** "Chime when a timer ends" switches the chime. The three preset lengths can be typed
   (whole minutes, 1 to 180; Enter or leaving the field keeps it; a value out of range is marked and
   not kept). A preset length changed while that preset's timer is set and not started also changes
@@ -83,8 +85,9 @@ The panel says the state in words at the top:
 - **When something is wrong.** If the window cannot read the timer at all, the panel says "Focus can't
   reach its timer: <why>. Check that the Focus plugin is on in Plugins, then try again." with a Try
   again button. If a later read fails, the panel keeps the last state and says it may be out of date.
-  A change the host refuses (for example Start while a timer runs, from another window) comes back as
-  a toast: "Not changed: <the host's words>". A problem with the setting or the folder is shown at the
+  A change the host refuses (for example Start while a timer runs, from another window) is said in
+  the panel, above its buttons: "Not changed: <the host's words>"; one asked from a toast while the
+  panel is closed comes back as a toast. A problem with the setting or the folder is shown at the
   bottom of the panel, in words without paths; the logs name the folder.
 
 ## Install and set up
@@ -229,7 +232,8 @@ changes nothing, its settings included.
 - In DSH's narrow rail Focus gives its seat to an earlier footer button, and DSH's keyboard shortcut
   ⇧⌥⌘F (Ctrl+Shift+Alt+F) opens the panel anywhere.
 - The done clock shows the next step; the custom field has its name beside it; Undo after a Reset;
-  the window's problem words name no path; `resume` logs its end.
+  what the panel's own buttons cause is said in the panel, never in a toast over the dialog; the
+  window's problem words name no path; `resume` logs its end.
 
 ## What changed in 0.2.0
 

@@ -1,9 +1,10 @@
 /**
  * Focus: the host's timer on a clock moved by hand (its own end of a timer, a restart under one, an end
- * while DSH was closed, the day it counts on), its refusals in words, its setting's check, a folder it
- * cannot write, its log's bound and its wiring to DSH; the window's bundle drawn with stand-ins for DSH's
- * parts (its words for each state, its error states, the end said once) and its style sheet held to
- * DESIGN.md; and the README held to the code. The real-DSH test is plugins/focus/test/e2e/run.mjs
+ * while DSH was closed, the day it counts on, the seen mark, Undo after a Reset), its refusals in words,
+ * its setting's check, a folder it cannot write, its log's bound and its wiring to DSH; the window's
+ * bundle drawn with stand-ins for DSH's parts (its words for each state, the footer's marks, its error
+ * states, the end said once, a hidden window, the toasts' actions, the seat in DSH's rail, the keyboard
+ * shortcut) and its style sheet held to DESIGN.md; and the README held to the code. The real-DSH test is plugins/focus/test/e2e/run.mjs
  * (`node scripts/e2e.mjs focus`).
  */
 import { after, test } from 'node:test';
@@ -698,27 +699,36 @@ test('lengths from the panel: a preset sets the timer, a custom length is checke
     w.close();
 });
 
-test('the end, said once: a toast in DSH\'s words when a new doneAt comes, never for the state found at first read, and said with its time when seen late', async () => {
+test('the end, said once: a toast in DSH\'s words when a new doneAt comes, never for the state found at first read, and said with its time when seen late; an open panel says it itself', async () => {
     let state = STATE({ timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: null, running: false, doneAt: Date.now() - 3600000 } });
     const w = await window(() => [200, state]);
     const toast = () => find(w.overlay(), (e) => e.type === 'Toast');
+    const read = async () => { w.listeners.get('visibilitychange')(); await w.settle(); }; // one of the window's own reads
     assert.equal(toast(), undefined, 'a timer that had ended before the window opened is not announced');
     state = STATE({ rev: 5, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: null, running: false, doneAt: Date.now() - 400 }, sessions: { date: '2026-10-26', focus: 1 } });
-    footerButton(w.button()).props.onClick({ currentTarget: null }); // opening reads the state
-    await w.settle();
+    await read();
     assert.deepEqual([toast()?.props.text, toast()?.props.tone, toast()?.props.holdMs], ['Focus session done. Time for a break.', 'success', 12000]);
     assert.deepEqual(Array.from(toast().props.actions, (a) => a.label), ['Start short break'], 'the next step, in the toast');
     toast().props.onDone();
     assert.equal(toast(), undefined);
-    footerButton(w.button()).props.onClick({ currentTarget: null });
-    await w.settle();
+    await read();
     assert.equal(toast(), undefined, 'the same end is said once');
     state = STATE({ rev: 7, timer: { kind: 'short', durationMs: 300000, remainingMs: 300000, endAt: null, running: false, doneAt: Date.now() - 5 * 60000 } });
-    footerButton(w.button()).props.onClick({ currentTarget: null });
-    await w.settle();
+    await read();
     assert.match(toast()?.props.text, /^Break over at \d{1,2}:\d{2}\s?[AP]M\. Ready to focus\?$/, 'seen late: said with its time');
     assert.deepEqual(Array.from(toast().props.actions, (a) => a.label), ['Start focus']);
+
+    // Opening the panel drops the toast (the panel says the same), so no toast covers the dialog.
+    footerButton(w.button()).props.onClick({ currentTarget: null });
+    await w.settle();
+    assert.equal(toast(), undefined, 'the open panel takes over from the toast');
     assert.equal(textIn(find(w.overlay(), (e) => 'data-focus-state' in e.props)).startsWith('Short break · done at '), true);
+    // An end while the panel is open: the panel says it (its state, the next step), no toast over the dialog.
+    state = STATE({ rev: 9, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 1500000, endAt: null, running: false, doneAt: Date.now() - 300 }, sessions: { date: '2026-10-26', focus: 2 } });
+    await read();
+    assert.equal(toast(), undefined, 'no toast over the open dialog');
+    assert.equal(textIn(find(w.overlay(), (e) => 'data-focus-state' in e.props)).startsWith('Focus · done at '), true, 'the panel says it');
+    assert.equal(textIn(find(find(w.overlay(), (e) => e.type === 'Modal').props.footer, (e) => 'data-focus-primary' in e.props).children), 'Start short break');
     w.close();
 });
 
@@ -862,7 +872,7 @@ test('a hidden window chimes at the end and says it when shown again, with its t
     w.close();
 });
 
-test('the end\'s toast starts the next step; Reset of a started timer says so, with Undo for 10 seconds; an Undo the host refuses is said', async () => {
+test('the end\'s toast starts the next step; Reset of a started timer offers Undo in the panel while the host keeps it; a refused Undo is said in the panel', async () => {
     let state = doneState();
     let undo = 'ok';
     const w = await window(({ body }) => {
@@ -870,6 +880,7 @@ test('the end\'s toast starts the next step; Reset of a started timer says so, w
         if (o === 'start') state = STATE({ rev: state.rev + 1, timer: { kind: body.op.kind, durationMs: body.op.durationMs, remainingMs: body.op.durationMs, endAt: Date.now() + body.op.durationMs, running: true, doneAt: null, doneSeen: false } });
         if (o === 'reset') state = STATE({ rev: state.rev + 1, timer: { ...state.timer, running: false, endAt: null, remainingMs: state.timer.durationMs, doneAt: null, doneSeen: false } });
         if (o === 'undo' && undo !== 'ok') return [409, { error: 'There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.' }];
+        if (o === 'undo') state = STATE({ rev: state.rev + 1, timer: { kind: 'short', durationMs: 300000, remainingMs: 300000, endAt: Date.now() + 250000, running: true, doneAt: null, doneSeen: false } });
         return [200, state];
     });
     const toast = () => find(w.overlay(), (e) => e.type === 'Toast');
@@ -883,40 +894,59 @@ test('the end\'s toast starts the next step; Reset of a started timer says so, w
     assert.deepEqual(w.calls.at(-1).body, { op: { op: 'start', kind: 'short', durationMs: 300000 } }, 'the next step, from the toast');
     assert.equal(toast(), undefined, 'the toast goes with its click');
 
-    // Reset of the running break: the toast says it, with Undo.
+    // Reset of the running break: the panel offers Undo under its state line; no toast over the dialog.
     footerButton(w.button()).props.onClick({ currentTarget: null });
     await w.settle();
-    const footer = () => find(w.overlay(), (e) => e.type === 'Modal').props.footer;
+    const panel = () => w.overlay();
+    const footer = () => find(panel(), (e) => e.type === 'Modal').props.footer;
+    const undoRow = () => find(panel(), (e) => 'data-focus-undo' in e.props);
+    assert.equal(undoRow(), undefined, 'nothing to undo yet');
     find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
     await w.settle();
     assert.deepEqual(w.calls.at(-1).body, { op: { op: 'reset' } });
-    assert.deepEqual([toast()?.props.text, toast()?.props.tone, toast()?.props.holdMs, Array.from(toast().props.actions, (a) => a.label)], ['Short break reset.', 'success', 10000, ['Undo']]);
-    toast().props.actions[0].onClick();
+    assert.equal(toast(), undefined, 'no toast over the dialog');
+    assert.deepEqual([undoRow()?.props.role, textIn(find(undoRow(), (e) => e.type === 'span'))], ['status', 'Short break reset.']);
+    const undoButton = () => find(undoRow(), (e) => e.type === 'Button' && 'data-focus-undo-button' in e.props);
+    assert.equal(textIn(undoButton().children), 'Undo');
+    undoButton().props.onClick();
     await w.settle();
     assert.deepEqual(w.calls.at(-1).body, { op: { op: 'undo' } });
-    assert.equal(toast(), undefined);
+    assert.equal(undoRow(), undefined, 'undone: the row goes');
+    assert.equal(textIn(find(panel(), (e) => 'data-focus-state' in e.props)).startsWith('Short break · running, ends at '), true);
 
-    // Paused, reset, and the host refuses the Undo (a minute went by): said in its words.
+    // Reset again, then anything else changes the timer: Undo goes (the host would refuse it).
+    find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
+    await w.settle();
+    assert.ok(undoRow());
+    state = { ...state, rev: state.rev + 1 };
+    w.listeners.get('visibilitychange')();
+    await w.settle();
+    assert.equal(undoRow(), undefined, 'the timer changed since: no Undo');
+
+    // Paused, reset, and the host refuses the Undo (a minute went by): said in the panel, in its words.
     state = STATE({ rev: 20, timer: { kind: 'focus', durationMs: 1500000, remainingMs: 600000, endAt: null, running: false, doneAt: null, doneSeen: false } });
     w.listeners.get('visibilitychange')();
     await w.settle();
     find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
     await w.settle();
-    assert.equal(toast()?.props.text, 'Focus session reset.');
+    assert.equal(textIn(find(undoRow(), (e) => e.type === 'span')), 'Focus session reset.');
     undo = 'refused';
-    toast().props.actions[0].onClick();
+    undoButton().props.onClick();
     await w.settle();
-    assert.deepEqual([toast()?.props.text, toast()?.props.tone, toast()?.props.holdMs], ['Not changed: There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.', undefined, 8000], 'a warning (DSH\'s warning look), held 8 s');
+    const note = find(panel(), (e) => 'data-focus-note' in e.props);
+    assert.deepEqual([note?.props.role, textIn(note)], ['alert', 'Not changed: There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.']);
+    assert.equal(toast(), undefined, 'in the panel, not a toast over it');
+    assert.equal(undoRow(), undefined);
 
-    // A Reset of an ended timer (nothing running or paused) has nothing to undo: no toast.
-    toast().props.onDone();
+    // A Reset of an ended timer (nothing running or paused) has nothing to undo.
     state = doneState({ rev: 30 }, { doneAt: Date.now() - 3600000, doneSeen: true });
     w.listeners.get('visibilitychange')();
     await w.settle();
     assert.equal(toast(), undefined, 'an end found late that a panel showed already is not said again');
     find(footer(), (e) => 'data-focus-reset' in e.props).props.onClick();
     await w.settle();
-    assert.equal(toast(), undefined, 'nothing to undo');
+    assert.equal(undoRow(), undefined, 'nothing to undo');
+    assert.equal(find(panel(), (e) => 'data-focus-note' in e.props), undefined, 'a change that worked clears the refusal');
     w.close();
 });
 
@@ -1046,7 +1076,7 @@ test('DSH\'s keyboard shortcut "Open the Focus timer" (Shift+Alt+primary+F) open
     y.close();
 });
 
-test('error states: no state at all says what to check, with Try again; a later failed read keeps the state and says it may be out of date; a refusal is a toast in the host\'s words', async () => {
+test('error states: no state at all says what to check, with Try again; a later failed read keeps the state and says it may be out of date; a refusal is said in the host\'s words, in the panel when it is open', async () => {
     let mode = 'down';
     const w = await window(({ method }) => {
         if (mode === 'down') throw new Error('offline');
@@ -1074,10 +1104,25 @@ test('error states: no state at all says what to check, with Try again; a later 
     mode = 'up';
     find(find(panel, (e) => e.type === 'Modal').props.footer, (e) => 'data-focus-primary' in e.props).props.onClick();
     await w.settle();
-    const toast = find(w.overlay(), (e) => e.type === 'Toast');
-    assert.equal(toast.props.text, 'Not changed: A timer is already running. Pause or reset it first.');
-    assert.equal(toast.props.icon?.type, 'IconWarningOutlineRegular');
+    const note = find(w.overlay(), (e) => 'data-focus-note' in e.props);
+    assert.deepEqual([note?.props.role, textIn(note)], ['alert', 'Not changed: A timer is already running. Pause or reset it first.'], 'said in the open panel, where the person is looking');
+    assert.equal(find(w.overlay(), (e) => e.type === 'Toast'), undefined, 'no toast over the dialog');
+    find(w.overlay(), (e) => e.type === 'Modal').props.onClose();
+    await w.settle();
+    assert.equal(find(w.overlay(), (e) => 'data-focus-note' in e.props), undefined, 'closed: the note goes');
     w.close();
+
+    // With the panel closed (the end's toast, its next step refused): DSH's toast, as a warning.
+    let state = doneState();
+    const x = await window(({ method }) => (method === 'POST' ? [409, { error: 'A timer is already running. Pause or reset it first.' }] : [200, state]));
+    state = doneState({ rev: 9 }, { doneAt: Date.now() - 300 });
+    x.listeners.get('visibilitychange')();
+    await x.settle();
+    find(x.overlay(), (e) => e.type === 'Toast').props.actions[0].onClick();
+    await x.settle();
+    const toast = find(x.overlay(), (e) => e.type === 'Toast');
+    assert.deepEqual([toast?.props.text, toast?.props.icon?.type, toast?.props.holdMs], ['Not changed: A timer is already running. Pause or reset it first.', 'IconWarningOutlineRegular', 8000]);
+    x.close();
 });
 
 test('the host\'s problems show at the bottom of the panel', async () => {
@@ -1174,7 +1219,9 @@ test('the README is the code\'s: its setting, ops, kinds, limits, status codes, 
     assert.ok(src.includes('const SHORTCUT_KEYS = { code: "KeyF", modifiers: ["primary", "alt", "shift"] };') && words.includes('⇧⌥⌘F (Ctrl+Shift+Alt+F on Windows and Linux)'), 'the shortcut\'s keys');
     assert.ok(src.includes('shortcut: "Open the Focus timer"') && words.includes('The shortcut is "Open the Focus timer" in DSH\'s Keyboard shortcuts'), 'the shortcut\'s name');
     assert.equal(UNDO_MS, 60000);
-    assert.ok(words.includes('Only within 60 s of that Reset') && words.includes('has an Undo button for 10 seconds') && src.includes('holdMs: 10000, actions: [action(TEXT.undo'), 'Undo');
+    assert.ok(words.includes('Only within 60 s of that Reset') && words.includes('with an Undo button under its state line, for as long as the host keeps the old timer: a minute')
+        && src.includes('const UNDO_MS = 60000;') && src.includes('Btn({ variant: "outline", disabled: busy, onClick: undoReset, "data-focus-undo-button": "" }, TEXT.undo)'), 'Undo');
+    assert.ok(words.includes('says the end in the panel instead') && src.includes('if (uiS.get().panel) return;'), 'an open panel says the end');
     for (const said of ['There is no Reset to undo: the timer changed since, or the Reset was more than a minute ago.']) assert.ok(words.includes(said) && text('lib/impl.js').includes(said), said);
     for (const said of ['Start again', 'Focus session reset.', 'Short break next']) assert.ok(words.includes(said), `README: ${said}`);
     assert.ok(src.includes('"Start again"') && src.includes('resetSaid: (kind) => `${ENDED[kind] || ENDED.custom} reset.`') && src.includes('nextCaption: (kind) => (KIND[kind] && kind !== "custom" ? `${KIND[kind]} next` : "Custom again")'));
