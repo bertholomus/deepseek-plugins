@@ -111,7 +111,12 @@ const link = await waitFor(async () => { const url = dshTest('url').trim().split
 if (!link) throw new Error('DSH Test did not come up');
 const order = () => { try { return JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', join(here, 'window-order.jxa'), appPid], { encoding: 'utf8', timeout: 5000 })); } catch (e) { return { error: String(e.message).slice(0, 80) }; } };
 const buttons = (action) => execFileSync('osascript', ['-l', 'JavaScript', join(here, 'window-buttons.jxa'), appPid, action], { encoding: 'utf8' }).trim();
-await waitFor(async () => order().onScreen, 60000, 500);
+// The app shows its window once DSH is ready; wait until it has stayed on screen for 2 s, with its DSH window listed.
+let steady = 0;
+await waitFor(async () => {
+    steady = order().onScreen && /DeepSeek Harness/.test(buttons('list')) ? steady + 1 : 0;
+    return steady >= 4;
+}, 90000, 500);
 say(`DSH Test "${instance}" is up again: pid ${appPid}, debugging port ${port} (127.0.0.1 only); its window: ${JSON.stringify(order())}`);
 
 // 2. DSH's own API, signed in with the instance's link (kept in memory only).
@@ -238,14 +243,16 @@ const down = () => waitFor(async () => { const w = order(); const s = await stat
 const results = [];
 
 // 4. Hidden by its close button (the app hides its window on close; it keeps running).
-say(`[hidden] close button: ${buttons('close')}`);
-const hidden = await down();
+const closed = buttons('close');
+say(`[hidden] close button: ${closed}`);
+const hidden = closed === 'pressed: ok' ? await down() : undefined;
 say(`[hidden] the window is down: ${hidden ? `visibility ${hidden.s.visibility}, window ${JSON.stringify(hidden.w)}` : `no (${JSON.stringify(order())})`}`);
 if (hidden) results.push(await clickCase('hidden by its close button', 'hidden', 'Raise hidden'));
 
 // 5. Minimised: its yellow button.
-say(`[minimised] minimise button: ${buttons('minimise')}`);
-const mini = await down();
+const minimised = buttons('minimise');
+say(`[minimised] minimise button: ${minimised}`);
+const mini = minimised === 'pressed: ok' ? await down() : undefined;
 say(`[minimised] the window is down: ${mini ? `visibility ${mini.s.visibility}, window ${JSON.stringify(mini.w)}, ${buttons('list')}` : `no (${JSON.stringify(order())})`}`);
 if (mini) results.push(await clickCase('minimised', 'minimised', 'Raise minimised'));
 
