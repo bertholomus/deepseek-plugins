@@ -12,6 +12,7 @@ import {
     STYLES, argvOf, dataFolder, eventsMeta, findNewTranscript, findTranscriptById, folderKey, launchLine, pickShell, programName, shellWord, transcriptPath,
 } from '../plugins/agent-terminals/lib/launch.js';
 import { Tail, callSummary, closeOver, emptyFold, entriesOf, foldEntry, parseLines, proofs, provenIn, statusOf } from '../plugins/agent-terminals/lib/transcripts.js';
+import { askIn } from '../plugins/session-watch/lib/shared/words.js';
 import { PASTE_END, PASTE_START, Typist, messageKeys, pasteSwitch } from '../plugins/agent-terminals/lib/typist.js';
 import { AgentTerminals, checkLaunch, exitWords, homeForm, listingNote, parseData, programForm, splitArgs } from '../plugins/agent-terminals/lib/agents.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, START_WHYS, STOP_WHYS, changedSince, changedWords, checkConfig, profileEntry, savedEntry, settingsSnapshot, startCause, stopCause } from '../plugins/agent-terminals/lib/config.js';
@@ -557,12 +558,16 @@ test('words: paths read as people read them (~/… under the home folder), a pro
     assert.match(exitWords({ program: '/Users/a/bin/nope' }, 126, undefined, undefined, '/Users/a'), /^It exited with code 126: ~\/bin\/nope is not a program/);
 });
 
-test('listing note: its model gets the one line to answer and is told nobody waits on it, so its reply asks nothing', () => {
+test('listing note: its model gets the one line to answer and is told no answer is needed, so its reply asks nothing', () => {
     const note = listingNote({ program: '/Users/a/.local/bin/agent', folder: '/Users/a/Projects/app' }, '/Users/a');
-    assert.equal(note, 'A coding agent runs in this session\'s terminal tab: agent in ~/Projects/app, started by Agent Terminals. This message only lets DSH list the session in its sidebar: there is no task for you, and nobody waits on an answer from you. Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.');
+    assert.equal(note, 'A coding agent runs in this session\'s terminal tab: agent in ~/Projects/app, started by Agent Terminals. This message only lets DSH list the session in its sidebar: there is no task here, and no answer is needed. Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.');
     // Session Watch counts a DECISION NEEDED line, or a question, in a reply's last lines as asking: the note names neither, so a model that echoes it asks nobody.
     assert.doesNotMatch(note, /DECISION NEEDED|BLOCKED|\?/);
     assert.match(listingNote({ program: 'agent', folder: '' }, '/Users/a'), /: agent in this session's folder, started by/);
+    // Session Watch reads what a reply asks with askIn: the line it is told to answer, the note said back, and the note's own words in other words ask nothing.
+    for (const reply of ['The coding agent runs in its terminal tab.', note, 'Noted: there is no task here, and no answer is needed.\nThe coding agent runs in its terminal tab.', 'Understood. No answer is needed from anyone.']) {
+        assert.equal(askIn(reply), undefined, reply);
+    }
 });
 
 // ── The stand-in agent on its own ──────────────────────────────────────

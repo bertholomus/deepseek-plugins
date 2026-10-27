@@ -65,9 +65,10 @@ has no conversation to resume yet)*.
 session in its folder, named after it, and the session gets one message
 (`listNewSessions`): DSH lists a session in its sidebar only once a turn
 ran in it. The message tells its model that a coding agent runs in the
-session's terminal tab, that there is no task and nobody waits on its
-answer, and the one line to reply with; it asks nothing, so the reply makes
-no card in Decisions. A model that asks something all the same is said in
+session's terminal tab, that there is no task and no answer is needed,
+and the one line to reply with; it asks nothing, and its words keep clear
+of what Session Watch reads as asking, so the reply makes no card in
+Decisions. A model that asks something all the same is said in
 *What happened* (Decisions may list it: dismiss it there). In the session, Agent Terminals opens a terminal
 with zsh or bash, as DSH's terminals do (your shell's startup files run as
 in any terminal), and types `exec <program> <arguments>`, so the terminal

@@ -126,13 +126,15 @@ export const programForm = (program, home) => (String(program ?? '').includes('/
 
 /**
  * The one message a new agent's session gets so that DSH lists it in its
- * sidebar: its model is given the one line to answer, and told that
- * nothing waits on it or on anyone, so its reply asks nobody anything (a
- * reply that asks would make a card in Decisions for nothing).
+ * sidebar: its model is given the one line to answer, and told there is no
+ * task and no answer is needed, so its reply asks nobody anything (a reply
+ * that asks would make a card in Decisions for nothing). Its words keep
+ * clear of what Session Watch reads as asking, so a model that says them
+ * back in its own words asks nothing either.
  */
 export function listingNote(record, home) {
     const where = homeForm(record.folder, home) || 'this session\'s folder';
-    return `A coding agent runs in this session's terminal tab: ${programName(record.program)} in ${where}, started by Agent Terminals. This message only lets DSH list the session in its sidebar: there is no task for you, and nobody waits on an answer from you. Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.`;
+    return `A coding agent runs in this session's terminal tab: ${programName(record.program)} in ${where}, started by Agent Terminals. This message only lets DSH list the session in its sidebar: there is no task here, and no answer is needed. Reply with exactly this one line and nothing else: The coding agent runs in its terminal tab.`;
 }
 
 /**
