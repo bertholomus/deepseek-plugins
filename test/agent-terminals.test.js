@@ -1574,13 +1574,14 @@ test('switching: each stop of following its agents names its own cause, read fro
     assert.equal(startCause({ last: stopped('off'), pid: 42, uptimeSeconds: 600 }), 'on');
     assert.equal(startCause({ last: stopped('profile'), pid: 42, uptimeSeconds: 600 }), 'profile');
     assert.equal(startCause({ last: stopped('watch'), pid: 42, uptimeSeconds: 600 }), 'watch');
-    assert.equal(startCause({ last: stopped('again'), pid: 42, uptimeSeconds: 600 }), 'again');
+    assert.equal(startCause({ last: stopped('again'), pid: 42, ranHere: true, uptimeSeconds: 600 }), 'again');
+    assert.equal(startCause({ last: stopped('setting'), pid: 42, ranHere: true, edited: true, uptimeSeconds: 600 }), 'profile', 'a wrong setting fixed in the profile');
     assert.equal(startCause({ last: stopped('quit', 41), pid: 42, uptimeSeconds: 20 }), 'dsh', 'an earlier DSH stopped it: this one started it');
     assert.equal(startCause({ last: stopped('off', 41), pid: 42, uptimeSeconds: 900 }), 'on', 'long after DSH started: switched on');
     assert.equal(startCause({ last: { kind: 'switch', state: 'done', pid: 42 }, pid: 42, uptimeSeconds: 900 }), 'on');
     // Started earlier in this same DSH with nothing logged in between (it followed no agent then): the profile's edit, or a switch.
     assert.equal(startCause({ last: stopped('quit', 41), pid: 42, ranHere: true, edited: true, uptimeSeconds: 30 }), 'profile', 'enabled set back to true in the profile, soon after DSH started with it off');
-    assert.equal(startCause({ last: stopped('quit', 41), pid: 42, ranHere: true, uptimeSeconds: 30 }), 'on');
+    assert.equal(startCause({ last: stopped('quit', 41), pid: 42, ranHere: true, uptimeSeconds: 30 }), 'again');
     assert.equal(parseData({ ranPid: 42 }).ranPid, 42, 'the DSH process that last started it is kept');
     assert.equal(parseData({ ranPid: 'x' }).ranPid, undefined);
     assert.equal(START_WHYS.dsh, 'It started with DSH: it picks up every agent where it is.');

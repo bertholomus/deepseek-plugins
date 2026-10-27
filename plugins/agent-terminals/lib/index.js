@@ -244,7 +244,7 @@ export function apply(ctx, config) {
                 if (some()) {
                     switched(false, settings.enabled === false
                         ? 'It was switched off in its settings. The agents keep running in their terminals, unfollowed: switch it on to pick them up where they are.'
-                        : 'A setting is wrong (see the top of its page). The agents keep running in their terminals, unfollowed: once the setting is fixed, it picks them up where they are.');
+                        : 'A setting is wrong (see the top of its page). The agents keep running in their terminals, unfollowed: once the setting is fixed, it picks them up where they are.', 'setting');
                 }
             }
             bump();

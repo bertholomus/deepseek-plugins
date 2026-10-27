@@ -182,10 +182,9 @@ export function startCause({ terminalRuns = 1, watchRuns = 1, lateSeconds = 0, l
     if (watchRuns > 1 || lateSeconds > 15) return 'watch';
     if (last && last.pid === pid && last.state === 'stopped') {
         if (last.cause === 'off') return 'on';
-        if (last.cause === 'profile' || last.cause === 'watch') return last.cause;
-        return 'again';
+        if (last.cause === 'profile' || last.cause === 'watch' || last.cause === 'terminals') return last.cause;
     }
-    if (ranHere) return edited ? 'profile' : 'on';
+    if (ranHere) return edited ? 'profile' : 'again';
     return uptimeSeconds < 120 ? 'dsh' : 'on';
 }
 
