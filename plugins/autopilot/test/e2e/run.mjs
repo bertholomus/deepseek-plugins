@@ -680,7 +680,7 @@ try {
         const notes = await entriesOf(ids.blip, 'error');
         check('its carry-on note is read, its turn fails, and two tries follow, each a note saying it was carrying on after DSH stopped',
             resume.state === 'delivered' && notes.length === 2 && notes.every((e) => /You were carrying on after DSH stopped under turn 1: check what already finished/.test(e.note ?? ''))
-                && /^Turn 2 failed \(400: E2E: the scripted model refused this request\) while it carried on after DSH stopped under turn 1, so the work that stop cut off is still open\.$/.test(notes.at(-1)?.why ?? notes[0]?.why ?? ''),
+                && notes.every((e, i) => new RegExp(`^Turn ${i + 2} failed \\(400: E2E: the scripted model refused this request\\) while it carried on after DSH stopped under turn 1, so the work that stop cut off is still open\\.$`).test(e.why ?? '')),
             JSON.stringify({ resume: resume.state, notes: notes.map((e) => [e.state, e.why]) }));
         check('then Autopilot gives up as the last try fails, and says why', giveup.why === 'It failed again after 2 tries, so Autopilot stops retrying and leaves it to you.', JSON.stringify(giveup));
         const row = (await state()).sessions.find((x) => x.sessionId === ids.blip);
