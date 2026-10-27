@@ -416,6 +416,20 @@ test('the page: the header, the sessions, a ledger with its claims (verified cou
     assert.match(textIn(rows[0]), /Release4 claims · latest flagged: “Fixed the parser; all npm test runs pass\.”contradicted/);
     assert.match(textIn(rows[1]), /Untitled session2 claimsshown/);
     assert.match(textIn(rows[2]), /Hotfix1 claimverified/, 'a session whose only flagged claim was verified');
+    // One Tab stop for the list: the open session's row; the arrows, Home and End move between rows.
+    assert.deepEqual(rows.map((r) => r.props.tabIndex), [0, -1, -1]);
+    const list = withAttr(page.tree, 'aria-label').find((n) => /^Sessions with claims: up and down arrows/.test(n.props['aria-label']));
+    assert.ok(list, 'the sessions list says how to move in it');
+    const fake = rows.map(() => ({ tabIndex: -1, focused: false, focus() { this.focused = true; } }));
+    const press = (key, at) => list.props.onKeyDown({ key, target: fake[at], currentTarget: { querySelectorAll: () => fake }, preventDefault() {} });
+    press('ArrowDown', 0);
+    assert.deepEqual(fake.map((f) => [f.tabIndex, f.focused]), [[-1, false], [0, true], [-1, false]]);
+    press('End', 1);
+    assert.deepEqual(fake.map((f) => f.tabIndex), [-1, -1, 0]);
+    press('ArrowDown', 2);
+    assert.deepEqual(fake.map((f) => f.tabIndex), [-1, -1, 0], 'the last row stays the stop');
+    press('Home', 2);
+    assert.deepEqual(fake.map((f) => f.tabIndex), [0, -1, -1]);
 
     // The ledger: open flagged claims first, newest at the top, each with why, evidence and what its turn ran.
     const ledger = () => withAttr(page.tree, 'data-proof-ledger')[0];

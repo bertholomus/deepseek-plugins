@@ -1564,14 +1564,32 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
         /** A session's one state on its row: its flagged claims, else verified, else shown. */
         const rowWord = (s) => (s.flagged > 0 ? (s.contradicted > 0 ? 'contradicted' : 'no evidence') : (s.verified ?? 0) > 0 ? 'verified' : 'shown');
 
+        /**
+         * The sessions list is one stop for Tab: the open session's row (else the first) takes it, and the arrow keys,
+         * Home and End move between rows (DESIGN.md: a composite widget is one stop with arrows inside).
+         */
+        const walkRows = (event) => {
+            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+            const rows = [...event.currentTarget.querySelectorAll(`button.${P}-row`)];
+            const at = rows.indexOf(event.target);
+            if (at < 0 || rows.length === 0) return;
+            event.preventDefault();
+            const to = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.min(rows.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)));
+            rows.forEach((row, i) => { row.tabIndex = i === to ? 0 : -1; });
+            rows[to].focus();
+        };
+
         function SessionsCard({ data, selected, onSelect }) {
+            const shown = data.sessions.slice(0, 60);
+            const stop = shown.some((s) => s.sessionId === selected) ? selected : shown[0]?.sessionId;
             return h(kit.Card, { title: TEXT.sessions, sub: data.sessions.length ? TEXT.sessionsSub : undefined, attrs: { 'data-proof-sessions': String(data.sessions.length) } },
                 data.sessions.length === 0
                     ? h(kit.Empty, { title: TEXT.noSessions, text: TEXT.noSessionsText })
-                    : h('ul', { className: `${P}-rows` }, ...data.sessions.slice(0, 60).map((s) => h('li', { key: s.sessionId },
+                    : h('ul', { className: `${P}-rows`, 'aria-label': `${TEXT.sessions}: up and down arrows move between them`, onKeyDown: walkRows }, ...shown.map((s) => h('li', { key: s.sessionId },
                         h('button', {
                             type: 'button',
                             className: `${P}-row`,
+                            tabIndex: s.sessionId === stop ? 0 : -1,
                             'aria-current': s.sessionId === selected ? 'true' : undefined,
                             'data-proof-session': s.sessionId,
                             onClick: () => onSelect(s.sessionId),

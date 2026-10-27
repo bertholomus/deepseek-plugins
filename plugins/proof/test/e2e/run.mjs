@@ -502,6 +502,12 @@ try {
         }
         const refusal = 'Refused: git commit changes the repository, and a check only reads and runs. Check without changing anything.';
         check('Proof\'s guard refused the commit, saying why, and the thread heard it', JSON.stringify(saved).includes(refusal), saved.filter((e) => /tool/.test(e.type)).map((e) => JSON.stringify(e.data).slice(0, 300)).join('\n'));
+        // The write was tried: the check thread's log has the `touch` call, and its result is DSH's refusal, not a success.
+        const touch = saved.find((e) => e.type === 'tool/call' && JSON.stringify(e.data?.arguments ?? {}).includes('touch proof-was-here.txt'));
+        const touched = touch ? saved.find((e) => e.type === 'tool/result' && (e.data?.source?.callId ?? e.data?.message?.toolCallId) === touch.data?.callId) : undefined;
+        const touchText = touched ? JSON.stringify(touched.data?.message?.content ?? '') : '';
+        check('the check thread tried the write: its log has the touch call, and its result is a failure (DSH refused it)',
+            Boolean(touch) && Boolean(touched) && (touched.data?.message?.isError === true || /exit code: [1-9]|not permitted|denied|read-only|refused|EPERM|EROFS|sandbox/i.test(touchText)), json({ call: touch?.data, result: touchText.slice(0, 300) }));
         check('DSH\'s read-only file policy stopped the write: no file was made', !existsSync(join(run.ws, 'proof-was-here.txt')));
         check('the checked session got nothing from the check', (await run.events(ids.deploy)).filter((e) => e.type === 'user/message').length === deployMessages);
         check('DSH\'s default model is unchanged', defaultModel() === before && before.includes('model: fake-model'), defaultModel());
@@ -1249,6 +1255,12 @@ test('applies the coupon once', () => assert.ok(round !== 2));
     const loop = bash(`rm -f .round; for i in 1 2 3; do ${NODE} --test coupon.test.mjs 2>&1 | grep -E '^(ℹ|#) (tests|pass|fail)'; done`, 'Run the coupon test three times');
     await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `The coupon test is flaky. Fix it and run it a few times.\n${turn([readFile('coupon.test.mjs'), coupon, loop], 'Fixed the flaky coupon test; it passes reliably now.')}` });
     await turnsEnded(ids.shapes, 3);
+    // A look-only question: the reply describes how things are set up and what the code does ("is documented as",
+    // "returns `100 - 100*10`"), and claims nothing. Then a change claim with " - " in its code and no edit behind it.
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `How is the discount documented? Just look, do not change anything.\n${turn([readFile('calc.mjs')], 'In `calc.mjs`, `pct` is documented as a percentage (10 meaning 10%). With a literal "10", it returns `100 - 100*10 = -900`.')}` });
+    await turnsEnded(ids.shapes, 4);
+    await run.bridge('POST', `/sessions/${encodeURIComponent(ids.shapes)}/prompt`, { text: `Make it subtract one.\n${turn([readFile('calc.mjs')], 'Changed `x - 1` to `x + 1` in calc.mjs.')}` });
+    await turnsEnded(ids.shapes, 5);
     await step('the real model\'s reply shapes: list headings, "No files were changed", a bold "Fixed" label and a doc typo stay quiet; a flake fix after a failed round is contradicted', async () => {
         const claims = (await ledgerOf(ids.shapes)).claims;
         const first = claims.filter((c) => c.turn === 1);
@@ -1262,6 +1274,11 @@ test('applies the coupon once', () => assert.ok(round !== 2));
         const flake = third.find((c) => c.kind === 'fixed');
         check('"Fixed the flaky coupon test" after a loop in which one round failed is contradicted, saying a round failed',
             flake?.verdict === 'contradicted' && /still failed a test in one of its rounds/.test(flake.why ?? ''), json(third));
+        const fourth = claims.filter((c) => c.turn === 4);
+        const fifth = claims.filter((c) => c.turn === 5);
+        check('a look-only answer that describes how a thing is documented and what the code returns claims nothing', fourth.length === 0, json(fourth));
+        check('a change claim with " - " in its code is quoted as written in the ledger, flagged with no edit behind it',
+            fifth.length === 1 && fifth[0].verdict === 'unbacked' && fifth[0].part === 'Changed x - 1 to x + 1 in calc.mjs.' && !/undefined/.test(JSON.stringify(fifth)), json(fifth));
         if (!pw) return;
         if (!window) window = await openWindow(run, pw, { entry: 'Proof' });
         const { page } = window;
@@ -1276,9 +1293,13 @@ test('applies the coupon once', () => assert.ok(round !== 2));
         const cards = flagsShown(page);
         await cards.first().waitFor({ state: 'visible', timeout: 20000 });
         await page.waitForTimeout(800);
+        await page.getByText('Changed x - 1 to x + 1', { exact: false }).first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(500);
         const texts = await cards.evaluateAll((els) => els.map((el) => ({ flag: el.getAttribute('data-proof-flag'), claims: [...el.querySelectorAll('[data-proof-claim]')].map((c) => c.getAttribute('data-proof-claim')), text: el.innerText.replace(/\n+/g, ' ') })));
-        check('in the window: one card, under the flake fix only, contradicted', texts.length === 1 && texts[0].flag === 'contradicted' && texts[0].claims.every((id) => id.startsWith('3:')), json(texts));
+        check('in the window: two cards, under the flake fix (contradicted) and the unbacked change, none under the look-only answer',
+            texts.length === 2 && texts[0].flag === 'contradicted' && texts[0].claims.every((id) => id.startsWith('3:')) && texts[1].claims.every((id) => id.startsWith('5:')), json(texts));
         check('the card names the program the loop ran by its own name, not by its full path', /do node --test coupon\.test\.mjs/.test(texts[0]?.text ?? ''), json(texts));
+        check('the card quotes the claim with its " - " as written, never "undefined"', /Changed x - 1 to x \+ 1 in calc\.mjs/.test(texts[1]?.text ?? '') && !/undefined/.test(texts.map((t) => t.text).join(' ')), json(texts));
         await shot(page, shots, 'shapes-light');
         await setDark(page, true);
         await shot(page, shots, 'shapes-dark');
