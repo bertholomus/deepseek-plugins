@@ -171,3 +171,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-27 12:11 AM PDT: PASS 2 fleet (e69263d) judged 9.0 NOT YET (U 9, R 9.5, UX 9.5, T 9, D 9.5).
 - 2026-10-27 12:18 AM PDT: PASS 2 calendar (e1c2930) judged 8.9 NOT YET (U 9, R 9, UX 9, T 8.5, D 9).
 - 2026-10-27 12:20 AM PDT: PASS 2 proof (7fc07ab) judged 8.5 NOT YET (U 8.5, R 8.5, UX 9, T 9, D 9).
+- 2026-10-27 12:23 AM PDT: PASS 2 recall (7de328b) judged 9.0 NOT YET (U 9.5, R 9, UX 9.5, T 9, D 9.5).
