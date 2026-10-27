@@ -42,16 +42,55 @@ export function readConfig(config) {
     return Object.fromEntries(Object.keys(given).map((key) => [key, valueOf(given[key])]));
 }
 
-/** The keys a change touched, from DSH's changed paths (`[['notifyFleet'], …]`), by their titles: “Fleet findings”. */
-export function changedWords(paths) {
+/**
+ * The settings a change touched, from DSH's changed paths (`[['notifyFleet'], …]`),
+ * each by its title with its new value: `“Fleet findings” off`. A value that
+ * is not on or off says what it counts as; a key that is not a setting is
+ * named as it is.
+ * @param {unknown} paths - DSH's changed paths.
+ * @param {{ settings?: Record<string, boolean>, problems?: { key: string }[] }} [checked] - checkSettings' answer after the change.
+ */
+export function changedWords(paths, checked = {}) {
     const keys = [...new Set((Array.isArray(paths) ? paths : []).map((path) => (Array.isArray(path) ? path[0] : path)).filter((key) => typeof key === 'string'))];
-    return keys.map((key) => (TITLES[key] ? `“${TITLES[key]}”` : key)).join(', ');
+    const wrong = new Set((checked.problems ?? []).map((problem) => problem.key));
+    return keys.map((key) => {
+        if (!TITLES[key]) return `“${key}” (not a setting)`;
+        const value = checked.settings?.[key];
+        const state = typeof value === 'boolean' ? (value ? 'on' : 'off') : '';
+        return `“${TITLES[key]}”${state ? ` ${wrong.has(key) ? `(not true or false, so ${state})` : state}` : ''}`;
+    }).join(', ');
+}
+
+/** How many single-letter edits turn one word into another (for "did you mean"). */
+function distance(a, b) {
+    const x = a.toLowerCase();
+    const y = b.toLowerCase();
+    let row = Array.from({ length: y.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= x.length; i += 1) {
+        const next = [i];
+        for (let j = 1; j <= y.length; j += 1) next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+        row = next;
+    }
+    return row[y.length];
+}
+
+/** The setting a misspelt key most likely meant, or undefined when none is close. */
+export function nearestKey(key) {
+    let best;
+    for (const name of Object.keys(TITLES)) {
+        const d = distance(key, name);
+        if (d <= Math.max(2, Math.floor(name.length / 4)) && (!best || d < best.d)) best = { name, d };
+    }
+    return best?.name;
 }
 
 /**
- * The settings to use, and what is wrong with the ones given.
+ * The settings to use, and what is wrong with the ones given. Each problem
+ * has `text` (what is wrong, by the setting's title: the page shows it),
+ * `fix` (what to do, with the key as the profile spells it) and `log` (both,
+ * for the log file).
  * @param {object} raw - the config DSH passed (any shape).
- * @returns {{ settings: Record<string, boolean>, problems: { key: string, text: string }[] }}
+ * @returns {{ settings: Record<string, boolean>, problems: { key: string, text: string, fix: string, log: string }[] }}
  */
 export function checkSettings(raw) {
     const given = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -64,7 +103,15 @@ export function checkSettings(raw) {
             continue;
         }
         settings[key] = fallback;
-        problems.push({ key, text: `“${TITLES[key]}” (${key}) must be true or false, but it is ${shown(value)}; it counts as ${fallback ? 'on' : 'off'} until you change it` });
+        const text = `“${TITLES[key]}” must be true or false, but it is ${shown(value)}; it counts as ${fallback ? 'on' : 'off'} until you change it`;
+        problems.push({ key, text, fix: `Set it with its switch above and save (in the profile its key is ${key}).`, log: `“${TITLES[key]}” (${key}) must be true or false, but it is ${shown(value)}; it counts as ${fallback ? 'on' : 'off'} until you change it` });
+    }
+    // A key that is not a setting does nothing: name it, and the setting it most likely meant.
+    for (const key of Object.keys(given)) {
+        if (key in DEFAULTS) continue;
+        const meant = nearestKey(key);
+        const text = `“${key.slice(0, 60)}” is not a setting of this plugin, so it does nothing${meant ? `; did you mean “${TITLES[meant]}”?` : ''}`;
+        problems.push({ key, text, fix: meant ? `Rename it to ${meant} in the profile's notifications row, or remove it.` : 'Remove it from the profile\'s notifications row.', log: `${key.slice(0, 60)} is not a setting of this plugin, so it does nothing${meant ? ` (did you mean ${meant}, “${TITLES[meant]}”?)` : ''}` });
     }
     return { settings, problems };
 }

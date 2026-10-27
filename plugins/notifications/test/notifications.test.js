@@ -21,9 +21,10 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Notifier, EVENT_FIELDS, BROWSER_TTL_MS, MAX_QUEUED, QUEUE_STALE_MS, RECENT_MAX, TITLE_MAX, WINDOW_OUTCOMES } from '../lib/notifier.js';
+import { Notifier, EVENT_FIELDS, APP_WINDOW_TTL_MS, BROWSER_TTL_MS, CLAIM_MS, FLEET_PANEL, MAX_QUEUED, QUEUE_STALE_MS, RECENT_MAX, TITLE_MAX, WINDOW_OUTCOMES, openTarget, windowInfo } from '../lib/notifier.js';
 import { oneLine, cliCommand, cliSend, desktopSend, iconFor } from '../lib/backends.js';
-import { changedWords, checkSettings, DEFAULTS, readConfig, TITLES, valueOf } from '../lib/config.js';
+import { changedWords, checkSettings, DEFAULTS, nearestKey, readConfig, TITLES, valueOf } from '../lib/config.js';
+import { makeRaiser, parentCommandLine, relaunchPlan, RAISE_GAP_MS } from '../lib/raise.js';
 import { LogFile, LOG_MAX_BYTES, StateFile, parseState, emptyState, stamp } from '../lib/state.js';
 
 register('./peers.mjs', import.meta.url);
@@ -187,8 +188,11 @@ test('settings: switches default on; a wrong type counts as the default and is n
     assert.equal(settings.notifyApproval, false);
     assert.equal(settings.notifyFleet, true);
     assert.deepEqual(problems.map((p) => p.key), ['enabled', 'notifyFleet']);
-    assert.equal(problems[0].text, '“Send system notifications” (enabled) must be true or false, but it is "yes"; it counts as on until you change it');
-    assert.match(problems[1].text, /^“Fleet findings” \(notifyFleet\) must be true or false, but it is 0;/);
+    // Where people read (the page): the setting by its title, and its key only in the fix sentence; the log has both.
+    assert.equal(problems[0].text, '“Send system notifications” must be true or false, but it is "yes"; it counts as on until you change it');
+    assert.equal(problems[0].fix, 'Set it with its switch above and save (in the profile its key is enabled).');
+    assert.equal(problems[0].log, '“Send system notifications” (enabled) must be true or false, but it is "yes"; it counts as on until you change it');
+    assert.match(problems[1].text, /^“Fleet findings” must be true or false, but it is 0;/);
     for (const key of Object.keys(DEFAULTS)) assert.ok(TITLES[key], key);
 });
 
@@ -292,7 +296,7 @@ test('notifier: the settings gate every notification, and each is listed and log
     assert.equal(perKind.notify({ title: 'T' }), 'cli');
     assert.deepEqual(sent, ['cli', 'cli']);
     assert.ok(out.some((line) => line === 'info notifications: #1 (approval) “T” not shown: “Waiting for approval” is switched off in its settings.'), out.join('\n'));
-    assert.ok(out.some((line) => /^info notifications: #2 \(handback\) “T” sent: No DSH window was open, so it went to notify-send\.$/.test(line)), out.join('\n'));
+    assert.ok(out.some((line) => /^info notifications: #2 \(handback\) “T” sent: No DSH window that can show notifications was open, so it went to notify-send\.$/.test(line)), out.join('\n'));
 });
 
 test('notifier: DSH\'s desktop sender wins where DSH provides it; one that throws is a failure, never a throw', () => {
@@ -328,7 +332,7 @@ test('notifier: the queue for a window: taken, reported shown, and the report is
     // The window takes both: one it shows (its report comes later), one it did not need to (you were looking).
     assert.equal(notifier.acknowledge([one, two], [{ id: two, outcome: 'watching' }]), 2);
     assert.equal(notifier.entry(one).state, 'sent');
-    assert.deepEqual([notifier.entry(two).state, notifier.entry(two).detail], ['not shown', 'You were looking at DSH, so no notification was needed.']);
+    assert.deepEqual([notifier.entry(two).state, notifier.entry(two).detail], ['not shown', 'You were using DSH (its window was in front and in use), so no notification was needed.']);
     assert.deepEqual(notifier.pending().items, []);
     // The system's show event, reported by the window: now it is shown, and the log says so.
     assert.equal(notifier.acknowledge([], [{ id: one, outcome: 'shown' }]), 0);
@@ -374,7 +378,7 @@ test('notifier: the queue sheds items no window took in 5 minutes, and says so',
     clock += QUEUE_STALE_MS + 1;
     notifier.notify({ title: 'New' });
     assert.deepEqual(notifier.pending().items.map((item) => item.title), ['New']);
-    assert.deepEqual([notifier.recent[0].state, notifier.recent[0].detail], ['not shown', 'No DSH window took it within 5 minutes, so it was dropped rather than shown late.']);
+    assert.deepEqual([notifier.recent[0].state, notifier.recent[0].detail], ['not shown', 'No DSH window that can show notifications took it within 5 minutes, so it was dropped rather than shown late.']);
 });
 
 test('notifier: the queue keeps the newest MAX_QUEUED, and the dropped ones say why', () => {
@@ -463,7 +467,7 @@ test('endpoints: the gateway can name every method, so the queue is served (not 
     const { NotificationsRemote } = peers.remote;
     const remote = new NotificationsRemote(new Notifier({ settings: () => CONFIG }));
     const named = peers.protocol.remoteMethods(remote).map((marker) => marker.method).sort();
-    assert.deepEqual(named, ['acknowledge', 'noteTest', 'pending', 'status']);
+    assert.deepEqual(named, ['acknowledge', 'clicked', 'noteTest', 'pending', 'status']);
     assert.equal(remote.typertRemote.namespace, 'dsh-plugin-notifications');
 });
 
@@ -521,7 +525,9 @@ test('settings: every one is live; a save changes it in place, checked again, lo
     // Read as DSH hands them: references whose value a save changes in place.
     assert.deepEqual(readConfig(peers.plugin.Config({ notifyFleet: false })), { ...DEFAULTS, notifyFleet: false });
     assert.equal(valueOf(7), 7);
-    assert.equal(changedWords([['notifyFleet'], ['enabled'], ['notifyFleet'], ['other']]), '“Fleet findings”, “Send system notifications”, other');
+    assert.equal(changedWords([['notifyFleet'], ['enabled'], ['notifyFleet'], ['other']]), '“Fleet findings”, “Send system notifications”, “other” (not a setting)');
+    // With the settings after the change: each one's new value, so the line never reads as the opposite.
+    assert.equal(changedWords([['notifyFleet'], ['enabled'], ['notifyHandback']], checkSettings({ notifyFleet: false, enabled: true, notifyHandback: 'no' })), '“Fleet findings” off, “Send system notifications” on, “Handbacks” (not true or false, so on)');
     assert.equal(changedWords(undefined), '');
     await withTempHome(async (home) => {
         const values = { ...DEFAULTS, notifyHandback: 'no' };
@@ -542,13 +548,13 @@ test('settings: every one is live; a save changes it in place, checked again, lo
         handlers[0]([['notifyFleet'], ['notifyHandback']]);
         assert.equal(notify({ title: 'A3 is hot', kind: 'fleet' }), 'off', 'the switch applies at once');
         assert.deepEqual(remote.notifier.status().problems, [], 'the fixed setting is no longer named');
-        assert.ok(out.some((line) => /^info notifications: settings changed: “Fleet findings”, “Handbacks” \(on; sender now: (none|command)\)$/.test(line)), out.join('\n'));
+        assert.ok(out.some((line) => /^info notifications: settings changed: “Fleet findings” off, “Handbacks” on \(notifications on; sender: (none|command)\)$/.test(line)), out.join('\n'));
         // A save that makes one wrong: named once, and it counts as its default.
         values.notifyFailed = 3;
         handlers[0]([['notifyFailed']]);
         assert.deepEqual(remote.notifier.status().problems.map((p) => p.key), ['notifyFailed']);
         assert.equal(out.filter((line) => line.startsWith('warn notifications: a setting is wrong: “Failed after a nudge”')).length, 1, out.join('\n'));
-        assert.match(readFileSync(join(home, 'notifications', 'notifications.log'), 'utf8'), / info settings changed: “Fleet findings”, “Handbacks” \(on; sender now: (none|command)\)\n/);
+        assert.match(readFileSync(join(home, 'notifications', 'notifications.log'), 'utf8'), / info settings changed: “Fleet findings” off, “Handbacks” on \(notifications on; sender: (none|command)\)\n/);
         // The master switch off, live: callers hear off.
         values.enabled = false;
         handlers[0]([['enabled']]);
@@ -706,13 +712,15 @@ test('window: it shows while nobody looks, reports the system\'s show event, tak
     Notification.made[1].onerror();
     await tick();
     assert.deepEqual(link.acks().slice(1), [{ ids: [], results: [{ id: 11, outcome: 'shown', detail: '' }] }, { ids: [], results: [{ id: 12, outcome: 'failed', detail: 'the system refused to show it' }] }]);
-    // Looking at it: nothing shows, and the host hears why.
+    // In use (in front, seen, and the person's own input lately): nothing shows, and the host hears why.
     doc.hasFocus = () => true;
     doc.visibilityState = 'visible';
+    poller.touched({ isTrusted: true });
     Notification.made.length = 0;
     await poller.read();
-    assert.equal(Notification.made.length, 0, 'a watched window needs no notification');
+    assert.equal(Notification.made.length, 0, 'a window in use needs no notification');
     assert.deepEqual(link.acks().at(-1), { ids: [21, 22], results: [{ id: 21, outcome: 'watching' }, { id: 22, outcome: 'watching' }] });
+    assert.equal(link.calls.find(([method]) => method === 'pending')[1].window.permission, 'granted', 'each look says what the window can do');
     // The desktop answer stands the sender down: the read that learned it was the last call.
     const before = link.calls.length;
     await poller.read();
@@ -800,7 +808,7 @@ test('window: a reload never shows an item twice', async () => {
     for (const dispose of disposers) dispose();
 });
 
-test('window: stale items are dropped and said so; blocked ones are dropped and said so', async () => {
+test('window: stale items are dropped and said so; a blocked window takes nothing', async () => {
     const { applyPoller } = clientInternals();
     const disposers = [];
     const old = new Date(Date.now() - 6 * 60_000).toISOString();
@@ -810,10 +818,12 @@ test('window: stale items are dropped and said so; blocked ones are dropped and 
     assert.equal(await poller.read(), 0);
     assert.deepEqual(Notification.made, []);
     assert.deepEqual(link.acks().at(-1), { ids: [1], results: [{ id: 1, outcome: 'stale' }] });
+    // Even if a host handed items to a blocked window, it takes none: they wait for a window that can show them.
     const Denied = fakeNotificationClass('denied');
     const blocked = fakeLink(() => ({ desktop: false, epoch: 'e', items: [{ id: 2, title: 'B', body: '', at: now() }] }));
     await applyPoller({ effect(fn) { disposers.push(fn()); } }, blocked, { Notification: Denied, doc: hiddenDoc(), win: undefined, storage: memoryStorage() }).read();
-    assert.deepEqual(blocked.acks().at(-1), { ids: [2], results: [{ id: 2, outcome: 'denied' }] });
+    assert.deepEqual(blocked.acks(), [], 'nothing taken');
+    assert.equal(blocked.calls[0][1].window.permission, 'denied', 'and it told the host it is blocked');
     for (const dispose of disposers) dispose();
 });
 
@@ -901,8 +911,12 @@ test('window: permission is asked once where an ask can work, and not where it c
 test('window: where notifications go, in words, for each sender', () => {
     const { whereWords, whenWords } = clientInternals();
     assert.match(whereWords({ sender: 'desktop' }, true), /^DSH's own desktop notifications send them/);
-    assert.match(whereWords({ sender: 'window', desktopHost: true }, true), /^This DSH window shows them, with DSH's icon, while it is hidden, minimised or behind other windows/);
-    assert.match(whereWords({ sender: 'window', desktopHost: false, windowSeenAt: new Date().toISOString() }, true), /^A DSH window in your browser shows them while you are not looking at it \(it last checked in at \d/);
+    assert.match(whereWords({ sender: 'window', desktopHost: true }, true), /^This DSH window shows them, with DSH's icon, while you are not using DSH: hidden, minimised, behind other windows, or left in front for 2 minutes with nobody at it\.$/);
+    // A browser tab beside the app's window says what the app's window does, and what this tab does.
+    assert.match(whereWords({ sender: 'window', desktopHost: true }, true, { app: false, permission: 'denied' }), /^DSH's app window shows them, with DSH's icon, while you are not using DSH: .*\. This browser tab has notifications blocked, so it never takes them\.$/);
+    assert.match(whereWords({ sender: 'window', desktopHost: true }, true, { app: false, permission: 'granted' }), /This browser tab shows them only while the app's window is closed\.$/);
+    assert.match(whereWords({ sender: 'window', desktopHost: true }, true, { app: false, permission: 'default' }), /This browser tab shows none until it is allowed to \(below\), and then only while the app's window is closed\.$/);
+    assert.match(whereWords({ sender: 'window', desktopHost: false, windowSeenAt: new Date().toISOString() }, true, { app: false, permission: 'granted' }), /^A DSH window in your browser shows them while you are not using DSH: .* \(one last checked in at \d/);
     assert.match(whereWords({ sender: 'command', platform: 'linux' }, true), /go to notify-send\.$/);
     assert.match(whereWords({ sender: 'command', platform: 'win32' }, true), /go to a PowerShell toast\.$/);
     assert.match(whereWords({ sender: 'none', platform: 'darwin' }, true), /macOS has no other sender that shows DSH's icon: news is listed below but not shown until a DSH window is open\.$/);
@@ -911,4 +925,241 @@ test('window: where notifications go, in words, for each sender', () => {
     assert.match(whenWords(new Date().toISOString()), /^\d{1,2}:\d{2}/);
     assert.match(whenWords('2020-01-02T03:04:05Z'), /, /, 'another day says the day');
     assert.equal(whenWords('not a time'), '');
+});
+
+// ── Windows that can show, and windows that cannot ───────────────────
+
+const appWindow = { id: 'app-1', permission: 'desktop', app: true };
+const tab = (id, permission = 'granted') => ({ id, permission, app: false });
+
+test('windows: a blocked window, or one with no support, takes nothing: the news waits for one that can show it', () => {
+    let clock = 1000;
+    const notifier = new Notifier({ settings: () => CONFIG, desktopHost: true, platform: 'darwin', now: () => clock });
+    assert.equal(notifier.notify({ title: 'For the app' }), 'browser');
+    for (const window of [tab('blocked', 'denied'), tab('nosupport', 'none'), tab('notyet', 'default')]) {
+        const answer = notifier.pending(window);
+        assert.deepEqual([answer.items, answer.waiting], [[], 1], `${window.id} takes nothing and hears one waits`);
+    }
+    assert.equal(notifier.entry(1).state, 'waiting', 'still waiting, never dropped by a window that cannot show it');
+    // The app's window looks (even a minute later): it takes it and shows it.
+    clock += 60_000;
+    assert.deepEqual(notifier.pending(appWindow).items.map((item) => item.title), ['For the app']);
+    // A window that says nothing of itself (an older browser half) counts as one that may show them.
+    assert.deepEqual(windowInfo(undefined), { id: 'a-window', permission: 'granted', app: false });
+    assert.deepEqual(windowInfo({ id: 'bad id!', permission: 'maybe', app: 'yes' }), { id: 'a-window', permission: 'granted', app: false });
+});
+
+test('windows: without the app, a blocked tab alone means no window can show it, and the list says why', () => {
+    let clock = 1000;
+    const mac = new Notifier({ settings: () => CONFIG, platform: 'darwin', now: () => clock, send: () => assert.fail('macOS has no command sender') });
+    mac.pending(tab('blocked', 'denied'));
+    assert.equal(mac.notify({ title: 'T' }), 'none');
+    assert.equal(mac.recent[0].detail, 'The DSH window that is open has notifications blocked in its browser\'s settings, and macOS has no other sender that shows DSH\'s icon.');
+    assert.equal(mac.sender(), 'none');
+    // On Linux the command takes it instead of a tab that would drop it.
+    const sent = [];
+    const linux = new Notifier({ settings: () => CONFIG, platform: 'linux', now: () => clock, send: () => { sent.push('cli'); return true; } });
+    linux.pending(tab('blocked', 'denied'));
+    assert.equal(linux.notify({ title: 'T' }), 'cli');
+    assert.deepEqual(sent, ['cli']);
+    // A tab not allowed yet keeps the news waiting (it shows once allowed), and after 5 minutes the words say what to do.
+    const asking = new Notifier({ settings: () => CONFIG, platform: 'darwin', now: () => clock });
+    asking.pending(tab('notyet', 'default'));
+    assert.equal(asking.notify({ title: 'Waits' }), 'browser');
+    clock += QUEUE_STALE_MS + 1;
+    asking.pending(tab('notyet', 'default'));
+    assert.deepEqual([asking.recent[0].state, asking.recent[0].detail], ['not shown', 'It waited 5 minutes for this browser to be allowed to show notifications (Allow notifications on the settings page), so it was dropped rather than shown late.']);
+    const blockedOnly = new Notifier({ settings: () => CONFIG, desktopHost: true, platform: 'darwin', now: () => clock });
+    blockedOnly.notify({ title: 'Nobody' });
+    clock += QUEUE_STALE_MS + 1;
+    blockedOnly.pending(tab('blocked', 'denied'));
+    assert.equal(blockedOnly.recent[0].detail, 'The DSH window that is open has notifications blocked in its browser\'s settings, so it was dropped after 5 minutes.');
+});
+
+test('windows: in the Desktop app a browser tab leaves the news to the app\'s window while it is around, then takes it', () => {
+    let clock = 1000;
+    const notifier = new Notifier({ settings: () => CONFIG, desktopHost: true, platform: 'darwin', now: () => clock });
+    notifier.pending(appWindow);
+    notifier.notify({ title: 'With DSH\'s icon' });
+    assert.deepEqual(notifier.pending(tab('chrome')).items, [], 'the tab leaves it to the app\'s window');
+    assert.equal(notifier.status().appWindow, true);
+    // The app's window was closed for real (no look for longer than a hidden window ever waits): the tab takes over.
+    clock += APP_WINDOW_TTL_MS + 1;
+    assert.deepEqual(notifier.pending(tab('chrome')).items.map((item) => item.title), ['With DSH\'s icon']);
+    assert.equal(notifier.status().appWindow, false);
+});
+
+test('claims: two windows that can both show it never get one item twice; a claim that lapses passes it on', () => {
+    let clock = 1000;
+    const notifier = new Notifier({ settings: () => CONFIG, platform: 'darwin', now: () => clock });
+    notifier.pending(tab('a'));
+    notifier.notify({ title: 'Once' });
+    assert.equal(notifier.pending(tab('a')).items.length, 1, 'the first window to look gets it');
+    assert.deepEqual(notifier.pending(tab('b')).items, [], 'the second does not, while the first holds it');
+    assert.equal(notifier.pending(tab('a')).items.length, 1, 'the holder asks again (a retry) and still gets it');
+    // The first window went away before it said what it did: after the hold, the other may show it.
+    clock += CLAIM_MS + 1;
+    assert.equal(notifier.pending(tab('b')).items.length, 1);
+    notifier.acknowledge([1], [{ id: 1, outcome: 'shown' }]);
+    assert.deepEqual([notifier.pending(tab('a')).items, notifier.claims.size], [[], 0], 'taken: gone for both, and the hold with it');
+});
+
+test('open targets: Fleet\'s findings open Fleet\'s page, a named place is kept, and a chat wins', () => {
+    assert.deepEqual(openTarget(undefined, 'fleet'), { panel: FLEET_PANEL });
+    assert.deepEqual(openTarget({ panel: 'fs-tank' }, 'fleet'), { panel: 'fs-tank' });
+    assert.deepEqual(openTarget({ bundle: 'dsh-plugin-decisions' }), { bundle: 'dsh-plugin-decisions' });
+    assert.equal(openTarget({ panel: 'no spaces <b>' }), undefined);
+    assert.equal(openTarget(undefined, 'handback'), undefined);
+    const notifier = new Notifier({ settings: () => CONFIG, desktopHost: true });
+    notifier.notify({ title: 'Fleet · A5 logged a GPU error', kind: 'fleet' });
+    notifier.notify({ title: 'A chat', kind: 'fleet', sessionId: 's1', open: { panel: 'fs-tank' } });
+    const [fleet, chat] = notifier.pending().items;
+    assert.deepEqual(fleet.open, { panel: FLEET_PANEL });
+    assert.equal(chat.open, undefined, 'a chat to open wins over a place');
+    assert.deepEqual(notifier.recent[0].open, { panel: FLEET_PANEL }, 'the list keeps the place, for its Open button');
+});
+
+test('clicked: logged by id; a window that stayed down is brought up through the raiser, and what came of it is logged', () => {
+    const { out, logger } = lines();
+    const asks = [];
+    const notifier = new Notifier({ settings: () => CONFIG, desktopHost: true, logger, raiser: { raise: () => { asks.push('raise'); return { raised: true }; }, available: () => ({ ok: true }) } });
+    notifier.notify({ title: 'T' });
+    assert.deepEqual(notifier.clicked(1, false), { raised: false });
+    assert.deepEqual(asks, [], 'a window that came up by itself needs nothing');
+    assert.deepEqual(notifier.clicked(1, true), { raised: true });
+    assert.deepEqual(asks, ['raise']);
+    assert.ok(out.includes('info notifications: #1 clicked: DSH\'s window came up by itself'), out.join('\n'));
+    assert.ok(out.includes('info notifications: #1 clicked: brought DSH\'s window up (the app was asked to open again, as a click on its Dock icon does)'), out.join('\n'));
+    assert.equal(notifier.status().raise, true);
+    const none = new Notifier({ settings: () => CONFIG, logger, raiser: { raise: () => { throw new Error('boom'); } } });
+    assert.deepEqual(none.clicked(0, true), { raised: false, reason: 'boom' }, 'a raiser that throws is a reason, never a throw');
+    assert.ok(out.includes('warn notifications: a notification was clicked: could not bring DSH\'s window up (boom)'), out.join('\n'));
+});
+
+// ── Bringing the app's window up ─────────────────────────────────────
+
+const APP = '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness';
+const HOST_ENTRY = '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js';
+
+test('raise: the app is opened again with its own user-data folder, only where this is the app\'s own host', () => {
+    const facts = { platform: 'darwin', execPath: APP, argv: [APP, HOST_ENTRY, '/runtime', '/project'], electron: true };
+    // A second instance (DSH Test): the same --user-data-dir, so the running one takes the launch.
+    assert.deepEqual(relaunchPlan({ ...facts, parentArgs: `${APP} --user-data-dir=/Users/x/.dsh-test-b-electron` }), { command: APP, args: ['--user-data-dir=/Users/x/.dsh-test-b-electron'] });
+    assert.deepEqual(relaunchPlan({ ...facts, parentArgs: `${APP} --user-data-dir=/Users/x/My Data --remote-debugging-port=9333` }), { command: APP, args: ['--user-data-dir=/Users/x/My Data'] }, 'a folder with a space');
+    // The app as people open it: no folder given, so the default one, the running app's.
+    assert.deepEqual(relaunchPlan({ ...facts, parentArgs: `${APP}` }), { command: APP, args: [] });
+    assert.deepEqual(relaunchPlan({ ...facts, parentArgs: `${APP} -psn_0_123` }), { command: APP, args: [] });
+    // Anything else: a reason, and nothing started.
+    assert.match(relaunchPlan({ ...facts, electron: false, parentArgs: APP }).reason, /not the Desktop app/);
+    assert.match(relaunchPlan({ ...facts, platform: 'win32', parentArgs: APP }).reason, /macOS and Linux only/);
+    assert.match(relaunchPlan({ ...facts, argv: [APP, '/x/@deepseek-ai/dsh/lib/bin.js'], parentArgs: APP }).reason, /not started by the Desktop app/, 'a DSH run by a test or a terminal under the app\'s binary');
+    assert.match(relaunchPlan({ ...facts, parentArgs: `${APP} /repo/scripts/e2e.mjs notifications` }).reason, /not the Desktop app itself/, 'a script run under the app\'s binary is never taken for the app');
+    assert.match(relaunchPlan({ ...facts, parentArgs: '' }).reason, /could not be found/);
+    assert.match(relaunchPlan({ ...facts, parentArgs: '/usr/bin/other --user-data-dir=/x' }).reason, /could not be found/);
+    assert.equal(parentCommandLine(1, () => { throw new Error('no ps'); }), '', 'an unreadable parent is no command line, never a throw');
+    assert.equal(parentCommandLine(1, (cmd, args) => `${cmd} ${args.join(' ')}\n`), 'ps -ww -o args= -p 1');
+});
+
+test('raise: one launch per moment, detached, as the app (not its Node mode), and a failure is a reason', () => {
+    let clock = 10_000;
+    const launches = [];
+    const spawnImpl = (command, args, options) => {
+        launches.push({ command, args, detached: options.detached, node: options.env.ELECTRON_RUN_AS_NODE, home: options.env.DSH_HOME });
+        return { on() {}, unref() {} };
+    };
+    const raiser = makeRaiser({ plan: () => ({ command: APP, args: ['--user-data-dir=/x'] }), spawnImpl, now: () => clock, env: { ELECTRON_RUN_AS_NODE: '1', DSH_HOME: '/h', NODE_OPTIONS: '--x' } });
+    assert.deepEqual(raiser.available(), { ok: true });
+    assert.deepEqual(raiser.raise(), { raised: true });
+    assert.deepEqual(raiser.raise(), { raised: false, reason: 'it was asked to come up a moment ago' });
+    clock += RAISE_GAP_MS + 1;
+    assert.deepEqual(raiser.raise(), { raised: true });
+    assert.deepEqual(launches, [1, 2].map(() => ({ command: APP, args: ['--user-data-dir=/x'], detached: true, node: undefined, home: '/h' })));
+    const broken = makeRaiser({ plan: () => ({ command: APP, args: [] }), spawnImpl: () => { throw new Error('EACCES'); } });
+    assert.deepEqual(broken.raise(), { raised: false, reason: 'the app could not be asked: EACCES' });
+    const nowhere = makeRaiser({ plan: () => ({ reason: 'this DSH is not the Desktop app' }), spawnImpl: () => assert.fail('nothing may start') });
+    assert.deepEqual([nowhere.available(), nowhere.raise()], [{ ok: false, reason: 'this DSH is not the Desktop app' }, { raised: false, reason: 'this DSH is not the Desktop app' }]);
+});
+
+test('settings: a key that is not a setting is named where people read, with the setting it most likely meant', () => {
+    const { settings, problems } = checkSettings({ notifyFleeet: false, colour: 'blue' });
+    assert.equal(settings.notifyFleet, true, 'the misspelt key changes nothing');
+    assert.deepEqual(problems.map((p) => p.key), ['notifyFleeet', 'colour']);
+    assert.equal(problems[0].text, '“notifyFleeet” is not a setting of this plugin, so it does nothing; did you mean “Fleet findings”?');
+    assert.equal(problems[0].fix, 'Rename it to notifyFleet in the profile\'s notifications row, or remove it.');
+    assert.equal(problems[0].log, 'notifyFleeet is not a setting of this plugin, so it does nothing (did you mean notifyFleet, “Fleet findings”?)');
+    assert.equal(problems[1].fix, 'Remove it from the profile\'s notifications row.');
+    assert.deepEqual([nearestKey('enable'), nearestKey('notifyhandbacks'), nearestKey('colour')], ['enabled', 'notifyHandback', undefined]);
+});
+
+test('host: a misspelt key is warned in its log file at start and named on the page', needsPeers, async () => {
+    await withTempHome(async (home) => {
+        const ctx = fakeCtx({ typertGateway: { provide: (name, value) => ctx.provided.set(name, value) } });
+        peers.plugin.apply(ctx, peers.plugin.Config({ notifyFleeet: false }));
+        assert.match(readFileSync(join(home, 'notifications', 'notifications.log'), 'utf8'), /^\S+ warn a setting is wrong: notifyFleeet is not a setting of this plugin, so it does nothing \(did you mean notifyFleet, “Fleet findings”\?\)$/m);
+        const status = ctx.provided.get(peers.remote.SERVICE).notifier.status();
+        assert.deepEqual(status.problems.map((p) => [p.key, p.fix]), [['notifyFleeet', 'Rename it to notifyFleet in the profile\'s notifications row, or remove it.']]);
+        assert.equal(status.raise, false, 'a test process is never taken for the Desktop app');
+    });
+});
+
+// ── The browser half: in use, clicks, places ─────────────────────────
+
+test('window: in front with nobody at it, it shows; the person\'s own input makes it in use for 2 minutes; a script\'s event does not', async () => {
+    const { applyPoller, IDLE_MS } = clientInternals();
+    assert.equal(IDLE_MS, 120_000);
+    let clock = Date.now();
+    let next = 0;
+    const Notification = fakeNotificationClass();
+    const link = fakeLink(() => { next += 1; return { desktop: false, epoch: 'e', items: [{ id: next, title: `T${next}`, body: '', at: new Date(clock).toISOString() }] }; });
+    const disposers = [];
+    const doc = { hasFocus: () => true, visibilityState: 'visible', addEventListener() {}, removeEventListener() {} };
+    const poller = applyPoller({ effect(fn) { disposers.push(fn()); } }, link, { Notification, doc, win: undefined, storage: memoryStorage(), now: () => clock, wait: 1000 });
+    // Just loaded (a restart or a reload), in front, nobody has touched it: the news that waited shows.
+    assert.equal(await poller.read(), 1);
+    poller.touched({ isTrusted: false });
+    assert.equal(await poller.read(), 1, 'an event a script made is not a person');
+    poller.touched({ isTrusted: true });
+    clock += 1000;
+    assert.equal(await poller.read(), 0, 'the person is at it: no notification');
+    assert.deepEqual(link.acks().at(-1).results, [{ id: 3, outcome: 'watching' }]);
+    clock += IDLE_MS + 1;
+    assert.equal(await poller.read(), 1, 'left in front with nobody at it for 2 minutes: it shows again');
+    disposers[0]();
+});
+
+test('window: a click in the app\'s window that stayed down asks the host to bring it up; one that came up only reports the click', () => {
+    const { showNotification } = clientInternals();
+    const Notification = fakeNotificationClass();
+    const clicks = [];
+    const opened = [];
+    const hidden = { hasFocus: () => false, visibilityState: 'hidden' };
+    showNotification({ id: 4, title: 'T', sessionId: 's4' }, { Notification, doc: hidden, app: true, checkAfter: 0, win: { focus() {} }, openSession: () => (id) => opened.push(id), onClick: (item, down) => clicks.push([item.id, down]) });
+    Notification.made[0].onclick();
+    assert.deepEqual([opened, clicks], [['s4'], [[4, true]]], 'the chat opens first, then the window is brought up');
+    const up = { hasFocus: () => true, visibilityState: 'visible' };
+    showNotification({ id: 5, title: 'T' }, { Notification, doc: up, app: true, checkAfter: 0, win: { focus() {} }, onClick: (item, down) => clicks.push([item.id, down]) });
+    Notification.made[1].onclick();
+    showNotification({ id: 6, title: 'T' }, { Notification, doc: hidden, app: false, checkAfter: 0, win: { focus() {} }, onClick: (item, down) => clicks.push([item.id, down]) });
+    Notification.made[2].onclick();
+    assert.deepEqual(clicks.slice(1), [[5, false], [6, false]], 'a browser tab never asks for the app to come up');
+});
+
+test('window: a click opens the place a notification names: a DSH page, a plugin\'s page, or for a summary the recent list', () => {
+    const { showNotification, openPlaceOf, shared } = clientInternals();
+    const Notification = fakeNotificationClass();
+    const went = [];
+    const places = { panel: () => (id) => { went.push(['panel', id]); }, bundle: () => (name) => { went.push(['bundle', name]); } };
+    assert.equal(openPlaceOf({ panel: 'fs-fleet' }, places), true);
+    assert.equal(openPlaceOf({ bundle: 'dsh-plugin-decisions' }, places), true);
+    assert.equal(openPlaceOf({ panel: 'gone' }, { panel: () => () => { throw new Error('layout.selectPanel: main panel "gone" is not registered'); } }), false, 'a page that is not there is no throw');
+    assert.equal(openPlaceOf(undefined, places), false);
+    showNotification({ id: 7, title: 'Fleet · A5', open: { panel: 'fs-fleet' } }, { Notification, win: undefined, openSession: () => (id) => went.push(['chat', id]), openPlace: (place) => openPlaceOf(place, places) });
+    Notification.made[0].onclick();
+    assert.deepEqual(went.at(-1), ['panel', 'fs-fleet']);
+    // A summary: the plugin's page, with the recent list asked for.
+    shared.openBundle = (name) => went.push(['bundle', name]);
+    showNotification({ id: 8, title: 'DSH: 3 more updates', page: true }, { Notification, win: undefined, openSession: () => undefined });
+    Notification.made[1].onclick();
+    assert.deepEqual(went.at(-1), ['bundle', 'dsh-plugin-notifications']);
+    assert.ok(Date.now() - shared.recentWanted < 5000, 'the page is asked to show the recent list');
 });

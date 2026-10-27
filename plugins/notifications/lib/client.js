@@ -49,6 +49,17 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const SHOW_SINGLE = 2;
         /** How many recent notifications the page lists. */
         const RECENT_SHOWN = 10;
+        /**
+         * A window counts as in use (no notification needed) only while it is
+         * in front, can be seen, and had a key, pointer or wheel from the
+         * person within this long. Left in front with nobody at it, it shows
+         * the news like a window in the background.
+         */
+        const IDLE_MS = 2 * 60_000;
+        /** After a click, how long the window gets to come up by itself before the host is asked to bring it up. */
+        const RAISE_CHECK_MS = 400;
+        /** The input that says a person is at this window. */
+        const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'];
 
         /** The events the settings page offers, in the window notice's words. */
         const EVENTS = [
@@ -64,7 +75,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             summary: 'System notifications when DSH\'s window is hidden or unfocused.',
             enabled: 'Send system notifications',
             enabledHint: 'Other plugins\' news (the coordinator\'s threads, Decisions, Fleet) while you are not looking at DSH. Each switch below covers one kind; news of any other kind follows this switch alone.',
-            note: 'A click on a notification brings DSH\'s window up and opens the chat it is about.',
+            note: 'A click on a notification brings DSH\'s window up and opens the chat it is about (Fleet\'s findings open Fleet\'s page).',
+            kindsOff: 'These apply while “Send system notifications” is on.',
             whereTitle: 'Where they go now',
             permTitle: 'This window',
             permGranted: 'This window may show notifications.',
@@ -80,8 +92,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             recentTitle: 'Recent notifications',
             recentEmpty: 'None yet. News from other plugins shows here with what became of it, so a notification you missed is never lost.',
             recentHint: 'The newest first, with what became of each.',
-            recentLog: (file) => `The newest first, with what became of each. Every one is also a line in ${file}.`,
+            recentLog: (file) => `The newest first, with what became of each. Every one is also a line in its log file, ${file}.`,
             openChat: 'Open chat',
+            openPlace: 'Open',
             unreachable: 'Could not read where notifications go: the plugin did not answer. It tries again by itself.',
             problemsTitle: 'A setting is wrong',
             problemsFix: 'Set it with its switch above and save.',
@@ -99,7 +112,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             '.dshn-row>button,.dshn-row>[role=switch]{flex:0 0 auto}',
             '.dshn-title{font:var(--dsw-font-s-14);color:var(--dsw-alias-label-primary)}',
             '.dshn-hint{margin:2px 0 0;font:var(--dsw-font-xs-13);color:var(--dshn-text-2);overflow-wrap:anywhere}',
-            '.dshn-hint:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:4px}',
+            '.dshn-hint:focus-visible,.dshn-title:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px;border-radius:4px}',
+            // DSH's 2px ring on every control of this page (DESIGN.md §9), whatever the part draws by itself.
+            '.dshn-page :is(button,[role=switch],a,input):focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
             '.dshn-note{margin:8px 0 0;font:var(--dsw-font-xs-13);color:var(--dshn-text-2);overflow-wrap:anywhere}',
             '.dshn-problem{margin:8px 0 0;font:var(--dsw-font-xs-13);color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 85%,var(--dsw-alias-label-primary));overflow-wrap:anywhere}',
             '.dshn-list{list-style:none;margin:6px 0 0;padding:0;border-top:.5px solid var(--dsw-alias-border-l2)}',
@@ -133,7 +148,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
         /** The services the parts share, set by their injects (each may be missing). */
-        const shared = { link: undefined, openSession: undefined, openPage: undefined };
+        const shared = { link: undefined, openSession: undefined, openBundle: undefined, openPanel: undefined, recentWanted: 0, recentListeners: new Set() };
+
+        /** This window, as it tells the host when it looks at the queue: one id per page load. */
+        const WINDOW_ID = (() => {
+            try {
+                const id = globalThis.crypto?.randomUUID?.();
+                if (typeof id === 'string' && id) return id;
+            } catch { /* no crypto here */ }
+            return `w-${Math.random().toString(36).slice(2, 14)}`;
+        })();
+
+        /** Whether this window is the Desktop app's own (Electron), not a browser tab. */
+        const isAppWindow = (nav = (typeof navigator === 'undefined' ? undefined : navigator)) => Boolean(nav?.userAgent?.includes('Electron'));
+
+        /** What this window can do, as the host reads it (Notifier.pending): its id, its permission, and whether it is the app's window. */
+        function windowCaps({ Notification = globalThis.Notification, nav = (typeof navigator === 'undefined' ? undefined : navigator), id = WINDOW_ID } = {}) {
+            return { id, permission: permissionState({ Notification, navigator: nav }), app: isAppWindow(nav) };
+        }
+
+        /** Open the recent list on the plugin's page (a click on a summary notification): the page scrolls to it when it is there. */
+        function revealRecent() {
+            shared.recentWanted = Date.now();
+            for (const listener of shared.recentListeners) {
+                try { listener(); } catch { /* a page that is gone */ }
+            }
+        }
 
         /** Web Notifications in this window: 'granted', 'denied', 'default', 'desktop' (the Desktop app), or 'none' where the API is missing. */
         function permissionState(scope = globalThis) {
@@ -213,13 +253,24 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return at.toDateString() === now.toDateString() ? time : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
         }
 
-        /** Where notifications go now, in a sentence, from the host's status. */
-        function whereWords(status, enabled) {
+        /**
+         * Where notifications go now, in a sentence, from the host's status
+         * and what this window is (`here`: the app's window or a browser tab,
+         * and its permission).
+         */
+        function whereWords(status, enabled, here = { app: true, permission: 'desktop' }) {
             if (enabled === false) return 'Notifications are switched off. Switch on “Send system notifications” above and save to get them.';
             if (!isRecord(status)) return '';
+            const idle = 'while you are not using DSH: hidden, minimised, behind other windows, or left in front for 2 minutes with nobody at it';
             if (status.sender === 'desktop') return 'DSH\'s own desktop notifications send them. They skip while you are looking at DSH.';
-            if (status.sender === 'window' && status.desktopHost) return 'This DSH window shows them, with DSH\'s icon, while it is hidden, minimised or behind other windows — not while you are looking at it.';
-            if (status.sender === 'window') return `A DSH window in your browser shows them while you are not looking at it${status.windowSeenAt ? ` (it last checked in at ${whenWords(status.windowSeenAt)})` : ''}. Keep a DSH tab open to get them.`;
+            if (status.sender === 'window' && status.desktopHost && here.app) return `This DSH window shows them, with DSH's icon, ${idle}.`;
+            if (status.sender === 'window' && status.desktopHost) {
+                const tab = here.permission === 'denied' ? 'This browser tab has notifications blocked, so it never takes them.'
+                    : here.permission === 'granted' ? 'This browser tab shows them only while the app\'s window is closed.'
+                    : 'This browser tab shows none until it is allowed to (below), and then only while the app\'s window is closed.';
+                return `DSH's app window shows them, with DSH's icon, ${idle}. ${tab}`;
+            }
+            if (status.sender === 'window') return `A DSH window in your browser shows them ${idle}${status.windowSeenAt ? ` (one last checked in at ${whenWords(status.windowSeenAt)})` : ''}. Keep a DSH tab open to get them.`;
             if (status.sender === 'command') return `No DSH window has checked in for a while, so they go to ${status.platform === 'win32' ? 'a PowerShell toast' : 'notify-send'}.`;
             return status.platform === 'darwin'
                 ? 'No DSH window has checked in for a while, and macOS has no other sender that shows DSH\'s icon: news is listed below but not shown until a DSH window is open.'
@@ -286,6 +337,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     Notification,
                     win,
                     wait,
+                    onClick: (_item, down) => { void Promise.resolve(linkOf()?.call('clicked', { id: 0, raise: down })).catch(() => {}); },
                     onResult: (outcome, detail) => {
                         setLine(outcome === 'shown' ? 'Shown: the system reported showing it.'
                             : outcome === 'unconfirmed' ? 'Sent, but the system did not say it showed it. Focus or Do Not Disturb can hold notifications back.'
@@ -297,9 +349,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             return [line, send];
         }
 
-        /** One recent notification: when, what, what became of it, and a way to the chat. */
-        function RecentItem({ item, openSession }) {
+        /** One recent notification: when, what, what became of it, and a way to the chat (or the place it names). */
+        function RecentItem({ item, openSession, openPlace }) {
             const word = STATE_WORDS[item.state] ?? item.state;
+            const place = !item.sessionId && isRecord(item.open) ? item.open : undefined;
             return h('li', { className: 'dshn-item', 'data-notifications-item': item.id, 'data-notifications-state': item.state },
                 h('span', { className: 'dshn-when' }, whenWords(item.at)),
                 h('div', { className: 'dshn-what' },
@@ -307,7 +360,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     h('div', { className: 'dshn-what-state' }, h('span', { className: 'dshn-word' }, `${word}. `), item.detail ?? '')),
                 item.sessionId && openSession
                     ? h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': `${TEXT.openChat}: ${item.title}`, onClick: () => openSession(item.sessionId) }, TEXT.openChat)
-                    : null);
+                    : place && openPlace
+                        ? h(ui.Button, { variant: 'ghost', size: 'sm', 'aria-label': `${TEXT.openPlace}: ${item.title}`, onClick: () => openPlace(place) }, TEXT.openPlace)
+                        : null);
+        }
+
+        /** Open the place a notification names (openTarget on the host): a DSH page by its panel id, or a plugin's page in Plugins. */
+        function openPlaceOf(place, { panel = () => shared.openPanel, bundle = () => shared.openBundle } = {}) {
+            if (!isRecord(place)) return false;
+            try {
+                if (typeof place.panel === 'string' && typeof panel() === 'function') return panel()(place.panel) !== false;
+                if (typeof place.bundle === 'string' && typeof bundle() === 'function') return bundle()(place.bundle) !== false;
+            } catch { /* the place may be gone */ }
+            return false;
         }
 
         /** The plugin page's switches, written through DSH's settings form on Save; then where they go, this window, a test, and the recent ones. */
@@ -315,6 +380,23 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const snapshot = React.useSyncExternalStore(form.subscribe, form.getSnapshot);
             const disabled = !snapshot.writable || snapshot.saving;
             const on = (name) => snapshot[name]?.text === 'on';
+            // With the master switch off (as the form shows it now), the kinds below it do nothing: show them as inactive.
+            const kindsOff = !on('enabled');
+            const recentRef = React.useRef(null);
+            // A click on a summary notification opens this page: bring the recent list into view, and the keyboard with it.
+            React.useEffect(() => {
+                const reveal = () => {
+                    if (Date.now() - shared.recentWanted > 10_000) return;
+                    shared.recentWanted = 0;
+                    try {
+                        recentRef.current?.scrollIntoView?.({ block: 'start' });
+                        recentRef.current?.focus?.({ preventScroll: true });
+                    } catch { /* the page may be gone */ }
+                };
+                shared.recentListeners.add(reveal);
+                reveal();
+                return () => { shared.recentListeners.delete(reveal); };
+            }, []);
             const toggle = (name) => (next) => form.actions.edit(name, next ? 'on' : 'off');
             const [bump, setBump] = React.useState(0);
             // A save applies at once (the settings are live): read where they go and what is wrong again when it lands.
@@ -329,7 +411,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const openSession = openerOf();
             const recent = Array.isArray(status?.recent) ? status.recent.filter(isRecord).slice(0, RECENT_SHOWN) : [];
             const problems = Array.isArray(status?.problems) ? status.problems.filter(isRecord) : [];
-            const where = whereWords(status, status?.enabled);
+            const where = whereWords(status, status?.enabled, { app: isAppWindow(), permission: permissionState() });
             return h('div', { className: 'dshn-page', 'data-notifications-settings': true },
                 h(ui.SettingsForm, { labels: LABELS, state: snapshot, onSave: form.actions.save, onDiscard: form.actions.discard },
                     h('section', { className: 'dshn-section', 'data-notifications-master': '' },
@@ -338,17 +420,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                                 h('div', { className: 'dshn-title' }, TEXT.enabled),
                                 h('div', { className: 'dshn-hint' }, TEXT.enabledHint)),
                             h(ui.Switch, { checked: on('enabled'), label: TEXT.enabled, disabled, onChange: toggle('enabled') }))),
-                    ...EVENTS.map((event) => h('section', { key: event.field, className: 'dshn-section', 'data-notifications-event': event.field },
+                    kindsOff ? h('p', { className: 'dshn-note', 'data-notifications-kinds-off': '' }, TEXT.kindsOff) : null,
+                    ...EVENTS.map((event) => h('section', { key: event.field, className: 'dshn-section', 'data-notifications-event': event.field, ...(kindsOff ? { 'data-notifications-inactive': '' } : {}) },
                         h('div', { className: 'dshn-row' },
                             h('div', { className: 'dshn-row-text' },
                                 h('div', { className: 'dshn-title' }, event.title),
                                 h('div', { className: 'dshn-hint' }, event.hint)),
-                            h(ui.Switch, { checked: on(event.field), label: event.title, disabled, onChange: toggle(event.field) })))),
+                            h(ui.Switch, { checked: on(event.field), label: event.title, disabled: disabled || kindsOff, onChange: toggle(event.field) })))),
                     h('p', { className: 'dshn-note' }, TEXT.note)),
                 problems.length > 0
                     ? h('section', { className: 'dshn-section', 'data-notifications-problems': '', role: 'alert' },
                         h('div', { className: 'dshn-title' }, TEXT.problemsTitle),
-                        ...problems.map((problem) => h('p', { key: problem.key, className: 'dshn-problem' }, `${problem.text}. ${TEXT.problemsFix}`)))
+                        ...problems.map((problem) => h('p', { key: problem.key, className: 'dshn-problem' }, `${problem.text}. ${typeof problem.fix === 'string' && problem.fix ? problem.fix : TEXT.problemsFix}`)))
                     : null,
                 h('section', { className: 'dshn-section', 'data-notifications-where': status?.sender ?? (failed ? 'unreachable' : 'loading') },
                     h('div', { className: 'dshn-title' }, TEXT.whereTitle),
@@ -363,10 +446,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                         h(ui.Button, { variant: 'outline', size: 'sm', onClick: () => { void sendTest(); } }, TEXT.testSend)),
                     h('p', { className: 'dshn-note', role: 'status', 'data-notifications-test-result': '' }, testLine)),
                 h('section', { className: 'dshn-section', 'data-notifications-recent': String(recent.length), 'aria-label': TEXT.recentTitle },
-                    h('div', { className: 'dshn-title' }, TEXT.recentTitle),
+                    h('div', { className: 'dshn-title', ref: recentRef, tabIndex: -1, 'data-notifications-recent-title': '' }, TEXT.recentTitle),
                     h('div', { className: 'dshn-hint', 'data-notifications-recent-hint': '' },
                         recent.length > 0 ? (typeof status?.logFile === 'string' && status.logFile ? TEXT.recentLog(status.logFile) : TEXT.recentHint) : status ? TEXT.recentEmpty : ''),
-                    recent.length > 0 ? h('ul', { className: 'dshn-list' }, ...recent.map((item) => h(RecentItem, { key: item.id, item, openSession }))) : null));
+                    recent.length > 0 ? h('ul', { className: 'dshn-list' }, ...recent.map((item) => h(RecentItem, { key: item.id, item, openSession, openPlace: openPlaceOf }))) : null));
         }
 
         /** The plugin page on DSH's Plugins page, served while the plugin runs. */
@@ -428,12 +511,18 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
 
         /**
          * Show one notification. A click brings the window up and opens the
-         * chat it is about. What the system did comes back once through
+         * chat it is about (or the place it names, or for a summary the
+         * recent list). What the system did comes back once through
          * `onResult`: 'shown' (its show event), 'failed' with the reason
          * (its error event, or a constructor that threw), or 'unconfirmed'
          * when neither came within `wait` ms.
+         *
+         * After a click, `onClick(item, down)` tells the host: `down` when the
+         * Desktop app's window is still hidden, minimised or behind others a
+         * moment later (its own `focus()` cannot raise it from there), so the
+         * host brings it up (raise.js).
          */
-        function showNotification(item, { Notification = globalThis.Notification, win = globalThis.window, onResult = () => {}, wait = SHOW_WAIT_MS, openSession = () => shared.openSession, openPage = () => shared.openPage } = {}) {
+        function showNotification(item, { Notification = globalThis.Notification, win = globalThis.window, doc = typeof document === 'undefined' ? undefined : document, app = isAppWindow(), onResult = () => {}, onClick, wait = SHOW_WAIT_MS, checkAfter = RAISE_CHECK_MS, openSession = () => shared.openSession, openPage = () => (() => { revealRecent(); return shared.openBundle?.(BUNDLE); }), openPlace = openPlaceOf } = {}) {
             let settled = false;
             const settle = (outcome, detail = '') => {
                 if (settled) return;
@@ -458,11 +547,22 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const page = openPage();
                 if (item.sessionId && typeof open === 'function') {
                     try { open(item.sessionId); } catch { /* the chat may be gone */ }
+                } else if (isRecord(item.open)) {
+                    openPlace(item.open);
                 } else if (item.page && typeof page === 'function') {
                     // A summary of several: its click opens the recent list on the plugin's page.
                     try { page(); } catch { /* DSH may have no Plugins page here */ }
                 }
                 try { notification.close(); } catch { /* already closed */ }
+                if (typeof onClick !== 'function') return;
+                // Did the window come up? In the app a hidden or minimised window does not by itself: then the host raises it.
+                const report = () => {
+                    let down = false;
+                    try { down = Boolean(app && doc && (doc.visibilityState === 'hidden' || !doc.hasFocus())); } catch { /* the window may be gone */ }
+                    try { onClick(item, down); } catch { /* a report never stops the click */ }
+                };
+                if (app && checkAfter > 0) setTimeout(report, checkAfter);
+                else report();
             };
             return notification;
         }
@@ -500,16 +600,32 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         }
 
         /**
-         * The sender: poll the queue, show what is new while nobody looks at
-         * the window, take the rest, and say what became of each. When the
-         * answer says the Desktop app sends natively, stand down entirely.
-         * The queue is only taken where it can be shown or is worthless: with
-         * permission still 'default' the items wait in the host's queue, so
-         * they show once the ask is answered.
+         * The sender: poll the queue, show what is new while nobody uses the
+         * window, take the rest, and say what became of each. When the answer
+         * says the Desktop app sends natively, stand down entirely.
+         *
+         * Each look tells the host what this window can do (windowCaps), and
+         * the host hands items only to a window that can show them: a window
+         * with notifications blocked, without support, or not allowed yet
+         * takes nothing, so the news waits for one that can (or is listed as
+         * not shown, with why). Items it takes are held for it, so a second
+         * window never shows them too.
+         *
+         * "In use" (no notification needed) is the window in front, seen, and
+         * touched by the person (key, pointer, wheel) within IDLE_MS. Left in
+         * front with nobody at it, or just loaded (a restart, a reload), it
+         * shows the news.
          */
-        function applyPoller(scope, link, { now = Date.now, Notification = globalThis.Notification, win = typeof window === 'undefined' ? undefined : window, doc = typeof document === 'undefined' ? undefined : document, storage = globalThis.localStorage, warn = (message) => console?.warn?.(message), wait = SHOW_WAIT_MS } = {}) {
+        function applyPoller(scope, link, { now = Date.now, Notification = globalThis.Notification, win = typeof window === 'undefined' ? undefined : window, doc = typeof document === 'undefined' ? undefined : document, storage = globalThis.localStorage, warn = (message) => console?.warn?.(message), wait = SHOW_WAIT_MS, nav = (typeof navigator === 'undefined' ? undefined : navigator), id = WINDOW_ID, checkAfter = RAISE_CHECK_MS } = {}) {
             const seen = shownKeys(storage);
-            const state = { stopped: false, desktopHandled: false, transportFailed: false };
+            const state = { stopped: false, desktopHandled: false, transportFailed: false, lastInput: 0 };
+            const app = isAppWindow(nav);
+            // The person's own input (not a script's) says someone is at this window.
+            const touched = (event) => {
+                if (event?.isTrusted === false) return;
+                state.lastInput = now();
+            };
+            const inUse = () => Boolean(doc && doc.hasFocus() && doc.visibilityState !== 'hidden' && state.lastInput > 0 && now() - state.lastInput < IDLE_MS);
             const stop = () => {
                 state.stopped = true;
             };
@@ -531,10 +647,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 inflight = readOnce().catch(() => 0).finally(() => { inflight = undefined; });
                 return inflight;
             };
+            const clicked = (item, down) => {
+                void Promise.resolve(link.call('clicked', { id: typeof item?.id === 'number' ? item.id : 0, raise: down === true })).catch(() => {});
+            };
             const readOnce = async () => {
                 let result;
                 try {
-                    result = await link.call('pending', {});
+                    result = await link.call('pending', { window: windowCaps({ Notification, nav, id }) });
                 } catch (error) {
                     transportTrouble(String(error?.message ?? error));
                     return 0;
@@ -553,15 +672,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 const epoch = typeof result.value.epoch === 'string' ? result.value.epoch : '';
                 const items = Array.isArray(result.value.items) ? result.value.items.filter((item) => isRecord(item) && typeof item.id === 'number') : [];
                 if (items.length === 0) return 0;
-                // No notification support here: take nothing (another window may show them, or the host drops them in words).
-                if (typeof Notification !== 'function') return 0;
-                const permission = Notification.permission;
-                // permission 'default': take nothing, so the items wait in the queue and show once the ask is answered.
-                if (permission !== 'granted' && permission !== 'denied') return 0;
-                // Not watching = the window cannot be seen (hidden or minimised)
-                // or does not have focus. hasFocus can lie for a hidden window,
-                // so ask visibility too.
-                const watching = Boolean(doc && doc.hasFocus() && doc.visibilityState !== 'hidden');
+                // The host hands items only to a window that can show them; if this one cannot (any more), take nothing: they wait for one that can.
+                const caps = windowCaps({ Notification, nav, id });
+                if (typeof Notification !== 'function' || (caps.permission !== 'granted' && caps.permission !== 'desktop')) return 0;
+                // In use = in front, seen (hasFocus can lie for a hidden window, so ask visibility too), and touched by the person lately.
+                const watching = inUse();
                 const took = [];
                 const results = [];
                 const toShow = [];
@@ -571,7 +686,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     took.push(item.id);
                     if (seen.has(key)) continue; // shown before a reload: never twice
                     if (Number.isFinite(at) && now() - at > STALE_MS) results.push({ id: item.id, outcome: 'stale' });
-                    else if (permission === 'denied') results.push({ id: item.id, outcome: 'denied' });
                     else if (watching || !doc) results.push({ id: item.id, outcome: 'watching' });
                     else toShow.push({ ...item, key });
                 }
@@ -582,25 +696,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 let shown = 0;
                 for (const item of single) {
                     shown += 1;
-                    showNotification(item, { Notification, win, wait, onResult: (outcome, detail) => tell([], [{ id: item.id, outcome: outcome === 'unconfirmed' ? 'unconfirmed' : outcome, detail }]) });
+                    showNotification(item, { Notification, win, doc, app, wait, checkAfter, onClick: clicked, onResult: (outcome, detail) => tell([], [{ id: item.id, outcome: outcome === 'unconfirmed' ? 'unconfirmed' : outcome, detail }]) });
                 }
                 if (summarized.length > 0) {
                     shown += 1;
                     showNotification(summaryOf(summarized), {
-                        Notification, win, wait,
+                        Notification, win, doc, app, wait, checkAfter, onClick: clicked,
                         onResult: (outcome, detail) => tell([], summarized.map((item) => ({ id: item.id, outcome: outcome === 'shown' ? 'summary' : outcome, detail }))),
                     });
                 }
                 return shown;
             };
-            ensurePermissionOnce(Notification);
+            ensurePermissionOnce(Notification, nav);
             const timer = setInterval(() => { void read(); }, POLL_MS);
+            timer?.unref?.();
             const wake = () => { void read(); };
             if (doc) {
                 doc.addEventListener('visibilitychange', wake);
                 win?.addEventListener?.('focus', wake);
                 win?.addEventListener?.('blur', wake);
             }
+            for (const type of INPUT_EVENTS) win?.addEventListener?.(type, touched, { capture: true, passive: true });
             // The first look right away, so news that waited through a reload shows without a 15 s wait.
             void read();
             scope.effect(() => () => {
@@ -611,8 +727,9 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                     win?.removeEventListener?.('focus', wake);
                     win?.removeEventListener?.('blur', wake);
                 }
+                for (const type of INPUT_EVENTS) win?.removeEventListener?.(type, touched, { capture: true });
             }, 'notifications: browser sender');
-            return { read, state };
+            return { read, state, touched, inUse };
         }
 
         const inject = ['slots'];
@@ -646,13 +763,34 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 shared.openSession = open;
                 return () => { if (shared.openSession === open) shared.openSession = undefined; };
             });
-            // DSH's Plugins page: a click on a summary notification opens the recent list here.
+            // DSH's Plugins page: a click on a summary notification opens the recent list here; a notification may name a plugin's page.
             ctx.inject(['pluginNavigation'], (scope) => {
-                const open = () => {
-                    try { scope.pluginNavigation.openBundle?.(BUNDLE); } catch (error) { console?.warn?.('dsh-plugin-notifications: could not open its page', error); }
+                const open = (name) => {
+                    try {
+                        scope.pluginNavigation.openBundle?.(name);
+                        return true;
+                    } catch (error) {
+                        console?.warn?.('dsh-plugin-notifications: could not open that page', error);
+                        return false;
+                    }
                 };
-                shared.openPage = open;
-                return () => { if (shared.openPage === open) shared.openPage = undefined; };
+                shared.openBundle = open;
+                return () => { if (shared.openBundle === open) shared.openBundle = undefined; };
+            });
+            // DSH's pages in its panel list (Fleet's, say): a notification may name one to open.
+            ctx.inject(['layout'], (scope) => {
+                const open = (panel) => {
+                    try {
+                        scope.layout.selectPanel(panel);
+                        return true;
+                    } catch (error) {
+                        // Not there (that plugin is off or not installed): the window still came up.
+                        console?.warn?.(`dsh-plugin-notifications: could not open the page ${panel}`, error?.message ?? error);
+                        return false;
+                    }
+                };
+                shared.openPanel = open;
+                return () => { if (shared.openPanel === open) shared.openPanel = undefined; };
             });
             ctx.inject(['configForms', 'remote', 'remote.session'], (scope) => {
                 try {
@@ -667,7 +805,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
         module.exports.apply = apply;
         // For the plugin's own tests: the pure helpers the parts are built on.
         module.exports.internals = {
-            FIELDS, EVENTS, TEXT, LABELS, CSS, STATE_WORDS, SHOW_AT_ONCE, SHOW_SINGLE, boolSpec, injectStyle, removeStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, planShows, summaryOf, shownKeys, rememberShown, whereWords, whenWords, isRecord, applyPoller, applySettingsForm, shared, SettingsPage, RecentItem,
+            FIELDS, EVENTS, TEXT, LABELS, CSS, STATE_WORDS, SHOW_AT_ONCE, SHOW_SINGLE, IDLE_MS, RAISE_CHECK_MS, WINDOW_ID, boolSpec, injectStyle, removeStyle, permissionState, askPermission, permissionLine, ensurePermissionOnce, hostLink, showNotification, planShows, summaryOf, shownKeys, rememberShown, whereWords, whenWords, isRecord, applyPoller, applySettingsForm, shared, SettingsPage, RecentItem, windowCaps, isAppWindow, openPlaceOf, revealRecent,
         };
         return module.exports;
     },

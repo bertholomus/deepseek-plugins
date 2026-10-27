@@ -27,6 +27,7 @@ import z from '@deepseek-ai/schemastery';
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths';
 import { changedWords, checkSettings, readConfig } from './config.js';
 import { Notifier } from './notifier.js';
+import { makeRaiser, parentCommandLine, relaunchPlan } from './raise.js';
 import { NotificationsRemote, SERVICE } from './remote.js';
 import { LogFile, StateFile } from './state.js';
 
@@ -91,23 +92,29 @@ export function apply(ctx, config) {
     };
     const logger = { info: (format, text) => line('info', format, text), warn: (format, text) => line('warn', format, text) };
     const log = (level, text) => line(level, '%s', `notifications: ${text}`);
-    for (const problem of checked.problems) log('warn', `a setting is wrong: ${problem.text}`);
+    for (const problem of checked.problems) log('warn', `a setting is wrong: ${problem.log}`);
     const store = new StateFile(join(folder, 'state.json'), {
         onError: (what, error) => log('warn', `${what} (${String(error?.message ?? error).slice(0, 200)})`),
+    });
+    // The Desktop host is Electron: its window's browser half exists even
+    // while the window is hidden or minimised, so the queue is always for
+    // it. DSH_CLIENT_VERSION is the Desktop build's inlined version when a
+    // future build exports it; process.versions.electron is the signal
+    // today's host process carries (a terminal DSH is plain Node).
+    const desktopHost = process.versions?.electron !== undefined || process.env.DSH_CLIENT_VERSION !== undefined;
+    // After a click, the app's window is brought up the way the Dock does it (raise.js); worked out once, on the first need.
+    const raiser = makeRaiser({
+        plan: () => relaunchPlan({ platform: process.platform, execPath: process.execPath, argv: process.argv, parentArgs: parentCommandLine(), electron: process.versions?.electron !== undefined }),
     });
     const notifier = new Notifier({
         settings: () => checked.settings,
         logger,
         logFile: shownPath(logFile.file),
         platform: process.platform,
-        // The Desktop host is Electron: its window's browser half exists even
-        // while the window is hidden or minimised, so the queue is always for
-        // it. DSH_CLIENT_VERSION is the Desktop build's inlined version when a
-        // future build exports it; process.versions.electron is the signal
-        // today's host process carries (a terminal DSH is plain Node).
-        desktopHost: process.versions?.electron !== undefined || process.env.DSH_CLIENT_VERSION !== undefined,
+        desktopHost,
         store,
         problems: () => checked.problems,
+        raiser,
     });
     log('info', `started (${checked.settings.enabled ? 'on' : 'switched off in its settings'}; ${notifier.desktopHost ? 'the Desktop app' : 'no Desktop app'}; sender now: ${notifier.sender()})`);
 
@@ -115,11 +122,11 @@ export function apply(ctx, config) {
     // the log says what changed, and a setting that is still (or now) wrong.
     ctx.on?.('loader/volatile-update', (paths) => {
         try {
-            const before = new Set(checked.problems.map((problem) => problem.text));
+            const before = new Set(checked.problems.map((problem) => problem.log));
             checked = checkSettings(readConfig(config));
-            for (const problem of checked.problems) if (!before.has(problem.text)) log('warn', `a setting is wrong: ${problem.text}`);
-            const words = changedWords(paths);
-            log('info', `settings changed${words ? `: ${words}` : ''} (${checked.settings.enabled ? 'on' : 'switched off in its settings'}; sender now: ${notifier.sender()})`);
+            for (const problem of checked.problems) if (!before.has(problem.log)) log('warn', `a setting is wrong: ${problem.log}`);
+            const words = changedWords(paths, checked);
+            log('info', `settings changed${words ? `: ${words}` : ''} (notifications ${checked.settings.enabled ? 'on' : 'off'}; sender: ${notifier.sender()})`);
         } catch (error) {
             log('warn', `could not read its settings after a change (${String(error?.message ?? error).slice(0, 200)})`);
         }

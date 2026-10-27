@@ -12,6 +12,9 @@
  * - `status`: what the settings page shows — where notifications go now,
  *   settings that were wrong, and the recent ones with what became of each.
  * - `noteTest`: the settings page's test notification, logged with the rest.
+ * - `clicked`: a click on a notification, logged; where the window could not
+ *   come up by itself (the Desktop app's window hidden or minimised), the
+ *   host brings it up (raise.js).
  *
  * The gateway finds a Remote service by its `typertRemote` binding and the
  * method markers on its prototype; parameters are plain names, since the
@@ -46,12 +49,9 @@ export class NotificationsRemote {
         }
     }
 
-    /** What this window should show: whether the desktop app already sends natively, and what is queued. */
-    async pending() {
-        return this.run(() => {
-            this.notifier.markBrowserSeen();
-            return this.notifier.pending();
-        });
+    /** What this window should show: whether the desktop app already sends natively, and what is queued for it (it says what it can do: Notifier.pending). */
+    async pending(window) {
+        return this.run(() => this.notifier.pending(window));
     }
 
     /** The window took these queued notifications, and says what became of each (see Notifier.acknowledge). */
@@ -68,6 +68,11 @@ export class NotificationsRemote {
     async noteTest(outcome, detail) {
         return this.run(() => this.notifier.noteTest(outcome, detail));
     }
+
+    /** A notification was clicked; `raise` when the window could not come up by itself (Notifier.clicked). */
+    async clicked(id, raise) {
+        return this.run(() => this.notifier.clicked(id, raise === true));
+    }
 }
 
 /** Mark methods the way the `@Remote` decorator does in DSH's TypeScript. Without
@@ -81,4 +86,4 @@ function markRemote(Class, names) {
         });
     }
 }
-markRemote(NotificationsRemote, ['pending', 'acknowledge', 'status', 'noteTest']);
+markRemote(NotificationsRemote, ['pending', 'acknowledge', 'status', 'noteTest', 'clicked']);
