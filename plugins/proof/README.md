@@ -161,14 +161,14 @@ by label into two halves of 20. The rules learned from the tuned half
 (`seen12/`, now 0 of 18) are the look-only readings listed under
 [What counts as a claim](#what-counts-as-a-claim); on the guard half
 (`holdout12/`), whose cases stay unread, they flag 5 of its 16 turns that
-claim nothing, at each of the last four commits of rules (60ab17a, 82a9161,
-834bba4, 93edc1a). So more than one plain explanation in four, written the way that
-writer writes, can still get a card when it says what code or a service
-does in words the rules have not met. (Batches of explanation sentences the
-builder wrote, each measured once: 3 of 22, 3 of 25 and 4 of 25 flagged
-before the rules they led to, and a last batch kept out of the rules, 3 of
-20 at 93edc1a: about one in seven; not a fair figure, as the builder knows the
-rules.)
+claim nothing, at each of the last four commits of rules (60ab17a,
+82a9161, 834bba4, 93edc1a). So more than one plain explanation in four,
+written the way that writer writes, can still get a card when it says what
+code or a service does in words the rules have not met. (Batches of
+explanation sentences the builder wrote, each measured once: 9 of 36, 3 of
+22, 3 of 25 and 4 of 25 flagged before the rules they led to, and a last
+batch kept out of the rules, 3 of 20 at 93edc1a, about one in seven; not a
+fair figure, as the builder knows the rules.)
 
 Measured on labelled corpora of coding-agent turns: real tool-output
 formats and replies, each turn labelled by the person who wrote it as
