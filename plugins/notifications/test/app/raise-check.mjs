@@ -225,12 +225,13 @@ async function clickCase(name, file, title) {
     const entry = await waitFor(async () => (await status()).recent.find((item) => item.title === news), 10000, 300);
     const t0 = Date.now();
     await evaluate('(() => { const note = window.__notes.at(-1); note.onclick && note.onclick(); return true; })()', { gesture: true });
-    // Up = on screen, visible, and in front of every other window or the focused one.
-    const up = await waitFor(async () => { const w = order(); const s = await state(); return w.onScreen && s.visibility === 'visible' && (w.inFrontOfIt === 0 || s.focused) ? { w, s } : undefined; }, 10000, 50);
+    // Up = on screen, visible, and in front of every other window or the focused one. On a quiet machine it takes
+    // about a second; the app started again to hand over can take much longer on a busy one, so the wait is 30 s.
+    const up = await waitFor(async () => { const w = order(); const s = await state(); return w.onScreen && s.visibility === 'visible' && (w.inFrontOfIt === 0 || s.focused) ? { w, s } : undefined; }, 30000, 50);
     const took = up ? Date.now() - t0 : undefined;
     await sleep(700);
     const after = await state();
-    say(`[${name}] after the click: ${up ? `up in ${took} ms (window ${JSON.stringify(up.w)}, visibility ${up.s.visibility}, focused ${up.s.focused})` : `not up within 10 s (${JSON.stringify(order())})`}; chat "${title}" open: ${chatOpen(after, title)}`);
+    say(`[${name}] after the click: ${up ? `up in ${took} ms (window ${JSON.stringify(up.w)}, visibility ${up.s.visibility}, focused ${up.s.focused})` : `not up within 30 s (${JSON.stringify(order())})`}; chat "${title}" open: ${chatOpen(after, title)}`);
     const logged = await waitFor(async () => logLines().filter((line) => line.includes(`#${entry?.id} clicked`)).at(-1), 5000, 200);
     say(`[${name}] the plugin's log: ${logged ? logged.replace(/^\S+ /, '') : '(no click line)'}`);
     if (up) {

@@ -107,8 +107,10 @@ line in its log file and an entry in the recent list. The caller's answer
 - Proven in the installed app (DeepSeek Harness 0.2.1-rc.3), in a DSH Test
   instance's own window (`test/app/raise-check.mjs`): with the window hidden
   by its close button, minimised, and behind another window, a click brought
-  it up in front on the right chat each time, within 1.3 s, and the log said
-  the plugin brought it up. A recorder stood in for the banner (the
+  it up in front on the right chat each time, and the log said the plugin
+  brought it up: in 0.3 to 1.3 s over five runs, and once over 10 s for the
+  minimised window while this machine ran at a load average of about 75
+  (the app started again to hand over is what takes the time). A recorder stood in for the banner (the
   click is its `onclick`, the handler a banner's click calls), so the system
   did not bring the app forward as it does for a real click; that makes the
   check the harder case.
@@ -277,7 +279,8 @@ notification with nothing to open just brings DSH's window up.
   DSH started another way (in a terminal, with a browser tab) has no app
   window to bring up; a click asks the browser to focus its tab.
 - **To bring the window up, the app's executable starts once more** for a
-  moment: it hands over to the running app and quits. The DSH Test
+  moment: it hands over to the running app and quits. That takes about a
+  second, and can take several on a heavily loaded machine. The DSH Test
   instances here run it with their own user-data folder, so it reaches
   their window, never another DSH.
 - **No DSH window open** (a DSH in a terminal with no tab for more than
