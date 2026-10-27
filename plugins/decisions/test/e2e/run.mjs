@@ -222,6 +222,10 @@ async function openPage(page, timeout = 15000) {
         await entry.click({ timeout });
     });
 }
+/** The page at its top. The page is its own scroller (the kit's page), so it is scrolled, not brought into view. */
+async function toTop(page) {
+    await page.locator('[data-decisions-page]').evaluate((el) => { el.scrollTop = 0; });
+}
 const waitCard = (sessionId, kind, timeout = 30000) => waitFor(() => cardFor(sessionId, kind), `a ${kind} card for ${sessionId}`, timeout, 300);
 const leaves = (cardId, timeout = 30000) => waitFor(async () => !(await state()).waiting.some((c) => c.id === cardId), `${cardId} to leave the list`, timeout, 300);
 /** Decisions' newest log entry about a card, of a kind (and a state). */
@@ -627,7 +631,7 @@ try {
             await shot(page, shots, 'dotted-question-light', version);
             // The page from its top; the whole list in a window tall enough to hold it (a picture of a part taller
             // than the window shows only what is in view, the rest blank).
-            await page.locator('[data-decisions-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            await toTop(page);
             await shot(page, shots, 'decisions-light');
             await page.setViewportSize({ width: 1280, height: 2200 });
             await page.waitForTimeout(300);
@@ -636,13 +640,13 @@ try {
             await shot(page, shots, 'waiting-dark', page.locator('[data-decisions-waiting]'));
             await page.setViewportSize({ width: 1280, height: 860 });
             await page.waitForTimeout(300);
-            await page.locator('[data-decisions-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            await toTop(page);
             await shot(page, shots, 'decisions-dark');
             await page.locator('[data-decisions-history]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             await shot(page, shots, 'history-dark');
             await setDark(page, false);
             await shot(page, shots, 'history-light');
-            await page.locator('[data-decisions-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            await toTop(page);
             // A narrow window: the page reflows, nothing spills sideways.
             await page.setViewportSize({ width: 760, height: 900 });
             await page.waitForTimeout(500);
