@@ -916,6 +916,8 @@ test('window: where notifications go, in words, for each sender', () => {
     assert.match(whereWords({ sender: 'window', desktopHost: true }, true, { app: false, permission: 'denied' }), /^DSH's app window shows them, with DSH's icon, while you are not using DSH: .*\. This browser tab has notifications blocked, so it never takes them\.$/);
     assert.match(whereWords({ sender: 'window', desktopHost: true }, true, { app: false, permission: 'granted' }), /This browser tab shows them only while the app's window is closed\.$/);
     assert.match(whereWords({ sender: 'window', desktopHost: true }, true, { app: false, permission: 'default' }), /This browser tab shows none until it is allowed to \(below\), and then only while the app's window is closed\.$/);
+    assert.match(whereWords({ sender: 'window', desktopHost: true, appWindow: false }, true, { app: false, permission: 'granted' }), /^DSH's app window is closed, so this browser tab shows them while you are not using DSH: /);
+    assert.match(whereWords({ sender: 'window', desktopHost: true, appWindow: false }, true, { app: false, permission: 'denied' }), /^DSH's app window is closed, and this browser tab has notifications blocked: news waits up to 5 minutes/);
     assert.match(whereWords({ sender: 'window', desktopHost: false, windowSeenAt: new Date().toISOString() }, true, { app: false, permission: 'granted' }), /^A DSH window in your browser shows them while you are not using DSH: .* \(one last checked in at \d/);
     assert.match(whereWords({ sender: 'command', platform: 'linux' }, true), /go to notify-send\.$/);
     assert.match(whereWords({ sender: 'command', platform: 'win32' }, true), /go to a PowerShell toast\.$/);

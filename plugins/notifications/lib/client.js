@@ -264,6 +264,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const idle = 'while you are not using DSH: hidden, minimised, behind other windows, or left in front for 2 minutes with nobody at it';
             if (status.sender === 'desktop') return 'DSH\'s own desktop notifications send them. They skip while you are looking at DSH.';
             if (status.sender === 'window' && status.desktopHost && here.app) return `This DSH window shows them, with DSH's icon, ${idle}.`;
+            if (status.sender === 'window' && status.desktopHost && status.appWindow === false) {
+                return here.permission === 'denied' ? 'DSH\'s app window is closed, and this browser tab has notifications blocked: news waits up to 5 minutes for the app\'s window, then is listed as not shown.'
+                    : here.permission === 'granted' ? `DSH's app window is closed, so this browser tab shows them ${idle}.`
+                    : 'DSH\'s app window is closed, and this browser tab shows none until it is allowed to (below).';
+            }
             if (status.sender === 'window' && status.desktopHost) {
                 const tab = here.permission === 'denied' ? 'This browser tab has notifications blocked, so it never takes them.'
                     : here.permission === 'granted' ? 'This browser tab shows them only while the app\'s window is closed.'
@@ -385,17 +390,27 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
             const recentRef = React.useRef(null);
             // A click on a summary notification opens this page: bring the recent list into view, and the keyboard with it.
             React.useEffect(() => {
-                const reveal = () => {
-                    if (Date.now() - shared.recentWanted > 10_000) return;
-                    shared.recentWanted = 0;
+                let later;
+                const show = () => {
                     try {
                         recentRef.current?.scrollIntoView?.({ block: 'start' });
                         recentRef.current?.focus?.({ preventScroll: true });
                     } catch { /* the page may be gone */ }
                 };
+                const reveal = () => {
+                    if (Date.now() - shared.recentWanted > 10_000) return;
+                    shared.recentWanted = 0;
+                    show();
+                    // Once more when the list has loaded below the rest of the page.
+                    clearTimeout(later);
+                    later = setTimeout(show, 600);
+                };
                 shared.recentListeners.add(reveal);
                 reveal();
-                return () => { shared.recentListeners.delete(reveal); };
+                return () => {
+                    clearTimeout(later);
+                    shared.recentListeners.delete(reveal);
+                };
             }, []);
             const toggle = (name) => (next) => form.actions.edit(name, next ? 'on' : 'off');
             const [bump, setBump] = React.useState(0);
@@ -431,7 +446,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) window.__ModuleLoa
                 problems.length > 0
                     ? h('section', { className: 'dshn-section', 'data-notifications-problems': '', role: 'alert' },
                         h('div', { className: 'dshn-title' }, TEXT.problemsTitle),
-                        ...problems.map((problem) => h('p', { key: problem.key, className: 'dshn-problem' }, `${problem.text}. ${typeof problem.fix === 'string' && problem.fix ? problem.fix : TEXT.problemsFix}`)))
+                        ...problems.map((problem) => h('p', { key: problem.key, className: 'dshn-problem' }, `${problem.text}${/[.?!]$/.test(String(problem.text)) ? '' : '.'} ${typeof problem.fix === 'string' && problem.fix ? problem.fix : TEXT.problemsFix}`)))
                     : null,
                 h('section', { className: 'dshn-section', 'data-notifications-where': status?.sender ?? (failed ? 'unreachable' : 'loading') },
                     h('div', { className: 'dshn-title' }, TEXT.whereTitle),
