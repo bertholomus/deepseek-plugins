@@ -2471,6 +2471,8 @@ export function described(claim, items, prompt = '') {
     // "the rollout completes in about four minutes", "is deployed behind the gateway", "the fix landed in 3.1.0":
     // how a thing behaves or what its history is, after a why or how question, not "Is it deployed?".
     if (behaves(claim, words, String(claim.text ?? '').replace(/[`*]/g, ''), ask) && !statusAsked(ask)) return true;
+    // "- `build` — compiles the TypeScript and copies `public/` into `dist/`": a list that says what each named thing does.
+    if (DEF_ITEM.test(String(claim.text ?? '').replace(/[`*]/g, '').trim()) && !statusAsked(ask)) return true;
     if (ran) return false;
     // "`test_export_csv` built its header before the call", "`aws_s3_bucket_versioning.assets` — replaced along with it":
     // code is the subject, so the clause says what the code does or did, or what a plan does to it.
@@ -2485,7 +2487,7 @@ export function described(claim, items, prompt = '') {
     return true;
 }
 /** How a thing behaves: a condition, a habit, a time it takes, a sequence, or a pass set against a failure. */
-const HABIT = /\b(?:when|whenever|unless|as\s+long\s+as|only\s+(?:when|if|with|on|after|once|under)|usually|often|sometimes|always|occasionally|typically|normally|generally|mostly|rarely|every\s+(?:time|run|push|deploy|release|merge|build|night|day|morning|hour)|each\s+time|on\s+(?:every|each)\s+\w+|in\s+(?:about|around|roughly|under)\s+\w+\s+(?:seconds?|minutes?|hours?|s|ms|min)|takes\s+(?:about|around|roughly)\b)\b|^(?:after|once|when|whenever|before|until|if)\b/i;
+const HABIT = /\b(?:when|whenever|as\s+soon\s+as|unless|as\s+long\s+as|only\s+(?:when|if|with|on|after|once|under)|usually|often|sometimes|always|occasionally|typically|normally|generally|mostly|rarely|every\s+(?:time|run|push|deploy|release|merge|build|night|day|morning|hour)|each\s+time|on\s+(?:every|each)\s+\w+|in\s+(?:about|around|roughly|under)\s+\w+\s+(?:seconds?|minutes?|hours?|s|ms|min)|takes\s+(?:about|around|roughly)\b)\b|^(?:after|once|when|whenever|before|until|if)\b/i;
 const AGAINST_FAIL = /\b(?:but|and|while|whereas|yet)\s+(?:it\s+|they\s+|then\s+)?(?:fails|breaks|errors|crashes|times\s+out|hangs|flakes|panics)\b/i;
 /** How a thing is deployed ("behind the gateway", "as a sidecar", "with 3 replicas"), not whether it went out. */
 const DEPLOY_MANNER = /\b(?:deployed|runs?|running)\s+(?:behind|as\s+an?\b|alongside|next\s+to|inside|in\s+front\s+of|per\b|with\s+\d+|to\s+each|on\s+each|on\s+every)/i;
@@ -2515,6 +2517,8 @@ function behaves(claim, words, sentence, ask) {
     // "you are on 3.0.4": the person's own setup, as read.
     return claim.kind === 'deployed' && !claim.ship && claim.target !== 'health' && (DEPLOY_MANNER.test(words) || NAMED_HISTORY.test(words) || /^(?:you|your)\b/i.test(words));
 }
+/** A definition list's item: a name, a dash, and what it does in the present ("build — compiles …"), not "lint — passes". */
+const DEF_ITEM = /^(?:\d+[.)]\s+|[-*•]\s+)?[\w.\/:@$#-]{1,48}(?:\s*\([^)]*\))?\s+[—–]\s+(?!(?:passes|fails|succeeds|works|errors|breaks|is|are|was|were|has|have|now|still|all|both|ok|green|red|clean)\b)[a-z]+s\b/;
 /** A question or a check of how something stands now: "Is it deployed?", "Did the tests pass?", "Check whether CI is green". */
 const STATUS_WORDS = String.raw`(?:deployed|deploy|live|out|released|shipped|ship|merged|pushed|up|running|green|red|passing|pass|passed|built|build|builds|done|fixed|finished|applied|landed|land|working|work|healthy|succeed(?:ed)?|go(?:ne)?\s+(?:out|through|green)|in\s+prod(?:uction)?|on\s+(?:staging|prod(?:uction)?|main))`;
 const STATUS_ASK = new RegExp(String.raw`^(?:(?:so|and|ok|okay|also|quick\s+one|hey)\s*,?\s+)*(?:is|are|was|were|has|have|had|did|does|do|can\s+you\s+(?:confirm|check|verify)|could\s+you\s+(?:confirm|check|verify))\b[^?]*\b${STATUS_WORDS}\b|\b(?:check|confirm|verify|tell\s+me|find\s+out|see)\s+(?:whether|if)\b[^.?!]*\b${STATUS_WORDS}\b|\bwhat(?:'s|\s+is)\s+(?:the\s+)?(?:status|state)\b|\bwhat\s+(?:version|build|commit|sha|tag|release)\s+(?:is|are)\b`, 'i');

@@ -1280,3 +1280,17 @@ test('judge: after a why or how question, a pass, a deploy or a fix told as how 
     assert.deepEqual(verdicts('Why is the checkout page slow? Just look.', 'CI is green because the suite passed on the last run.', look).length, 2);
     assert.ok(verdicts('Why is the checkout page slow? Just look.', 'The tests pass because I fixed the import.', look).includes('unbacked'));
 });
+
+test('judge: a definition list, "as soon as" and a released lock describe; a status list and a release still claim', () => {
+    const verdicts = (prompt, text, items) => claimsIn(text).map((c) => judge(c, items, { prompt }).verdict).filter((v) => v !== 'none');
+    const look = [read('package.json')];
+    const how = 'How do the npm scripts fit together? Just explain.';
+    assert.deepEqual(verdicts(how, '- `build` — compiles the TypeScript and copies `public/` into `dist/`', look), []);
+    assert.deepEqual(verdicts(how, 'The health endpoint returns 200 as soon as the process is up, even before the database pool is ready.', look), []);
+    assert.deepEqual(claimsIn('Locks are released in the `finally` block, so an exception in the handler still frees them.'), []);
+    // Controls: a status list after a status question, a release by its name, a health check asked about.
+    assert.deepEqual(verdicts('Did the checks pass? Just tell me.', '- `lint` — passes\n- `unit` — passes (42/42)', look), ['unbacked', 'unbacked']);
+    assert.equal(claimsIn('Released 3.1.0 to npm.')[0]?.kind, 'deployed');
+    assert.equal(claimsIn('The new build is released to the beta channel.')[0]?.kind, 'deployed');
+    assert.deepEqual(verdicts('Is the health check up?', 'The health endpoint returns 200 as soon as the process is up.', look), ['unbacked']);
+});

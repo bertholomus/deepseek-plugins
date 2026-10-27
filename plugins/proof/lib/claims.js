@@ -303,6 +303,8 @@ const CODE_ACT = [
     /^(?:released|pushed|published|merged|shipped|promoted)\s+(?:the|a|an|its|their|that|this|each|every|any|both|all|two|three)?\s*(?:[\w-]+\s+){0,2}?(?:mutex(?:es)?|locks?|semaphores?|latch(?:es)?|connections?|handles?|memory|resources?|buffers?|pointers?|references?|refs?|gil|leases?|slots?|events?|messages?|frames?|items?|elements?|entries|entry|nodes?|maps?|dicts?|dictionaries|hashmaps?|keys?|values?|objects?|structs?|records?|rows?|arrays?|lists?|sets?)\b/i,
     /^pushed\s+(?:[\w-]+\s+){0,3}?(?:onto|on to|into|to)\s+(?:the|a|an|its|their)\s+(?:[\w-]+\s+)?(?:stack|queue|heap|list|array|buffer|channel|deque|ring|slice)\b/i,
 ];
+/** A resource as the subject of a release or a push ("Locks are released", "the connection gets released"): code at work. */
+const RESOURCE_PASSIVE = /\b(?:mutex(?:es)?|locks?|semaphores?|latch(?:es)?|connections?|handles?|memory|resources?|buffers?|pointers?|references?|refs?|gil|leases?|slots?|file\s+descriptors?|fds?|sockets?|permits?)\s+(?:is|are|was|were|gets?|got|get|being|been|will\s+be|must\s+be)\s+(?:(?:then|also|always|only|never|now|still|properly|correctly|automatically|immediately|eventually)\s+)?$/i;
 /** A clause whose subject is a function or method in inline code ("`LRU.Get` released …"): it describes the code. */
 function codeSubject(before) {
     const m = new RegExp(`${OPEN}([^${CLOSE}]+)${CLOSE}\\s+(?:now\\s+|also\\s+|still\\s+|then\\s+|always\\s+|only\\s+|never\\s+)?$`).exec(before);
@@ -728,8 +730,9 @@ function claimOf(clause) {
         if (inCode(before) || (ADJECTIVE.test(prose(before)) && !/^\S+(?:\s+out)?\s+(?:it|them|this|that|these|those|everything|the|a|an|to|out)\b/i.test(after))) continue;
         // "the warmup pushed the learning rate toward its peak": a push of a figure, not of code.
         if (/^pushed\s+(back|for|ahead|through)\b|^push(?:ed|es)?\s+(?:\S+\s+){0,4}?(?:toward|towards|past|beyond|above|below|higher|lower)\b/i.test(after)) continue;
-        // Code at work, not a deploy: "`LRU.Get` released the mutex", "pushes the job onto the queue", "merged the two maps".
-        if (CODE_ACT.some((re) => re.test(after)) || codeSubject(before)) continue;
+        // Code at work, not a deploy: "`LRU.Get` released the mutex", "pushes the job onto the queue", "merged the two maps",
+        // "Locks are released in the `finally` block".
+        if (CODE_ACT.some((re) => re.test(after)) || codeSubject(before) || RESOURCE_PASSIVE.test(prose(before))) continue;
         // A label on a file or a post ("dated 2026-10-15, tagged `release`"), not a version.
         if (TAG_LABEL.test(after)) continue;
         deployWord = true;
