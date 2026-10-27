@@ -641,7 +641,8 @@ try {
             await newList.waitFor({ state: 'visible', timeout: 10000 });
             await page.keyboard.press('Tab');
             const afterTab = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? '');
-            check('one Tab from the state buttons goes to the first session listed', afterTab === `Open ${newRows[0].title}`, afterTab);
+            const titleOf = (row) => row.title || 'Untitled session';
+            check('one Tab from the state buttons goes to the first session listed', afterTab === `Open ${titleOf(newRows[0])}`, afterTab);
             const moreButton = newList.locator('[data-session-watch-more]');
             const listedAtFirst = await newList.locator('li').count();
             const firstWords = (await newList.innerText()).replace(/\s+/g, ' ');
@@ -660,7 +661,7 @@ try {
                 const el = document.activeElement;
                 return el && el !== document.body ? (el.getAttribute('aria-label') ?? el.innerText.replace(/\s+/g, ' ').trim()) : 'body';
             });
-            const expectFocus = newRows.length > 2 * SHOWN ? `Show ${Math.min(SHOWN, newRows.length - 2 * SHOWN)} more` : `Open ${newRows[SHOWN].title}`;
+            const expectFocus = newRows.length > 2 * SHOWN ? `Show ${Math.min(SHOWN, newRows.length - 2 * SHOWN)} more` : `Open ${titleOf(newRows[SHOWN])}`;
             check('"Show more" lists the next ones; the focus stays on it, or moves to the first one it showed once none are left',
                 listedAfter === grown && focusAfter === expectFocus && (newRows.length > 2 * SHOWN || (await newList.innerText()).includes(`All ${newRows.length} shown.`)), `${listedAfter} | ${focusAfter} vs ${expectFocus}`);
             await page.setViewportSize({ width: 760, height: 860 });

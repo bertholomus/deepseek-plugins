@@ -67,11 +67,12 @@ start until a turn ends there again.
   log: read into a turn, it is *delivered*, naming the turn; still in the
   queue, it is followed again for the rest of its wait (at least a
   minute); taken out unread, or never queued, it is *not delivered*, with
-  the reason. DSH 0.2 takes the queued messages out of a session's queue
-  unread when it closes the session, as it does when it quits, and says so
-  in the log: such a message reads *not delivered* ("the session let the
-  message go without reading it"). After a crash the queue stays as it
-  was. Listeners hear each outcome as a `delivery` event (with
+  the reason. When DSH 0.2 closes a session as it quits (SIGTERM), it
+  takes the queued messages out of its queue unread, and says so in the
+  log: such a message reads *not delivered* ("the session let the message
+  go without reading it"). A crash, or a stop that does not close the
+  sessions, leaves the queue as it was, and those messages are followed
+  again. Listeners hear each outcome as a `delivery` event (with
   `restored: true`), and `deliveryOf(id)` gives any message's record, from
   this run or an earlier one. Switched off, the watcher stops its timers,
   so it never takes a message back while it is off.
@@ -97,8 +98,9 @@ start until a turn ends there again.
   they show moved, and read their own state only then. Nothing polls, and a
   hidden window stops asking. While Session Watch is off, a window asks
   DSH's own plugin list every four seconds instead of the watcher's
-  endpoint, so its console shows no failed requests, and the pages come
-  back by themselves once it runs.
+  endpoint, and the pages come back by themselves once it runs. Requests
+  that are open at the moment it goes fail once (the browser's console
+  shows them); after that, none do.
 
 ## For plugin authors
 
@@ -227,11 +229,12 @@ proves, from each session's own log:
   message queued behind the turn: the cut-off sessions are found and the
   finished ones are not, their rows read *cut off*, and a carry-on message
   to one that is not loaded is delivered into a new turn. The queued
-  message is told as the log has it: let go unread at the quit (DSH 0.2
-  does that), so the carry-on goes alone; still queued after the crash, so
-  it is followed again, named in `cutOffSessions`, and read with the
-  carry-on, in one turn, the carry-on first, with nothing taken back; no
-  session that ran a turn reads *new* after later restarts;
+  message is told as the log has it: let go unread at the quit (every
+  build here does that on SIGTERM), so the carry-on goes alone; still
+  queued after the crash, so it is followed again, named in
+  `cutOffSessions`, and read with the carry-on, in one turn, the carry-on
+  first, with nothing taken back; no session that ran a turn reads *new*
+  after later restarts;
 - questions for a person, outside agents, and the folder (700) and file
   (600) modes;
 - a number in quotes in the profile: `status` names it, delivery still
