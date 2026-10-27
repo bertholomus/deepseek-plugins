@@ -878,8 +878,8 @@ try {
     const row = answer.ok ? answer.value.projects.find((p) => p.id === coord) : undefined;
     check('the plugin page lists the chat, its settings and where each comes from', row?.coordinator === coord && row.name === CHAT && row.paused === false && row.off === false
         && row.settings.threadModel.value === 'fake:fake-mini' && row.settings.threadModel.source === 'chat setting' && row.settings.threadEffort.source === 'plugin default'
-        && row.access.threadPermission.value === 'workspace-write' && row.threads.open > 0 && Object.keys(answer.value).sort().join() === 'guarded,permissions,problems,projects'
-        && answer.value.problems.length === 0,
+        && row.access.threadPermission.value === 'workspace-write' && row.threads.open > 0 && Object.keys(answer.value).sort().join() === 'guarded,permissions,problems,projects,store'
+        && answer.value.problems.length === 0 && answer.value.store.length === 0,
         JSON.stringify(answer).slice(0, 600));
 
     // 21b. News: what threads hand back or finish waits for the user, from anywhere in the window, until they open the chat.

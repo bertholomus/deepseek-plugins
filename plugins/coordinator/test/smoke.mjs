@@ -4807,7 +4807,8 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     const header = t1.session.header;
     t1.session.header = { ...header, cwd: work };
     host.services.workingDirectory = { get: (session) => (session === t1.session ? join(work, 'packages', 'web') : undefined) };
-    assert.equal((await gate(t1, 'bash', { command: 'rm -rf src' })).reason, 'the command deletes src (rm); if the user doesn\'t allow it, hand back with status needs_decision', 'M2');
+    // The prompt says it from the thread's folder, so which src goes is plain.
+    assert.equal((await gate(t1, 'bash', { command: 'rm -rf src' })).reason, 'the command deletes packages/web/src (rm); if the user doesn\'t allow it, hand back with status needs_decision', 'M2');
     delete host.services.workingDirectory;
     t1.session.header = header;
     // A shell that keeps its folder between commands (DSH's persistent bash, which takes no workdir): a relative path
@@ -4848,6 +4849,39 @@ test('rule 6, held for deletes: a thread\'s command that deletes files it didn\'
     assert.match((await gate(sub, 'bash', { command: 'rm -rf build' })).reason, /^Not run: the command deletes build \(rm\)\. A subagent doesn't delete files its thread didn't create: say in your result what you would delete, and the thread you work for asks the user first\.$/);
     assert.deepEqual(await gate(sub, 'bash', { command: `rm ${made}` }), allowed);
     assert.deepEqual(await gate(host.wake('plain-1'), 'bash', { command: 'rm -rf build' }), allowed);
+    // Round-1 finding 4: the prompt names the file from the thread's folder, not a full path cut after 59 characters.
+    writeFileSync(join(work, 'README.md'), 'the user\'s\n');
+    assert.deepEqual(await gate(t1, 'bash', { command: `rm ${join(work, 'README.md')}` }), {
+        kind: 'ask',
+        reason: 'the command deletes README.md (rm); if the user doesn\'t allow it, hand back with status needs_decision',
+        displayReason: { en: 'This command deletes README.md (rm). A thread asks you before each command that deletes files it didn\'t create.' },
+    });
+    // Round-1 finding 6: a move out of its folder asks as a delete does, and says where it goes; a move inside is a rename.
+    assert.deepEqual(await gate(t1, 'bash', { command: 'mv README.md /tmp/' }), {
+        kind: 'ask',
+        reason: 'the command moves README.md to /tmp/ (mv); if the user doesn\'t allow it, hand back with status needs_decision',
+        displayReason: { en: 'This command moves README.md to /tmp/ (mv). A thread asks you before each command that deletes files it didn\'t create or moves them out of its folder.' },
+    });
+    // (lib2 is the user's src, which B2 renamed.)
+    for (const command of ['mv -t ~/Desktop README.md', 'rsync -a --remove-source-files lib2/ /tmp/lib2/', 'ls | xargs mv -t /tmp', 'mv lib2 /tmp/', "bash -c 'mv lib2 /tmp/'"]) {
+        assert.equal((await gate(t1, 'bash', { command })).kind, 'ask', command);
+    }
+    assert.deepEqual(await gate(t1, 'bash', { command: 'mv README.md docs/README.md' }), allowed, 'a move inside its folder is a rename');
+    assert.deepEqual(await gate(t1, 'bash', { command: `mv ${made} /tmp/` }), allowed, 'its own file may go anywhere');
+    policies.set(t1.id, 'never');
+    assert.deepEqual(await gate(t1, 'bash', { command: 'mv README.md /tmp/' }), {
+        kind: 'deny',
+        reason: "Not run: the command moves README.md to /tmp/ (mv). A thread asks the user before each command that deletes files it didn't create or moves them out of its folder, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would delete or move; the user can put this thread on Workspace Write so it can ask. Don't move or delete it another way.",
+    });
+    policies.delete(t1.id);
+    assert.equal((await gate(sub, 'bash', { command: 'mv README.md /tmp/' })).reason,
+        "Not run: the command moves README.md to /tmp/ (mv). A subagent doesn't delete files its thread didn't create or move them out of its folder: say in your result what you would delete or move, and the thread you work for asks the user first.");
+    assert.deepEqual(await gate(t1, 'bash', { command: 'curl -sS -X POST http://127.0.0.1:9/hook && mv README.md /tmp/' }), {
+        kind: 'ask',
+        reason: 'the command sends a POST to 127.0.0.1:9/hook (curl) and moves README.md to /tmp/ (mv); if the user doesn\'t allow it, hand back with status needs_decision',
+        displayReason: { en: 'This command sends a POST to 127.0.0.1:9/hook (curl) and moves README.md to /tmp/ (mv). A thread asks you before each command that sends outside the workspace or deletes files it didn\'t create or moves them out of its folder.' },
+    });
+    assert.match(log(), / delete-ask dsh-plugins\/t1 mv\n/);
     // A send asks first, as before.
     assert.equal((await gate(t1, 'bash', { command: 'git push origin main' })).reason, 'the command pushes to origin (git push)');
 

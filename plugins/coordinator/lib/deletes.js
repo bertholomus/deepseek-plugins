@@ -17,7 +17,7 @@
  * @module dsh-plugin-coordinator/deletes
  */
 import { lstatSync, readdirSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { canDo, splitShell } from './sends.js';
 
@@ -34,6 +34,9 @@ const MAX_DEPTH = 3;
  * @property {string} [glob] - for a pattern: the absolute path its matches all start with.
  * @property {true} [temp] - made by mktemp, or inside something mktemp made.
  * @property {string} [said] - how to say it, when "deletes PATH (PROGRAM)" doesn't fit.
+ * @property {true} [moved] - moved away (mv, rsync --remove-source-files), not deleted: it leaves its place for `to`.
+ * @property {string|null} [to] - for a move: where it goes, as an absolute path; 'temp' for something mktemp made; null when it can't be told.
+ * @property {string} [toPath] - for a move: where it goes, as the command names it.
  */
 
 /** A program's name as its path ends: `/bin/rm` and `rm.exe` are `rm`. */
@@ -124,6 +127,24 @@ function splitWords(text) {
 
 // ── Where a path is ───────────────────────────────────────────────────────
 
+/**
+ * A path or word cut to `max` characters in its middle, so the end (the
+ * file's name) stays whole: "/Users/al…/coordinator-r1/ws/README.md". The
+ * cut falls at a "/" where one is near.
+ */
+export function middleCut(word, max = 60) {
+    const text = String(word ?? '');
+    if (text.length <= max) return text;
+    const room = max - 1;
+    let tail = text.slice(-Math.ceil(room * 0.6));
+    const slash = tail.indexOf('/');
+    if (slash > 0 && slash < tail.length - 8) tail = tail.slice(slash);
+    let head = text.slice(0, room - tail.length);
+    const end = head.lastIndexOf('/');
+    if (end > head.length / 2) head = head.slice(0, end + 1);
+    return `${head}…${tail}`;
+}
+
 /** `$(mktemp …)` or `` `mktemp …` ``: a new file or folder the command made. */
 const MKTEMP = /^(\$\(|`)\s*mktemp\b/;
 /** The variables that name the OS temp folder. */
@@ -135,7 +156,7 @@ const TEMP_VARS = new Set(['TMPDIR', 'TMP', 'TEMP', 'env:TEMP', 'env:TMP', 'env:
  * @returns {Deleted}
  */
 function target(word, ctx, program) {
-    const shown = word.length > 60 ? `${word.slice(0, 59)}…` : word;
+    const shown = middleCut(word);
     const unknown = { program, path: shown, full: null };
     if (MKTEMP.test(word)) return { program, path: shown, full: null, temp: true };
     // `$d`, `${d}/x`, `$TMPDIR/x`, `${TMPDIR:-/tmp}/x`, PowerShell's `$env:TEMP\x`.
@@ -207,6 +228,42 @@ function operands(args, program, ctx, takes = []) {
     return out;
 }
 
+/**
+ * mv, and rsync --remove-source-files: each source leaves its place for the
+ * destination (the last operand, or `-t DIR`). Where it goes decides whether
+ * it counts (isFree): a move inside the thread's folders is a rename.
+ * `takes`: the options that take a value.
+ */
+function moves(args, ctx, program, takes = [], input = false) {
+    let dest;
+    const ops = [];
+    let ended = false;
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (!ended && a === '--') { ended = true; continue; }
+        if (!ended && a.startsWith('-') && a !== '-') {
+            if (a === '-t' || a === '--target-directory') { dest = args[++i]; continue; }
+            if (a.startsWith('--target-directory=')) { dest = a.slice('--target-directory='.length); continue; }
+            if (takes.includes(a)) i++;
+            continue;
+        }
+        ops.push(a);
+    }
+    if (dest === undefined) dest = ops.pop();
+    if (dest === undefined || (ops.length === 0 && !input)) return [];
+    // Another machine's path (rsync's host:path) is outside every folder here.
+    const remote = program === 'rsync' && /^[^/]*:/.test(dest);
+    const to = remote ? { path: middleCut(dest), full: null } : target(dest, ctx, program);
+    const where = to.temp ? 'temp' : typeof to.full === 'string' ? to.full : null;
+    const moved = { moved: true, to: where, toPath: to.path };
+    // `xargs mv -t DIR`, `xargs -I{} mv {} DIR`: what moves comes on its input, from wherever it is.
+    if (input) return [{ program: `xargs ${program}`, path: 'the files named on its input', full: null, ...moved }];
+    return ops.map((word) => ({ ...target(word, ctx, program), ...moved }));
+}
+
+/** rsync's options that take a value. */
+const RSYNC_TAKES = ['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--files-from', '--exclude-from', '--include-from', '--rsync-path', '--log-file', '--partial-dir', '--temp-dir', '-T', '--backup-dir', '--suffix', '--chmod', '--chown', '--password-file', '--port', '--timeout', '--contimeout', '--max-size', '--min-size', '--bwlimit', '--compare-dest', '--copy-dest', '--link-dest', '-B', '--block-size'];
+
 /** git clean and git rm; any other git command deletes nothing here. */
 function git(args, ctx) {
     let i = 0;
@@ -252,7 +309,7 @@ function find(args, ctx) {
         if (DELETERS.has(programOf(words[0])) || (programOf(words[0]) === 'git' && ['rm', 'clean'].includes(words[1]))) how = `find -exec ${programOf(words[0])}`;
     }
     if (how === undefined) return [];
-    return (places.length > 0 ? places : ['.']).map((p) => ({ ...target(p, ctx, how), path: `what it finds in ${p.length > 60 ? `${p.slice(0, 59)}…` : p}`, within: true }));
+    return (places.length > 0 ? places : ['.']).map((p) => ({ ...target(p, ctx, how), path: `what it finds in ${middleCut(p)}`, within: true }));
 }
 
 /** PowerShell's Remove-Item and its aliases: `-Path`, `-LiteralPath` and the words without an option; `-Include` and the like make it a pattern. */
@@ -387,6 +444,8 @@ function wordsDeletes(rawWords, ctx, inputs = []) {
         case 'rm': case 'srm': case 'rmdir': case 'unlink': case 'trash-put': case 'rimraf': case 'del-cli':
             return fromInput(operands(args, name, ctx));
         case 'shred': return fromInput(operands(args, 'shred', ctx, ['-n', '-s', '--iterations', '--size', '--random-source']));
+        case 'mv': return moves(args, ctx, 'mv', ['-S', '--suffix'], input);
+        case 'rsync': return args.includes('--remove-source-files') ? moves(args, ctx, 'rsync', RSYNC_TAKES, input) : [];
         case 'git': return args.includes('rm') || args.includes('clean') ? fromInput(git(args, ctx)) : [];
         case 'find': return find(args, ctx);
         case 'eval': return (ctx.depth ?? 0) < MAX_DEPTH ? lineDeletes(args.join(' '), { ...ctx, depth: (ctx.depth ?? 0) + 1 }) : [];
@@ -564,6 +623,9 @@ function tempRoots() {
     return [...roots].filter((root) => isAbsolute(root) && resolve(root) !== resolve('/'));
 }
 
+/** The folder a pattern's matches are in: "/ws/notes/old-" → "/ws/notes". */
+const globFolder = (glob) => (glob.endsWith('/') || glob.endsWith(sep) ? resolve(glob) : dirname(resolve(glob)));
+
 /** Whether a path is inside a folder (not the folder itself). */
 const inside = (path, root) => path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
 
@@ -705,9 +767,16 @@ export function isFree(d, { work = [], mine: given = {} } = {}) {
     const works = [...new Set(work.flatMap((w) => [w, realOf(w)]))];
     const inWork = (path) => [path, realOf(path)].some((p) => works.some((w) => p === w || inside(p, w)));
     const holdsWork = (path) => [path, realOf(path)].some((p) => works.some((w) => w === p || inside(w, p)));
+    const inGit = (path) => path.split(sep).includes('.git');
+    // A move from the thread's folders to a place in them (not into or out of a .git) is a rename: nothing leaves.
+    // One out of them, or to where it can't be told, is a delete of what moves, by the rules below.
+    if (d.moved && typeof d.to === 'string' && d.to !== 'temp' && inWork(d.to) && !inGit(d.to)) {
+        if (typeof d.glob === 'string' ? inWork(globFolder(d.glob)) && !inGit(globFolder(d.glob))
+            : typeof d.full === 'string' && inWork(d.full) && !holdsWork(d.full) && !inGit(d.full)) return true;
+    }
     if (typeof d.glob === 'string') {
         // The folder its matches are in, and the start of their names there.
-        const folder = d.glob.endsWith('/') || d.glob.endsWith(sep) ? resolve(d.glob) : dirname(resolve(d.glob));
+        const folder = globFolder(d.glob);
         const start = d.glob.endsWith('/') || d.glob.endsWith(sep) ? '' : basename(resolve(d.glob));
         const mayMatchWork = [folder, realOf(folder)].some((f) => works.some((w) => w === f || inside(w, f) && (start === '' || resolve(w).slice(f.length + 1).startsWith(start))));
         if (!inWork(folder) && !mayMatchWork && roots.some((r) => inside(folder, r) || (folder === r && start !== ''))) return true;
@@ -722,10 +791,13 @@ export function isFree(d, { work = [], mine: given = {} } = {}) {
 
 // ── Saying it ─────────────────────────────────────────────────────────────
 
-/** One thing deleted, said after "it": "deletes build/ (rm)". */
+/** One thing deleted, said after "it": "deletes build/ (rm)", "moves README.md to /tmp/ (mv)". */
 export function said(d) {
-    return d.said ?? `deletes ${d.path} (${d.program})`;
+    return d.said ?? (d.moved ? `moves ${d.path} to ${d.toPath || UNTOLD_PLACE} (${d.program})` : `deletes ${d.path} (${d.program})`);
 }
+
+/** Where a move goes, when the command doesn't say it in a way the check can read. */
+const UNTOLD_PLACE = 'a place it can\'t tell';
 
 /** Several, as a list: "a", "a and b", "a, b and c". */
 const listed = (parts) => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] ?? '');
@@ -735,7 +807,7 @@ const listed = (parts) => (parts.length > 1 ? `${parts.slice(0, -1).join(', ')} 
  * dist/ (rm)", "deletes build/ (rm) and untracked files (git clean)".
  * @param {Deleted[]} items
  */
-export function deletesWhat(items) {
+export function deletesWhat(items, { folders = [] } = {}) {
     const byProgram = new Map();
     const other = [];
     for (const d of items) {
@@ -743,13 +815,43 @@ export function deletesWhat(items) {
             if (!other.includes(d.said)) other.push(d.said);
             continue;
         }
-        const paths = byProgram.get(d.program) ?? [];
-        if (!paths.includes(d.path)) paths.push(d.path);
-        byProgram.set(d.program, paths);
+        const key = d.moved ? `moves\u0000${d.program}\u0000${d.toPath ?? ''}` : `deletes\u0000${d.program}`;
+        const paths = byProgram.get(key) ?? [];
+        const shown = pathWords(d, folders);
+        if (!paths.includes(shown)) paths.push(shown);
+        byProgram.set(key, paths);
     }
-    const parts = [...byProgram].map(([program, paths], i) => `${i === 0 ? 'deletes ' : ''}${paths.length > 3 ? `${paths.slice(0, 2).join(', ')} and ${paths.length - 2} more` : listed(paths)} (${program})`);
+    let verb = '';
+    const parts = [...byProgram].map(([key, paths]) => {
+        const [said, program, to] = key.split('\u0000');
+        const lead = said !== verb ? `${said} ` : '';
+        verb = said;
+        const list = paths.length > 3 ? `${paths.slice(0, 2).join(', ')} and ${paths.length - 2} more` : listed(paths);
+        return `${lead}${list}${said === 'moves' ? ` to ${to || UNTOLD_PLACE}` : ''} (${program})`;
+    });
     const all = [...parts, ...other];
     return all.length > 3 ? `${all.slice(0, 3).join(', ')} and more` : listed(all);
+}
+
+/**
+ * Where one thing is, as a prompt says it: relative to the first of the
+ * thread's folders that holds it ("notes/old.txt"), else as the command
+ * names it, cut in the middle so its name stays whole.
+ */
+function pathWords(d, folders) {
+    // `within`: some of what is in a place, said in words of its own ("untracked files", "what it finds in .").
+    if (typeof d.full === 'string' && !d.within) {
+        for (const folder of folders) {
+            if (typeof folder !== 'string' || folder === '') continue;
+            const base = resolve(folder);
+            if (d.full === base) return `the whole folder ${basename(base)}`;
+            if (!inside(d.full, base)) continue;
+            const rel = relative(base, d.full);
+            // As the command names it when that is already the same ("build/"), else from the folder.
+            return middleCut(d.path.replace(/^(?:\.\/)+/, '').replace(/\/+$/, '') === rel ? d.path : rel);
+        }
+    }
+    return middleCut(d.path);
 }
 
 /**

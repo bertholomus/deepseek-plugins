@@ -123,9 +123,12 @@ const SEND_REASONS = {
 };
 /** Why a thread's command that deletes didn't run, by who tried it; `what` says what it deletes ("deletes build/ (rm)"). */
 const DELETE_REASONS = {
-    subagent: (what) => `Not run: the command ${what}. A subagent doesn't delete files its thread didn't create: say in your result what you would delete, and the thread you work for asks the user first.`,
-    never: (what) => `Not run: the command ${what}. A thread asks the user before each command that deletes files it didn't create, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would delete; the user can put this thread on Workspace Write so it can ask. Don't delete it another way.`,
+    subagent: (what, moved) => `Not run: the command ${what}. A subagent doesn't delete files its thread didn't create${moved ? ' or move them out of its folder' : ''}: say in your result what you would ${moved ? 'delete or move' : 'delete'}, and the thread you work for asks the user first.`,
+    never: (what, moved) => `Not run: the command ${what}. A thread asks the user before each command that ${deleteRule(moved)}, and this thread's permission never asks. Hand back with status needs_decision and say exactly what you would ${moved ? 'delete or move' : 'delete'}; the user can put this thread on Workspace Write so it can ask. Don't ${moved ? 'move or delete' : 'delete'} it another way.`,
 };
+
+/** What a thread asks before, said after "each command that": a move out of its folder is asked as a delete is. */
+const deleteRule = (moved) => `deletes files it didn't create${moved ? ' or moves them out of its folder' : ''}`;
 
 /**
  * What the thread says its call is for, for the prompt: its description and,
@@ -1063,7 +1066,9 @@ export class ProjectManager {
      * folder outside the workspace or made by mktemp. The workspace's .git
      * never is, and what can't be told (a variable, a pattern, a list on the
      * input, a cleaning script, something moved into its folder or reached
-     * through a link) asks. A script the thread created is read for what it
+     * through a link) asks. A move out of the thread's folders (mv, rsync
+     * --remove-source-files) asks as a delete of what moves; one inside them
+     * is a rename. A script the thread created is read for what it
      * deletes. Undefined lets it run, as in holdSend, and an ask DSH's own
      * checks made (`asked`) keeps its words after the plugin's; `out`, when
      * given, gets what it deletes (holdCommand). Never logs the command or a
@@ -1093,17 +1098,19 @@ export class ProjectManager {
                 : deletesOf(String(args.command ?? ''), { shell: exec.name, cwd: this.keepsFolder(exec) ? undefined : here, read });
             const held = found.filter((d) => !isFree(d, { work, mine }));
             if (held.length === 0) return undefined;
-            const what = deletesWhat(held);
-            if (out) out.what = what;
+            // Each path as the user knows it: relative to the thread's folder when it is in it, else cut in the middle.
+            const what = deletesWhat(held, { folders: work });
+            const moved = held.some((d) => d.moved);
+            if (out) Object.assign(out, { what, moved });
             const programs = [...new Set(held.map((d) => String(d.program).replace(/\s+/g, '-')))].join(',').slice(0, 40);
             const label = `${who.projectId}/${who.threadId}${own ? '' : ' subagent'} ${programs}`;
             if (!own) {
                 this.log(`delete-refused ${label}`);
-                return { kind: 'deny', reason: DELETE_REASONS.subagent(what) };
+                return { kind: 'deny', reason: DELETE_REASONS.subagent(what, moved) };
             }
             if (this.approvalPolicyOf(session) !== 'ask') {
                 this.log(`delete-refused ${label} never-asks`);
-                return { kind: 'deny', reason: DELETE_REASONS.never(what) };
+                return { kind: 'deny', reason: DELETE_REASONS.never(what, moved) };
             }
             this.noteAsked(exec, what);
             this.log(`delete-ask ${label}`);
@@ -1112,7 +1119,7 @@ export class ProjectManager {
             return {
                 kind: 'ask',
                 reason: `the command ${what}; if the user doesn't allow it, hand back with status needs_decision${theirs?.reason ? `; ${withoutCredentials(theirs.reason)}` : ''}`,
-                displayReason: { en: `This command ${what}. A thread asks you before each command that deletes files it didn't create.${also ? `\n${also}` : ''}` },
+                displayReason: { en: `This command ${what}. A thread asks you before each command that ${deleteRule(moved)}.${also ? `\n${also}` : ''}` },
             };
         } catch (error) {
             this.log(`error delete-check ${String(error?.message ?? error).slice(0, 200)}`);
@@ -1141,7 +1148,7 @@ export class ProjectManager {
             return {
                 kind: 'ask',
                 reason: `the command ${sent.said} and ${gone.what}${sent.words ? `. The thread says: ${sent.words}` : ''}; if the user doesn't allow it, hand back with status needs_decision${theirs?.reason ? `; ${withoutCredentials(theirs.reason)}` : ''}`,
-                displayReason: { en: `This command ${sent.said} and ${gone.what}. A thread asks you before each command that sends outside the workspace or deletes files it didn't create.${sent.words ? `\nThe thread says: ${sent.words}` : ''}${also ? `\n${also}` : ''}` },
+                displayReason: { en: `This command ${sent.said} and ${gone.what}. A thread asks you before each command that sends outside the workspace or ${deleteRule(gone.moved)}.${sent.words ? `\nThe thread says: ${sent.words}` : ''}${also ? `\n${also}` : ''}` },
             };
         } catch (error) {
             this.log(`error delete-check ${String(error?.message ?? error).slice(0, 200)}`);
