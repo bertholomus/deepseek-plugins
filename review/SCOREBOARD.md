@@ -65,3 +65,5 @@ Albert, 2026-10-26 6:35 PM PDT: "Promote reasoning pill - Give all other plugins
 | Plugin | round | U | R | UX | T | D | mean | score | commit | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | dsh-site | 3 | 9 | 9 | 9 | 9 | 9.5 | 9.1 | 9.0 | 48739d4 | NOT YET (pass 2): all eight round-2 findings fixed; unit 80/80, real-DSH 97/97 on three builds; its remaining findings are in the local scorecard `review/dsh-site-round-3.md` (not committed) |
+| hermes-bridge | 2 | 9.5 | 9 | 9 | 9 | 9 | 9.1 | 9.0 | a9cbff7 | NOT YET (pass 2): all nine round-1 findings fixed (two leave small remnants); unit 93/93, real-DSH 118/118 on 0.2.1-rc.1 and the app's 0.2.1-rc.3 but 106/107 on 0.2.0-rc.2 (a late DSH notice covers the Plugins button and the step clicks once); a refused `POST /sessions` still makes a workspace (`createSession` in `lib/api.js`) |
+| discord | 3 | 9 | 8.5 | 8.5 | 9 | 9 | 8.8 | 8.5 | e2d04a4 | NOT YET (pass 2): 10 of round 2's 12 findings fixed; unit 91/91, real-DSH 141/141 on three builds; its remaining findings are in the local scorecard `review/discord-round-3.md` (not committed) |

@@ -156,3 +156,4 @@ sha256), checked before and after every test run; it must never change.
 - 2026-10-26 6:44 PM PDT: PASS 2 started (Albert 6:35 PM: "Promote reasoning pill - Give all other plugins one more pass"): brief in briefs/GOAL-95-PASS2.md, plan in ~/Projects/goal95/PASS2-PLAN.md; 19 builders start from their RESULT commits.
 - 2026-10-26 6:50 PM PDT: PASS 2: all 19 builders running; judge assignments by ~/Projects/goal95/bin/pass2-assign.py.
 - 2026-10-26 7:55 PM PDT: PASS 2 dsh-site (48739d4) judged 9.0 NOT YET (U 9, R 9, UX 9, T 9, D 9.5); scorecard local.
+- 2026-10-26 8:35 PM PDT: PASS 2 Hermes Bridge (a9cbff7) judged 9.0 NOT YET (U 9.5, R 9, UX 9, T 9, D 9; all nine round-1 findings fixed; a refused POST /sessions still makes a workspace; the e2e fails once on 0.2.0-rc.2). Discord (e2d04a4) judged 8.5 NOT YET (U 9, R 8.5, UX 8.5, T 9, D 9; 10 of 12 round-2 findings fixed; scorecard local). Focus handed over 8478288; its judge is running.
