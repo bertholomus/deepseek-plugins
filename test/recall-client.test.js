@@ -993,8 +993,8 @@ test('the tool\'s card: a time range the Time menu has no choice for (today, a d
     withAttr(both.tree, 'data-recall-tool-page')[0].props.onClick();
     await settle(5);
     assert.deepEqual(calls.at(-1)[1].query, { text: 'tapir', since: '2026-10-01', until: 'yesterday', sort: 'best', limit: 20, offset: 0, prefix: true });
-    assert.deepEqual([rangeLabel({ since: 'today' }), rangeLabel({ since: '7d' }), rangeLabel({ since: '1d' }), rangeLabel({ since: '2026-10-01', until: 'yesterday' }), rangeLabel({ until: '2026-10-15' }), rangeLabel({})],
-        ['Since today', 'The past 7 days', 'The past day', 'Since 2026-10-01, until yesterday', 'Until 2026-10-15', 'Any time']);
+    assert.deepEqual([rangeLabel({ since: 'today' }), rangeLabel({ since: '7d' }), rangeLabel({ since: '1d' }), rangeLabel({ since: '2026-10-01', until: 'yesterday' }), rangeLabel({ until: '2026-10-15' }), rangeLabel({ since: 'week', until: 'yesterday' }), rangeLabel({})],
+        ['Since today', 'The past 7 days', 'The past day', 'Since 2026-10-01, until yesterday', 'Until 2026-10-15', 'The past week, until yesterday', 'Any time']);
     // The menu's own choices still come through as before; Clear the filters takes the range off.
     finder.clearFilters();
     await settle(5);

@@ -2545,6 +2545,7 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                 const text = String(t).trim();
                 const back = /^(\d{1,4})\s*(h|d|w|m|y)$/i.exec(text);
                 if (back) return { back: Number(back[1]) === 1 ? `the past ${UNITS[back[2].toLowerCase()]}` : `the past ${back[1]} ${UNITS[back[2].toLowerCase()]}s` };
+                if (/^(?:day|week|month|year)$/i.test(text)) return { back: `the past ${text.toLowerCase()}` };
                 if (/^(?:today|yesterday)$/i.test(text)) return { at: text.toLowerCase() };
                 return { at: cut(text, 24) };
             };
