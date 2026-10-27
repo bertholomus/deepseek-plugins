@@ -258,7 +258,7 @@ node --test test/autopilot-ends.test.js  # what holds the nudge, measured on lab
 node scripts/e2e.mjs autopilot       # real DSH in a throwaway home, on every DSH build here
 ```
 
-The real-DSH test (120 checks) starts DSH from each `.e2e/dsh-<version>`
+The real-DSH test (128 checks) starts DSH from each `.e2e/dsh-<version>`
 install (`npm i --prefix .e2e/dsh-0.2.1-rc.1 @deepseek-ai/dsh@0.2.1-rc.1`)
 and from the installed app's own DSH (run as Node by the app's binary, as a
 separate process), each in a throwaway home, with a scripted model playing
