@@ -592,11 +592,19 @@ try {
             const versionText = await version.innerText();
             check('a question with versions in it reads whole on its card, with the sentence before it', versionText.includes('Which do you want to release: v1.2 or v1.3?') && versionText.includes('Both builds pass.') && !versionText.includes('`'), versionText);
             await shot(page, shots, 'dotted-question-light', version);
+            // The page from its top; the whole list in a window tall enough to hold it (a picture of a part taller
+            // than the window shows only what is in view, the rest blank).
+            await page.locator('[data-decisions-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             await shot(page, shots, 'decisions-light');
+            await page.setViewportSize({ width: 1280, height: 2200 });
+            await page.waitForTimeout(300);
             await shot(page, shots, 'waiting-light', page.locator('[data-decisions-waiting]'));
             await setDark(page, true);
-            await shot(page, shots, 'decisions-dark');
             await shot(page, shots, 'waiting-dark', page.locator('[data-decisions-waiting]'));
+            await page.setViewportSize({ width: 1280, height: 860 });
+            await page.waitForTimeout(300);
+            await page.locator('[data-decisions-page]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
+            await shot(page, shots, 'decisions-dark');
             await page.locator('[data-decisions-history]').evaluate((el) => el.scrollIntoView({ block: 'start' }));
             await shot(page, shots, 'history-dark');
             await setDark(page, false);
