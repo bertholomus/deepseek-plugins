@@ -18,7 +18,7 @@
  * @module dsh-plugin-decisions/cards
  */
 import { clip, isRecord } from './shared/safe.js';
-import { cutOff, recommendationIn } from './shared/words.js';
+import { HELD_SPAN, cutOff, dropMarks, holdCode, recommendationIn, unholdCode } from './shared/words.js';
 
 /** Every kind of card, most urgent first: approvals and questions hold a running turn. */
 export const KINDS = Object.freeze(['approval', 'question', 'ask', 'decision', 'blocked', 'thread', 'reply']);
@@ -42,14 +42,41 @@ const ASK_ENDS = new Set(['completed', 'blocked', 'aborted', 'max-tokens']);
 
 const titleOf = (row) => (typeof row?.title === 'string' && row.title.trim() ? row.title.trim() : 'Untitled session');
 
-/** Markdown links as their words: "[Port pick](.dsh-thread/t1)" reads "Port pick" on a card. */
-export const plainLinks = (text) => String(text ?? '').replace(/\[([^\]\n]{1,300})\]\([^)\s]{0,1000}\)/g, '$1');
+/**
+ * Markdown links as their words: "[Port pick](.dsh-thread/t1)" reads "Port
+ * pick" on a card. An address may hold one level of brackets
+ * (`…/Cache_(computing)`) and a title (`[notes](a.md "Notes")`).
+ */
+export const plainLinks = (text) => String(text ?? '').replace(/\[([^\]\n]{1,300})\]\((?:[^()\s]|\([^()\s]{0,200}\)){0,1000}(?:\s+"[^"\n]{0,200}")?\)/g, '$1');
 
-/** A reply's line as a card shows it: links as their words, without Markdown's marks. */
-const plainLine = (line) => plainLinks(line).replace(/\*\*|__|`/g, '').replace(/^\s*>+\s?/, '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+/g, ' ').trim();
+/**
+ * A reply's line as a card shows it: links as their words, without
+ * Markdown's marks; a code span's words stay whole (`__init__.py`, `a**b`).
+ */
+export const plainLine = (line) => {
+    const { text, spans } = holdCode(plainLinks(line));
+    return unholdCode(dropMarks(text).replace(/^\s*>+\s?/, '').replace(/^\s*#{1,6}\s+/, ''), spans).replace(/\s+/g, ' ').trim();
+};
 
-/** Words to find a question by in its reply: lower case, without marks or extra spacing (as long as `plainLine`). */
-const findable = (text) => plainLine(text).toLowerCase();
+/**
+ * Words to find a question by in its reply: a line as a card shows it, in
+ * lower case and without any mark, so a question already read into plain
+ * words ("__init__.py") is found in its line however the line marked it;
+ * `at[i]` is where its i-th character sits in `plainLine(line)`.
+ */
+function findable(line) {
+    const plain = plainLine(line);
+    let text = '';
+    const at = [];
+    for (let i = 0; i < plain.length; i += 1) {
+        if (plain[i] === '*' || plain[i] === '_' || plain[i] === '`') continue;
+        for (const unit of plain[i].toLowerCase()) {
+            text += unit;
+            at.push(i);
+        }
+    }
+    return { text, at };
+}
 
 /** The most of a reply a card carries from before its question. */
 const CONTEXT_LINES = 4;
@@ -61,13 +88,14 @@ const CONTEXT_MAX = 400;
  * in that line (as plain text) the question starts. Undefined when not found.
  */
 function questionLine(lines, question) {
-    const wanted = findable(question).replace(/…$/, '');
+    const wanted = findable(question).text.replace(/…$/, '');
     if (wanted.length < 4) return undefined;
     for (const size of [60, 24]) {
         const probe = wanted.slice(0, size);
         for (let i = lines.length - 1; i >= 0; i -= 1) {
-            const index = findable(lines[i]).indexOf(probe);
-            if (index >= 0) return { at: i, from: index };
+            const line = findable(lines[i]);
+            const index = line.text.indexOf(probe);
+            if (index >= 0) return { at: i, from: line.at[index] };
         }
     }
     return undefined;
@@ -108,19 +136,27 @@ export function contextOf(text, question) {
     return out.join('\n');
 }
 
-/** Markdown's marks dropped, with where each bold or code span is in what is left: [start, end) pairs. */
+/** A bold span (`**a**`, or `__a__` not inside a word) or a held code span (lib/shared/words.js). */
+const SPAN = new RegExp(String.raw`\*\*(?=[^\s*])((?:(?!\*\*).)*?[^\s*])\*\*|(?<![\p{L}\p{N}])__(?=[^\s_])((?:(?!__).)*?[^\s_])__(?![\p{L}\p{N}])|${HELD_SPAN.source}`, 'gu');
+
+/**
+ * Markdown's marks dropped, with where each bold or code span is in what is
+ * left: [start, end) pairs. A code span's words stay whole (`__init__.py`).
+ */
 function unmark(text) {
+    const { text: held, spans: codes } = holdCode(text);
+    const words = (part) => unholdCode(dropMarks(part), codes);
     let flat = '';
     const spans = [];
     let last = 0;
-    for (const m of text.matchAll(/(\*\*|__)(?=\S)([^\n]*?\S)\1|`([^`\n]+)`/g)) {
-        flat += text.slice(last, m.index).replace(/\*\*|__|`/g, '');
-        const inner = (m[2] ?? m[3]).replace(/\*\*|__|`/g, '');
+    for (const m of held.matchAll(SPAN)) {
+        flat += words(held.slice(last, m.index));
+        const inner = m[3] !== undefined ? (codes[Number(m[3])]?.words ?? '') : words(m[1] ?? m[2]);
         spans.push([flat.length, flat.length + inner.length]);
         flat += inner;
         last = m.index + m[0].length;
     }
-    return { flat: flat + text.slice(last).replace(/\*\*|__|`/g, ''), spans };
+    return { flat: flat + words(held.slice(last)), spans };
 }
 
 /**
@@ -238,7 +274,9 @@ export function replyCard(row, { replies = true, windowMs = 0, now = Date.now(),
     if (kind === 'reply' && (!replies || ask.soft === true)) return undefined;
     // "DECISION NEEDED: Send it? — recommend sending it after the review" (no colon) still splits off its pick.
     const dashed = kind === 'decision' && !ask.recommendation ? dashedPick(plainLinks(ask.question)) : undefined;
-    const question = dashed?.question ?? plainLinks(ask.question);
+    // A plain question comes as the reply wrote it ("Should I fix `parser.py` first?"): shown in plain words, like
+    // its lines (a marker's words already are).
+    const question = dashed?.question ?? (kind === 'reply' ? plainLine(ask.question) : plainLinks(ask.question));
     // The reply's lines before its question ("1. tidy 2. sweep … Which one do you prefer?"), so the card can be answered in place.
     const said = reply ?? (typeof state.text === 'string' ? { text: state.text, turn: state.textTurn } : undefined);
     const text = said?.turn === ask.turn ? said.text : undefined;

@@ -106,7 +106,7 @@ export function apply(ctx, config) {
             store.change();
         };
         try {
-            const entry = startEntry(check, store.data.settings, settingHashes(settings));
+            const entry = startEntry(check, store.data.settings, settingHashes(settings), settings);
             if (entry) journal.add(entry);
             remember();
         } catch (error) {

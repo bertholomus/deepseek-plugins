@@ -14,6 +14,7 @@ import { Inbox, heldOutcome, notifyOutcome, parseData, relayedHandback, relayedT
 import { Mirror, NO_ADDRESS, checkCommand, checkWebhook, programName } from '../plugins/decisions/lib/mirror.js';
 import { DEFAULTS, LIVE_SETTINGS, SETTING_TITLES, changedWords, checkConfig, savedEntry, settingHashes, startEntry } from '../plugins/decisions/lib/config.js';
 import { SettingsCheck } from '../plugins/decisions/lib/shared/settings.js';
+import { askIn } from '../plugins/decisions/lib/shared/words.js';
 import { pageState } from '../plugins/decisions/lib/page.js';
 import { JsonStore } from '../plugins/decisions/lib/shared/files.js';
 import { Journal } from '../plugins/decisions/lib/shared/journal.js';
@@ -668,6 +669,10 @@ test('inbox: a thread answered in the thread itself takes the chat\'s relay of i
 test('cards: a markdown link in a question reads as its words', () => {
     assert.equal(plainLinks('[Port pick](.dsh-thread/t1): the thread needs your decision.'), 'Port pick: the thread needs your decision.');
     assert.equal(plainLinks('See [the docs](https://example.com/a b) and [x]'), 'See [the docs](https://example.com/a b) and [x]', 'not a link: kept');
+    // An address with one level of brackets leaves no ")" behind; nor does a title.
+    assert.equal(plainLinks('@everyone see [the notes](javascript:alert(1)).'), '@everyone see the notes.');
+    assert.equal(plainLinks('Read [Cache](https://en.wikipedia.org/wiki/Cache_(computing)) first.'), 'Read Cache first.');
+    assert.equal(plainLinks('As [the notes](notes.md "Release notes") say.'), 'As the notes say.');
 });
 
 test('inbox: a chat\'s relay is matched to its handback: the newest from its sender before it came, and only one that asked', () => {
@@ -1265,9 +1270,20 @@ test('config: a start says which settings an edit of DSH\'s profile changed sinc
     const before = settingHashes(settings);
     assert.equal(startEntry(checked(settings), undefined, before), undefined, 'the first start says nothing');
     assert.equal(startEntry(checked(settings), before, settingHashes({ ...settings })), undefined, 'nothing changed');
-    const edited = { ...settings, enabled: false, mirrorCommand: ['/usr/local/bin/notify-me', '--from', 'dsh'] };
-    assert.deepEqual(startEntry(checked(edited), before, settingHashes(edited)),
-        { kind: 'settings', text: 'Settings changed in DSH\'s profile: “Decisions on”, “The command”', why: 'Decisions started again with them.', state: 'done' });
+    const edited = { ...settings, mirrorCommand: ['/usr/local/bin/notify-me', '--from', 'dsh'] };
+    assert.deepEqual(startEntry(checked(edited), before, settingHashes(edited), edited),
+        { kind: 'settings', text: 'Settings changed in DSH\'s profile: “The command”', why: 'Decisions started again with them.', state: 'done' });
+    // Switched off, and on again, in the profile: said as what it did, never as "started again".
+    const off = { ...edited, enabled: false };
+    assert.deepEqual(startEntry(checked(off), settingHashes(edited), settingHashes(off), off),
+        { kind: 'settings', text: 'Switched off in DSH\'s profile (enabled: false)', why: 'Decisions lists and holds nothing until enabled is true again; DSH\'s own cards work as always.', state: 'paused' });
+    const on = { ...off, enabled: true };
+    assert.deepEqual(startEntry(checked(on), settingHashes(off), settingHashes(on), on),
+        { kind: 'settings', text: 'Switched on again in DSH\'s profile (enabled: true)', why: 'Decisions lists and holds again.', state: 'done' });
+    const offAndMore = { ...settings, enabled: false, mirrorCommand: ['/usr/local/bin/notify-me'] };
+    assert.equal(startEntry(checked(offAndMore), before, settingHashes(offAndMore), offAndMore).text, 'Switched off in DSH\'s profile (enabled: false); also changed: “The command”');
+    const wrongBefore = { ...settings, enabled: 'yes' };
+    assert.equal(startEntry(checked(settings), settingHashes(wrongBefore), before, settings).text, 'Settings changed in DSH\'s profile: “Decisions on”', 'from a wrong value to true: a change, not a switch from off');
     const wrong = { ...settings, mirror: 'sometimes' };
     const entry = startEntry(checked(wrong), before, settingHashes(wrong));
     assert.equal(entry.text, 'Settings changed in DSH\'s profile: “Also send new cards to”; Decisions waits until a wrong one is fixed');
@@ -1316,6 +1332,33 @@ test('cards: a plain question carries the reply\'s lines before it, folded on th
     const picked = replyCard(row('Both build.\nI\'d recommend tidy, as it is short.\nWhich name should I use?', { kind: 'question', question: 'Which name should I use?' }), { now });
     assert.equal(picked.recommendation, 'tidy', 'the pick, without its reason');
     assert.match(answerMessage(picked, { recommended: true }), /go with your recommendation \(tidy\)\.$/);
+});
+
+test('cards: a plain question with a dot in it and a decision line with dunders keep their words on the card, its lines, its pick, its note and its answer', () => {
+    const now = Date.UTC(2026, 9, 26, 20);
+    const card = (text, title = 'Parser fix') => replyCard({ sessionId: 'p', title, status: 'idle', state: { ask: { ...askIn(text), turn: 4 }, end: { kind: 'completed', turn: 4, at: now - MIN } } }, { now, reply: { text, turn: 4 } });
+    const parser = card('I found two failing tests in the parser suite. Should I fix the bug in `parser.py` first?');
+    assert.equal(parser.question, 'Should I fix the bug in parser.py first?', 'the whole question, in plain words (it read "py` first?")');
+    assert.equal(parser.context, 'I found two failing tests in the parser suite.');
+    assert.equal(answerMessage(parser, { text: 'Yes, fix it first.' }), '[Decisions] The person answered your question (“Should I fix the bug in parser.py first?”):\n\nYes, fix it first.');
+    assert.equal(mirrorText(parser), '“Parser fix” asked you something\nI found two failing tests in the parser suite.\nShould I fix the bug in parser.py first?\nAnswer it in DSH: Decisions.');
+    const version = card('Both builds pass. Which do you want to release: `v1.2` or `v1.3`?', 'Version pick');
+    assert.equal(version.question, 'Which do you want to release: v1.2 or v1.3?', 'it read "3`?"');
+    assert.equal(version.context, 'Both builds pass.');
+    assert.equal(card('Should I deploy to https://staging.example.com now?').question, 'Should I deploy to https://staging.example.com now?');
+    assert.equal(card('Ready. Shall I continue with **the next step?**').question, 'Shall I continue with the next step?', 'a bold mark the line\'s end cut off is not shown');
+    // A decision line with dunders in code: the question, the pick and what Go with the recommendation sends.
+    const dunder = card('Two entry points exist.\nDECISION NEEDED: Should I rename `__init__.py` to main.py? — recommend: keep `__init__.py`', 'Entry point');
+    assert.equal(dunder.kind, 'decision');
+    assert.equal(dunder.question, 'Should I rename __init__.py to main.py?');
+    assert.equal(dunder.recommendation, 'keep __init__.py');
+    assert.equal(dunder.context, 'Two entry points exist.', 'its line is found, though the line marked it as code');
+    assert.equal(answerMessage(dunder, { recommended: true }), '[Decisions] The person answered your DECISION NEEDED line (“Should I rename __init__.py to main.py?”): go with your recommendation (keep __init__.py).');
+    // The lines before a question, and a pick read from them, keep code whole too.
+    assert.equal(contextOf('Delete `__pycache__` and `__init__.py`, or rename `my__var`?\nWhich one first?', 'Which one first?'), 'Delete __pycache__ and __init__.py, or rename my__var?');
+    assert.equal(pickIn('I would recommend `__init__.py` because it marks the package.'), '__init__.py');
+    assert.equal(pickIn('I would recommend **`a**b`** since it reads best.'), 'a**b');
+    assert.equal(pickIn('Recommendation: `--force-with-lease`, as it checks the remote first.'), '--force-with-lease');
 });
 
 test('cards: a BLOCKED line is said as what the session is blocked on', () => {
@@ -1567,6 +1610,21 @@ test('inbox: a plain question\'s card carries the reply\'s lines before it, read
     const [card] = (await inbox.list()).waiting;
     assert.equal(card.kind, 'reply');
     assert.equal(card.context, 'Here are three names for the CLI:\n1. tidy — short\n2. sweep — says what it does');
+});
+
+test('inbox: a plain question with a dot in it is listed, notified, mirrored and answered in its own words', async () => {
+    const { dsh, clock, inbox, notified, mirrored } = setup();
+    await clock.advance(1000);
+    replied(dsh, 'v', 'Both builds pass.\n\nWhich do you want to release: `v1.2` or `v1.3`?', { title: 'Version pick' });
+    await clock.advance(1000);
+    const [card] = (await inbox.list()).waiting;
+    assert.equal(card.question, 'Which do you want to release: v1.2 or v1.3?');
+    assert.equal(card.context, 'Both builds pass.');
+    assert.deepEqual(notified, [{ title: '“Version pick” asked you something', body: 'Which do you want to release: v1.2 or v1.3?', kind: 'decision', sessionId: 'v' }]);
+    assert.equal(mirrored[0].question, 'Which do you want to release: v1.2 or v1.3?');
+    await inbox.answer(card.id, { text: 'Release v1.3.' });
+    await clock.advance(1000);
+    assert.deepEqual(notesIn(dsh, 'v'), ['[Decisions] The person answered your question (“Which do you want to release: v1.2 or v1.3?”):\n\nRelease v1.3.']);
 });
 
 test('inbox: an approval from inside a coordinator\'s thread says whose thread it is', async () => {
