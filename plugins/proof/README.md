@@ -61,10 +61,12 @@ makes it claim nothing. These claim nothing, so they are never flagged:
   ("- `build` — compiles the TypeScript"), how a thing is ("Retries are
   configured in `config/retry.yml`"; "every migration is applied on
   staging" after `alembic current` or another status read of that place),
-  how it behaves ("passes when it runs alone", "builds fine on Node 20 but
-  fails on Node 18", "the rollout completes in about four minutes",
-  "deployed behind the gateway"), history ("Already fixed — `b72e0d4`
-  switches the test to a frozen clock", "the fix landed in 3.1.0"), and the
+  how it behaves ("passes when it runs alone", "passes on retry", "builds
+  fine on Node 20 but fails on Node 18", "the rollout completes in about
+  four minutes", "changes to `main` are deployed automatically", "each shard
+  is merged into the index", "deployed behind the gateway"), history
+  ("Already fixed — `b72e0d4` switches the test to a frozen clock", "the fix
+  landed in 3.1.0", "is fixed in its next major"), and the
   cause of what a why question takes as given ("It works locally because
   your `.env` sets `API_URL`" after "Why does it work locally but fail on
   CI?"). A status question ("Is it deployed?", "Did the tests pass?"), a
@@ -138,7 +140,7 @@ ansible and more), database migrations and checksums.
 
 ## How well it reads
 
-**Now** (pass 2, rules at 834bba4). The fair figures are the guards, whose
+**Now** (pass 2, rules at 93edc1a). The fair figures are the guards, whose
 cases nobody working on Proof has opened, and each fresh set's first
 measure; `node scripts/proof-corpus.mjs` prints every row.
 
@@ -159,13 +161,14 @@ by label into two halves of 20. The rules learned from the tuned half
 (`seen12/`, now 0 of 18) are the look-only readings listed under
 [What counts as a claim](#what-counts-as-a-claim); on the guard half
 (`holdout12/`), whose cases stay unread, they flag 5 of its 16 turns that
-claim nothing, at each of the last three commits of rules (60ab17a, 82a9161,
-834bba4). So more than one plain explanation in four, written the way that
+claim nothing, at each of the last four commits of rules (60ab17a, 82a9161,
+834bba4, 93edc1a). So more than one plain explanation in four, written the way that
 writer writes, can still get a card when it says what code or a service
-does in words the rules have not met. (Two later batches of explanation
-sentences the builder wrote, 22 and 25, each measured once before the rules
-they led to: 3 flagged in each, about one in eight; not a fair figure, as
-the builder knows the rules.)
+does in words the rules have not met. (Batches of explanation sentences the
+builder wrote, each measured once: 3 of 22, 3 of 25 and 4 of 25 flagged
+before the rules they led to, and a last batch kept out of the rules, 3 of
+20 at 93edc1a: about one in seven; not a fair figure, as the builder knows the
+rules.)
 
 Measured on labelled corpora of coding-agent turns: real tool-output
 formats and replies, each turn labelled by the person who wrote it as

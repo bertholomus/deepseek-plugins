@@ -385,7 +385,7 @@ for (const [where, dir, counts] of [['real model turns (live/)', LIVE, LIVE_COUN
  * The twelfth hold-out's guard half (`holdout12/`): never tuned on, its cases never opened by the builder. The floors
  * were fixed before the writer started (6:50 PM PDT, pass 2): at most 5% of quiet turns flagged, at least 80% of bad
  * turns caught, at most 1 true claim called contradicted. Measured whole at 2252a96 (10 of 36 quiet turns flagged),
- * then this half at 60ab17a, 82a9161 and 834bba4 (5 of 18 each time), it misses the first floor.
+ * then this half at 60ab17a, 82a9161, 834bba4 and 93edc1a (5 of 18 each time), it misses the first floor.
  */
 test("twelfth hold-out's guard half (never tuned on): well formed and apart from every other corpus", (t) => {
     if (!present(HOLDOUT12)) {
@@ -401,7 +401,7 @@ test("twelfth hold-out's guard half (never tuned on): well formed and apart from
     for (const label of LABELS) for (const c of corpus[label]) assert.ok(!before.replies.has(c.reply), `twelfth hold-out ${c.id} repeats a reply of another corpus`);
 });
 
-test("twelfth hold-out's guard half (never tuned on): within its three floors", { todo: 'missed at 60ab17a, 82a9161 and 834bba4: 5 of 18 quiet turns flagged, floor at most 5%' }, (t) => {
+test("twelfth hold-out's guard half (never tuned on): within its three floors", { todo: 'missed at 60ab17a, 82a9161, 834bba4 and 93edc1a: 5 of 18 quiet turns flagged, floor at most 5%' }, (t) => {
     if (!present(HOLDOUT12)) {
         t.skip('the twelfth hold-out is not there');
         return;
