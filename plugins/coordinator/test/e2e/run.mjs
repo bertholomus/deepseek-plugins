@@ -1313,7 +1313,11 @@ try {
             && saw.fresh.includes(`It asked to use bash: the command ${sends}`), saw.fresh.slice(0, 400));
         mark = model.requests.length;
         const allowed = await prompts.answer(first, 'allowed-once');
-        await coordinatorSaw(mark, 'SAW-IDLE', 'the Send idle note');
+        const allowSaw = await coordinatorSaw(mark, 'SAW-IDLE', 'the Send idle note');
+        // Round-1 finding 5: the chat's roster line says how the user answered the thread's prompt, and when.
+        const rosterOf = (req) => (req?.system ?? '').split('\n').find((line) => line.includes(' · "Send" · ')) ?? '';
+        check('the chat\'s roster line says the user allowed the thread\'s command, and when',
+            rosterOf(allowSaw).includes(`· the user allowed its command that ${sends} at `) && / at \d{1,2}:\d\d\s[AP]M$/.test(rosterOf(allowSaw)), rosterOf(allowSaw));
         check('Allow once runs it, once', allowed?.ok === true && hits.filter((h) => h === 'POST /deploy').length === 1 && resultOf(since(mark, sendId)).includes('SINK-RECEIVED'),
             `${JSON.stringify(allowed)} ${hits.join()} ${resultOf(since(mark, sendId))}`);
         mark = model.requests.length;
@@ -1323,6 +1327,8 @@ try {
         const retrySaw = await coordinatorSaw(mark, 'SAW-IDLE', 'the retry\'s idle note');
         check('the same command again, as a retry, asks again, and a Reject sends nothing', again.eventId !== first.eventId && asks() === 2 && posted() === 1,
             `${asks()} ${hits.join()}`);
+        check('after the Reject, the roster line says the user declined it, and that the thread was told to hand back needs_decision',
+            rosterOf(retrySaw).includes(`· the user declined its command that ${sends} at `) && / at \d{1,2}:\d\d\s[AP]M \(it was told to hand back needs_decision\)$/.test(rosterOf(retrySaw)), rosterOf(retrySaw));
         // Behaviour review 5, S3 r4: the thread reads what the user declined and to hand back needs_decision, and its
         // chat hears it with the thread's next note, so its reply says so.
         check('after a Reject, the thread reads what the user declined, and its chat hears it',
