@@ -52,7 +52,7 @@ const APPLY_CMD = /\b(terraform|tofu)\s+(\S+\s+)*apply\b|\bpulumi\s+up\b|\bkubec
 const BACKGROUND_CMD = /(?:^|[;&|(]\s*)(?:nohup|setsid)\s|(?<![&>|])&(?![&>])\s*(?:$|;|\)|echo\b|disown\b)|\bscreen\s+-\w*d\w*m|\btmux\s+new(?:-session)?\b[^;&|]*\s-d\b/;
 const JOB_CMD = /\bargo\s+submit\b|\bgh\s+workflow\s+run\b|\bgh\s+run\s+rerun\b|\bkubectl\s+create\s+job\b|\bsbatch\b|\bqsub\b|\bbsub\b|\bairflow\s+dags\s+trigger\b|\baws\s+batch\s+submit-job\b|\baws\s+glue\s+start-job-run\b|\baws\s+stepfunctions\s+start-execution\b|\bdatabricks\s+(jobs\s+run-now|runs\s+submit)\b|\bgcloud\s+(dataflow\s+jobs\s+run|dataproc\s+jobs\s+submit|batch\s+jobs\s+submit|run\s+jobs\s+execute)\b|\bprefect\s+deployment\s+run\b|\bdagster\s+job\s+launch\b|\bnomad\s+job\s+run\b/i;
 const HASH_CMD = /\b(sha\d+sum|shasum|md5sum|b2sum|cksum|gpg\s+--verify|cosign\s+verify|minisign\s+-V)\b/i;
-const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|revert|stash\s+pop|add|tag)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
+const CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|mv|cp|rm|mkdir|touch|tee|chmod|ln|patch|truncate|install|git\s+(apply|commit|checkout|restore|reset|mv|rm|merge|rebase|cherry-pick|revert|stash\s+pop|add|tag)|(npm|pnpm|yarn|bun)(\s+(-{1,2}[\w-]+(=\S+)?|--filter\s+\S+|-F\s+\S+|-C\s+\S+|--prefix\s+\S+|--cwd\s+\S+|workspace\s+\S+))*\s+(add|install|i|uninstall|remove|rm|update|up|ci|version)\b|pip3?\s+install|uv\s+(add|pip\s+install)|poetry\s+add|cargo\s+add|go\s+get|bundle\s+(install|update)|composer\s+(require|update|install)|apply_patch|python3?\s+-c\s+.*\b(open|write)\b|alembic\s+upgrade|rails\s+db:migrate(?!:status)|prisma\s+migrate(?!\s+(?:status|diff|resolve\s+--help)\b)|eslint\s+(\S+\s+)*--fix|prettier\s+(\S+\s+)*(--write|-w)|ruff\s+(check\s+(\S+\s+)*--fix|format)|black(?!\s+(\S+\s+)*--check)|gofmt\s+-w|go\s+fmt|cargo\s+fmt(?!\s+(\S+\s+)*--check)|rubocop\s+(\S+\s+)*(-a|-A|--autocorrect\S*)|(npm|pnpm|yarn)\s+(run\s+)?(format|fmt|lint:fix|fix)\b|npm\s+audit\s+fix|codemod|jscodeshift)\b|[^2&]>\s*[^&|\s>]|>>/i;
 /** A change to code that tests must run after (as against a commit, a branch, docs or notes). */
 const CODE_CHANGE_CMD = /(^|[;&|(]\s*|\s)(sed\s+-i|perl\s+-p?i|patch|git\s+(apply|restore|cherry-pick|revert|stash\s+pop|checkout\s+(\S+\s+)?--\s)|apply_patch)(\s|$)/i;
 /** Files and code that hold a route or a handler: `routes/`, `api/`, `*_controller.rb`, `@router.get(`, `app.post(`, `path('…'`. */
@@ -2380,6 +2380,50 @@ export function quotedBy(claim, items) {
     return { verdict: 'backed', evidence: from.slice(-3).map(said), why: '' };
 }
 
+// ── A description, not a claim ─────────────────────────────────────
+
+/** Whatever changes something: an edit, a command that writes, an apply, a deploy or a push, a job started. */
+const CHANGES = (i) => i.change || i.kind === 'change' || i.apply || i.kind === 'deploy' || i.shipped !== undefined || i.job;
+/** A message about the agent's own work ("did that work?", "what did you change?", "write the PR description"). */
+const ABOUT_OWN_WORK = /\b(?:did|have|had|were)\s+you\b|\bwhat\s+(?:did\s+|have\s+)?you\b|\byou(?:'ve|\s+have)?\s+(?:just\s+)?(?:did|done|changed|fixed|made|added|deployed|pushed)\b|\byour\s+(?:changes?|fix(?:es)?|edits?|work|commits?|pr|patch|branch)\b|\bdid\s+(?:that|it|this)\s+(?:work|go through|land|deploy|pass)\b|\bis\s+(?:it|that|this)\s+(?:done|fixed|deployed|pushed|merged|live|finished|working)\b|\bsummar|\bwrite[- ]?up\b|\bpr description\b|\brelease notes\b|\bchangelog\b|\bstand-?up\b|\brecap\b/i;
+/** A message that asks a question or asks to be shown something: "How are retries set up?", "Explain `applyDiscount`". */
+const LOOK_ASK = /\?\s*(?:$|\S)|^(?:(?:please|now|also|ok|okay|so|hey)\s*,?\s+)*(?:explain|describe|tell\s+me|show\s+me|walk\s+me\s+through|look\s+(?:at|into|over)|have\s+a\s+look|take\s+a\s+look|check\s+(?:how|what|where|whether|if|which|why|when)|compare|review|find\s+out|figure\s+out|investigate|diagnose|audit|inspect|help\s+me\s+understand)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:explain|describe|tell|show|look|compare|review|walk|find\s+out|figure\s+out|investigate|diagnose|inspect)\b|\bi\s+(?:want|need|would\s+like|'d\s+like)\s+to\s+(?:know|understand|see|learn)\b/i;
+/** A request for a write-up of the work ("write a short note for #releases"): its claims are the work's, not descriptions. */
+const WRITE_UP_ASK = /\bwrite\s+(?:it|that|this|these|them|those|everything)\s+up\b|\b(?:write|draft|put together|prepare|compose|give me|make)\s+(?:me\s+|us\s+)?(?:a|an|the|my|our|some)?\s*(?:short|quick|brief|one-line|small|little|tight|final)?\s*(?:pr description|pull request description|description|summary|recap|note|notes|message|update|status update|standup|stand-up|changelog entry|changelog|release notes?|commit message|email|post|announcement|one-?liner|report|write-?up|paragraph)\b/i;
+/** A clause led by this turn's own work ("Deployed it again", "I updated", "Rolled 2.5.0 out", "Just fixed …"). */
+const OWN_WORK = new RegExp(String.raw`^(?:i|we)\b|\b(?:i'?ve|i\s+have|we'?ve|we\s+have|i|we)\s+(?:now\s+|also\s+|just\s+|then\s+|already\s+)?\w+(?:ed|t|wn|en)\b|^(?:(?:just|also|then|now|and|so)\s+)?(?:edited|modified|tweaked|adjusted|amended|altered|reworked|reverted|restored|added|created|updated|wrote|implemented|renamed|removed|deleted|moved|changed|replaced|refactored|set\s+up|configured|installed|migrated|converted|extracted|merged|rewrote|built|rebuilt|generated|registered|wired|hooked\s+up|exposed|exported|introduced|bumped|pinned|upgraded|downgraded|enabled|disabled|documented|ported|switched|swapped|applied|committed|regenerated|backfilled|raised|lowered|deployed|redeployed|released|shipped|rolled|promoted|published|pushed|tagged|provisioned|uploaded|fixed|resolved|repaired|patched|corrected|addressed|ran|re-?ran|cherry-?picked|rebased|reran|retried|restarted)\b`, 'i');
+/** Words that say something changed just now: "is now configured", "returns 0 now", "after my edit". */
+const CHANGED_NOW = /\bnow\b|\bjust\b|\bno longer\b|\banymore\b|\bany more\b|\bafter\s+(?:my|this|the|that)\s+(?:change|edit|fix|patch|commit|update)\b|\bsince\s+(?:my|this)\s+(?:change|edit|fix)\b/i;
+/** How a thing is, in the present or as history: "is configured in", "are applied there", "is deployed on", "was added in". */
+const STATIVE = /\b(?:is|are|was|were|has\s+been|have\s+been|'s|’s|stays?|remains?)\s+(?:(?:already|still|also|currently|only|all|both|each|indeed|properly|correctly|fully|automatically|actually)\s+)*(?:[a-z]+ed|[a-z]+en|set|built|run|kept|held|made|done|in\s+place|in(?=\s+(?:the\s+)?[\w.\/⟨-]+)|on\s+(?=[\w.\/⟨-]))\b/i;
+/** A fix named as history: "is already fixed upstream in `b2c3d4e`", "was fixed in v2.3.1", "is fixed on main". */
+const FIX_HISTORY = /\balready\b|\bupstream\b|\b(?:in|by|on|since)\s+(?:(?:commit|release|version|pr|tag)\s+)?(?:⟨\s*)?(?:v?\d+\.\d+(?:\.\d+)?|(?=[0-9a-f]{0,39}\d)(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}|#\d+|main|master|trunk|the\s+(?:latest|next|new|current|\d[\w.]*)\b)/i;
+/** A look at where a thing runs: its deploy config read, or a status command of the place it runs. */
+const DEPLOY_FILE = /(?:^|[\s\/])(?:fly\.toml|Dockerfile|Containerfile|docker-compose[\w.-]*\.ya?ml|compose\.ya?ml|vercel\.json|netlify\.toml|render\.ya?ml|app\.ya?ml|Procfile|serverless\.ya?ml|[\w.-]+\.tf|[\w.-]+\.service|values[\w.-]*\.ya?ml|Chart\.ya?ml|kustomization\.ya?ml|[\w.-]*(?:deploy|deployment|release|k8s|manifest|workflow|pipeline|ci|cd)[\w.-]*\.(?:ya?ml|json|toml))$|(?:^|[\s\/])(?:k8s|kube|kubernetes|deploy|deployments?|manifests|helm|charts|infra|ops|\.github|workflows)\//i;
+const DEPLOY_LOOK_CMD = /\b(?:kubectl\s+(?:get|describe|rollout\s+(?:status|history))|helm\s+(?:status|list|ls|history|get)|fly(?:ctl)?\s+(?:status|releases|info|apps\s+list|config\s+show|machines?\s+list)|gh\s+(?:run|release|api)\s|docker\s+(?:ps|inspect|compose\s+ps|images)|systemctl\s+(?:status|is-active|show|cat)|vercel\s+(?:ls|list|inspect)|heroku\s+(?:ps|releases|apps:info)|aws\s+\w+\s+describe|gcloud\s+\S+\s+(?:services\s+)?describe|terraform\s+(?:show|output|state\s+(?:list|show))|curl\b|wget\b|nomad\s+(?:status|job\s+status)|argocd\s+app\s+get|cat\s+\S*(?:fly\.toml|Dockerfile|\.ya?ml|\.service|\.tf))\b/i;
+const deployLook = (i) => (i.kind === 'read' && DEPLOY_FILE.test(String(i.text ?? '').replace(/^\S+\s+/, ''))) || DEPLOY_LOOK_CMD.test(i.cmd ?? '') || i.kind === 'ci' || i.kind === 'probe';
+
+/**
+ * Whether a claim only describes how things are: in a turn that changed nothing, after a message that asks a
+ * question and no work about the agent's own doing, a clause in the present or past passive ("Retries are
+ * configured in `config/retry.yml`", "pct is documented as a percentage", "It is deployed on Fly as `acme-api`",
+ * "all 3 migrations are applied there", "it is already fixed upstream in `b2c3d4e`"), not led by a verb of the
+ * turn's own work and not marked "now". Where a thing runs needs a look at where it runs; a fix, a mark of history.
+ * Pass claims and health claims are never descriptions: they say how a run or a service went.
+ */
+export function described(claim, items, prompt = '') {
+    if (!claim || claim.kind === 'passed' || (claim.kind === 'deployed' && (claim.target === 'health' || claim.ship))) return false;
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+    const ask = typeof prompt === 'string' ? prompt.trim() : '';
+    if (list.length === 0 || !LOOK_ASK.test(ask) || list.some(CHANGES) || asksForWork(ask) || BUILD_ASK.test(ask) || WRITE_UP_ASK.test(ask) || ABOUT_OWN_WORK.test(ask)) return false;
+    if (asksForChange(ask) && !/\?\s*$/.test(ask)) return false;
+    const words = String(claim.part ?? claim.text ?? '').replace(/[`*_]/g, '').trim();
+    if (words === '' || OWN_WORK.test(words) || CHANGED_NOW.test(words) || !STATIVE.test(words)) return false;
+    if (claim.kind === 'deployed') return list.some(deployLook);
+    if (claim.kind === 'fixed') return FIX_HISTORY.test(words);
+    return true;
+}
+
 /**
  * Whether `items` (this turn's evidence, in order) back `claim`:
  * `{ verdict: 'backed'|'unbacked'|'contradicted', evidence: string[], why }`.
@@ -2390,6 +2434,8 @@ export function quotedBy(claim, items) {
 export function judge(claim, items, { prompt = '' } = {}) {
     const list = Array.isArray(items) ? items.filter(Boolean) : [];
     if (list.length === 0) return { verdict: 'unbacked', evidence: [], why: 'No tool ran in this turn.' };
+    // "Retries are configured in `config/retry.yml`" after "How are retries set up?": a description, not a claim.
+    if (described(claim, list, typeof prompt === 'string' ? prompt : '')) return { verdict: 'none', evidence: [], why: '' };
     const result = namedChecks(claim, list, prompt)
         ?? failedEdit(claim, list)
         ?? filesCount(claim, list)

@@ -186,7 +186,9 @@ export function sentencesOf(text) {
 const HELD = new RegExp(String.raw`${OPEN}[^${CLOSE}\n]{1,200}${CLOSE}|"[^"\n]{1,200}"|“[^”\n]{1,200}”|\([^()\n]{1,200}\)`, 'g');
 const HOLD = { ':': '\u0001', ';': '\u0002', ',': '\u0003', '—': '\u0004', '–': '\u0005', ' - ': ' \u0006 ' };
 const hold = (s) => s.replace(HELD, (m) => m.replace(/ - |[:;,—–]/g, (c) => HOLD[c]));
-const unhold = (s) => s.replace(/[\u0001-\u0006]/g, (c) => Object.keys(HOLD).find((k) => HOLD[k] === c));
+// Each held mark back as it was: " - " was held as " \u0006 ", so "\u0006" alone gives back "-" ("`x - 1`", not "x undefined 1").
+const UNHOLD = Object.fromEntries(Object.entries(HOLD).map(([k, v]) => [v.trim(), k.trim()]));
+const unhold = (s) => s.replace(/[\u0001-\u0006]/g, (c) => UNHOLD[c] ?? c);
 
 function clausesOf(sentence) {
     return hold(sentence)
@@ -392,9 +394,10 @@ const HEALTH = [
     /\b(is|are)\s+(now\s+)?(healthy|up and running|serving)\b|\bserving (traffic|requests|the new (build|version|release))\b/i,
     // "the service is stable (2/2 tasks)", "the new deployment is up": not "is up to date", "up next", "up for review" or "up on a preview" (a place)
     /\b(?:services?|deployments?|deploys?|rollouts?|apps?|clusters?|pods?|tasks?|nodes?|sites?|servers?|instances?|containers?)\s+(?:is|are)\s+(?:now\s+)?(?:stable|steady|up(?![\s-]+(?:on|at|in|with|and)\b))\b(?!\s+(?:to|for|next|against|front|in the air)\b)/i,
-    /\b(returns?|answers?|responds?|responded|came back|comes back)\s+(with\s+)?(an?\s+)?(http\s+)?(\d{3}|ok)\b/i,
+    // An HTTP status, not arithmetic or a value: "returns 200", not "returns `100 - 100*10`" or "returns 100" (code at work).
+    /\b(returns?|answers?|responds?|responded|came back|comes back)\s+(with\s+)?(an?\s+)?(http\s+)?([2-5]\d{2}(?!\d|\.\d|\s*[-+*\/×÷=^%])|ok)\b/i,
     // "the health endpoint is returning 200", "it's answering with a 200"
-    /\b(?:is|are|'s|’s)\s+(?:now\s+|still\s+|back\s+)?(?:returning|answering|responding)\s+(?:with\s+)?(?:an?\s+)?(?:http\s+)?(?:\d{3}s?|ok)\b/i,
+    /\b(?:is|are|'s|’s)\s+(?:now\s+|still\s+|back\s+)?(?:returning|answering|responding)\s+(?:with\s+)?(?:an?\s+)?(?:http\s+)?(?:[2-5]\d{2}s?(?!\d|\.\d|\s*[-+*\/×÷=^%])|ok)\b/i,
     /\bhealth\s*(checks?|endpoint|probe)?\s+(pass(es|ed)?|is ok|ok|is green|returns? ok|came back ok)\b|\bhealth checks? (are )?(passing|green)\b/i,
     // "/healthz is ok and reports 2.7.0", "`/ready` came back healthy"
     /(?:^|[\s(⟨])\/(?:healthz?|readyz?|livez|_health|health-?check|status)\b[^.;]{0,30}?\b(?:is|are|was|were|reports?|returns?|says?|shows?|answers?|came back|comes back)\s+(?:still\s+|now\s+|back\s+)?(?:ok|okay|up|green|healthy|good|fine|passing|200)\b/i,
