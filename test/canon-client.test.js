@@ -600,6 +600,13 @@ test('the page: a note with a line addressed to agents is named; the try-out say
     const tried = TryResult({ result: { ...TRY, results: [...TRY.results, { path: 'Misc/Lantern mascot.md', title: 'Lantern mascot', score: 9, matched: ['mascot'], words: ['mascot'], folder: '', passage: 'Lantern mascot: The lantern team\'s mascot is Wick.', leftOut: 1 }] } });
     const rows = withAttr(tried, 'data-canon-result');
     assert.equal(withAttr(rows[0], 'data-canon-left-out').length, 0);
+    assert.equal(withAttr(rows[0], 'data-canon-about').length, 0, 'a note with no kind or date says none');
+    // Each note's kind and date as its citation says them, and the newer decision it comes after.
+    const dated = TryResult({ result: { ...TRY, results: [
+        { path: 'Decisions/2026-10 Quartz reads 80 ms.md', title: 'Quartz reads 80 ms', score: 9, matched: ['quartz'], words: ['quartz'], folder: '', passage: 'Reads time out after 80 ms.', kind: 'decision', when: 'promoted 2026-10-26' },
+        { path: 'Projects/quartz-cache/Client settings.md', title: 'Client settings', score: 9, matched: ['quartz'], words: ['quartz'], folder: 'repo', passage: 'Reads time out after 50 ms.', when: 'updated 2026-09-30', older: 'Decisions/2026-10 Quartz reads 80 ms.md' },
+    ] } });
+    assert.deepEqual(withAttr(dated, 'data-canon-about').map(textIn), ['Decision, promoted 2026-10-26.', 'Updated 2026-09-30, older than Decisions/2026-10 Quartz reads 80 ms.md, which comes first.']);
     assert.equal(textIn(withAttr(rows[1], 'data-canon-left-out')[0]), 'A line of this note is addressed to agents, so it is left out: Canon never quotes it into a turn.');
 });
 

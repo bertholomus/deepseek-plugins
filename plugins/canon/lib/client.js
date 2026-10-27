@@ -1602,6 +1602,8 @@ function suiteKit({ prefix: P, bundle, React, ui, h }) {
                             h('div', { className: `${P}-item-main` },
                                 h('div', { className: `${P}-title` }, nameOf(r)),
                                 h('div', { className: `${P}-meta ${P}-code` }, r.path),
+                                // Its kind and date, and the newer decision it comes after, as its citation in the block says.
+                                r.kind || r.when || r.older ? h('div', { className: `${P}-meta`, 'data-canon-about': '' }, sentence(upper([r.kind, r.when, r.older ? `older than ${r.older}, which comes first` : ''].filter(Boolean).join(', ')))) : null,
                                 h('div', { className: `${P}-why` }, whyText(r)),
                                 r.passage ? h('p', { className: `${P}-quote` }, r.passage) : null,
                                 r.leftOut ? h('div', { className: `${P}-meta`, 'data-canon-left-out': '' }, `${r.leftOut === 1 ? 'A line' : `${plural(r.leftOut, 'line')}`} of this note ${r.leftOut === 1 ? 'is' : 'are'} addressed to agents, so ${r.leftOut === 1 ? 'it is' : 'they are'} left out: Canon never quotes ${r.leftOut === 1 ? 'it' : 'them'} into a turn.`) : null),
