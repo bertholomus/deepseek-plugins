@@ -199,7 +199,19 @@ async function openSettings(page) {
     const seen = (locator) => locator.first().isVisible().catch(() => false);
     if (await seen(form)) return form;
     // DSH's sidebar entry (a button named Plugins); its page opens on its last view, the list or a plugin's own page.
-    await page.getByRole('button', { name: 'Plugins', exact: true }).first().click();
+    // DSH's first-run notice can come late (after a restart, on a busy machine) and cover it: out of the way first,
+    // and again whenever it covers the click.
+    const plugins = page.getByRole('button', { name: 'Plugins', exact: true }).first();
+    const end = Date.now() + 60000;
+    for (;;) {
+        await dismissNotices(page);
+        try {
+            await plugins.click({ timeout: 5000 });
+            break;
+        } catch (error) {
+            if (Date.now() > end) throw error;
+        }
+    }
     // The card's title is DSH's "View <name>" button.
     const card = page.getByRole('button', { name: 'View Notifications', exact: true });
     const back = page.getByRole('button', { name: 'Back to plugins', exact: true });
