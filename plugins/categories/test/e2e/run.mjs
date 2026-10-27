@@ -657,6 +657,9 @@ try {
             }, 'Add a workspace\'s submenu', 5000).catch(() => {});
             rows ??= [];
             await shot(page, shots, 'sidebar-add-a-workspace-light');
+            await setDark(page, true);
+            await shot(page, shots, 'sidebar-add-a-workspace-dark');
+            await setDark(page, false);
             const taken = rows.slice(1);
             check('Add a workspace: no blank row; the workspace in no category first, then each in another category with where it is now, said aloud too',
                 rows.length === 4 && rows.every((r) => r.shown && r.spoken) && !rows[0].shown.includes('·')
@@ -685,6 +688,9 @@ try {
             const inField = await page.evaluate(() => document.activeElement?.hasAttribute('data-categories-name-input') === true);
             check('a name another category has, in any case, is refused under the field, and the keyboard stays in it', words === 'There is a category named Fleet Services already.' && inField, json({ words, inField }));
             await shot(page, shots, 'sidebar-rename-refused-light');
+            await setDark(page, true);
+            await shot(page, shots, 'sidebar-rename-refused-dark');
+            await setDark(page, false);
             // Renamed by the keyboard: the keyboard is back on the header, under its new name.
             await nameField.fill('General Ops');
             await nameField.press('Enter');
@@ -739,6 +745,9 @@ try {
             const tip = page.getByRole('tooltip');
             const tipText = await waitFor(async () => ((await tip.count()) > 0 ? (await tip.first().innerText()).trim() : null), 'DSH\'s tooltip on the long name', 5000).catch(() => null);
             await shot(page, shots, 'sidebar-long-name-light');
+            await setDark(page, true);
+            await shot(page, shots, 'sidebar-long-name-dark');
+            await setDark(page, false);
             const whole = await named(short).locator('.dshc-sb-name').evaluate((el) => ({ text: el.textContent, mark: el.hasAttribute('data-categories-cut'), over: el.scrollWidth > el.clientWidth }));
             check('a name too long for its header is cut once, at a word, with "…", the whole name in DSH\'s tooltip',
                 atWord && cut.mark && !cut.over && tipText === long, json({ cut, tipText }));
@@ -812,6 +821,10 @@ try {
                 check('a rename that can\'t be saved is refused in the dialog in words, the keyboard in the field',
                     /^Not saved: \S*categories\.json can't be written \(a folder is in the way\), so nothing changed\. Try again once it can be\.$/.test(words) && inField, json({ words, inField }));
                 await shot(page, shots, 'page-not-saved-dialog-light');
+                await setDark(page, true);
+                await shot(page, shots, 'page-not-saved-dialog-dark');
+                await setDark(page, false);
+                await nameField.focus();
                 await page.keyboard.press('Escape');
                 await dialogGone();
                 const note = pageRoot.locator('[data-categories-store-note="unsaved"]');
@@ -991,6 +1004,9 @@ try {
             && /^The categories file couldn't be used: \S*categories\.json is not JSON, so the categories started empty\. The file is left as it is: the first change keeps it beside the new store, to put back by hand\.$/.test(said),
         json(said));
         await shot(page, shots, 'page-store-unusable-light');
+        await setDark(page, true);
+        await shot(page, shots, 'page-store-unusable-dark');
+        await setDark(page, false);
         // The first change, made on the page: New category.
         await page.locator('[data-categories-new]').click();
         const field = page.locator('[data-categories-name-input]');
@@ -1006,6 +1022,9 @@ try {
             && (await page.locator('[data-categories-page] [role="treeitem"][data-categories-node="category"] > .dshc-tree-row .dshc-tree-title').allInnerTexts()).includes('Fresh'),
         json({ keptSaid, keptName }));
         await shot(page, shots, 'page-store-kept-light');
+        await setDark(page, true);
+        await shot(page, shots, 'page-store-kept-dark');
+        await setDark(page, false);
         const ours = win.errors.filter((text) => /categor/i.test(text));
         check('… no errors from the plugin in that window', ours.length === 0, ours.join('\n'));
         await win.browser?.close().catch(() => {});
